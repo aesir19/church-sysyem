@@ -9,7 +9,9 @@ A clean, professional dashboard for managing church member records. Built for th
 - **Secure authentication** powered by Supabase Auth (email + password, bcrypt-hashed)
 - **Members directory** with sortable columns (Last Name, First Name, Age, Gender)
 - **Member details modal** — click any row to view full contact info
-- **Per-church data isolation** — Row Level Security ensures each user only sees members of their assigned church
+- **Create / Edit members** directly from the dashboard via a tri-mode modal (view / edit / create)
+- **Soft-delete (archive)** members with an optional reason; archived rows are hidden from the dashboard but retained in the database for audit
+- **Per-church data isolation** — Row Level Security ensures each user only sees, creates, and edits members of their assigned church
 - **Responsive UI** with a clean white & blue theme
 - **Ready for Netlify deployment**
 
@@ -87,12 +89,16 @@ The app expects the following tables in your Supabase project:
 | `id` | `uuid` | Primary key |
 | `first_name` | `text` | |
 | `last_name` | `text` | |
+| `middle_name` | `text` | Nullable |
 | `birthdate` | `date` | Used to compute age |
 | `gender` | `text` | "Male" or "Female" |
+| `address` | `text` | Nullable |
 | `member_of` | `uuid` | Foreign key → `churches.id` |
 | `contact_number` | `text` | |
 | `email` | `text` | |
 | `date_joined` | `date` | |
+| `archived_at` | `timestamptz` | Nullable. `NULL` = active member; non-null = archived (soft-deleted) |
+| `archived_reason` | `text` | Nullable. Optional reason captured at archive time |
 
 ### `user_accounts`
 | Column | Type | Notes |
@@ -104,10 +110,26 @@ The app expects the following tables in your Supabase project:
 
 ## Row Level Security (RLS)
 
-A helper function determines the logged-in user's church and is used in the `members` SELECT policy.
+A helper function determines the logged-in user's church and is used in the `members` policies. Members are never hard-deleted; instead they are *archived* by setting `archived_at`. The `SELECT` policy hides archived rows from the dashboard, and a partial index keeps lookups fast on the active set only.
 
 ```sql
+-- ─────────────────────────────────────────────────────────────
+-- Schema: archiving columns (idempotent)
+-- ─────────────────────────────────────────────────────────────
+alter table public.members
+  add column if not exists middle_name     text,
+  add column if not exists address         text,
+  add column if not exists archived_at     timestamptz,
+  add column if not exists archived_reason text;
+
+-- Partial index — only active members are indexed (scales with active set)
+create index if not exists members_active_church_idx
+  on public.members (member_of)
+  where archived_at is null;
+
+-- ─────────────────────────────────────────────────────────────
 -- Helper function (SECURITY DEFINER bypasses RLS to avoid recursion)
+-- ─────────────────────────────────────────────────────────────
 create or replace function public.get_my_church_id()
 returns uuid
 language sql
@@ -125,14 +147,71 @@ $$;
 revoke execute on function public.get_my_church_id() from public;
 grant execute on function public.get_my_church_id() to authenticated;
 
--- Policy: users can only see members of their own church
-create policy "Only same church members can view data"
+-- ─────────────────────────────────────────────────────────────
+-- Single round-trip helper: returns the caller's church id + name
+-- in one call. The frontend uses this on dashboard mount instead
+-- of two serial calls (rpc('get_my_church_id') + churches.select).
+-- Additive — does NOT replace get_my_church_id(), which is still
+-- referenced by the RLS policies below.
+-- ─────────────────────────────────────────────────────────────
+create or replace function public.get_my_church()
+returns table (id uuid, name text)
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select c.id, c.name
+  from public.user_accounts ua
+  join public.members m on m.id = ua.member_id
+  join public.churches c on c.id = m.member_of
+  where ua.id = auth.uid()
+  limit 1;
+$$;
+
+
+-- ─────────────────────────────────────────────────────────────
+-- RLS policies on public.members
+-- ─────────────────────────────────────────────────────────────
+alter table public.members enable row level security;
+
+-- Drop any prior SELECT policy that did not exclude archived rows
+drop policy if exists "Only same church members can view data" on public.members;
+drop policy if exists "members_select_active_same_church"     on public.members;
+drop policy if exists "members_insert_own_church"             on public.members;
+drop policy if exists "members_update_own_church"             on public.members;
+
+-- SELECT: same church AND not archived (hides archived rows from the dashboard)
+create policy "members_select_active_same_church"
   on public.members
   for select
   to authenticated
-  using (member_of = public.get_my_church_id());
+  using (
+    member_of = public.get_my_church_id()
+    and archived_at is null
+  );
 
--- Allow authenticated users to read church names
+-- INSERT: must belong to caller's church and start un-archived
+create policy "members_insert_own_church"
+  on public.members
+  for insert
+  to authenticated
+  with check (
+    member_of = public.get_my_church_id()
+    and archived_at is null
+  );
+
+-- UPDATE: edits + archiving allowed; church reassignment blocked by `with check`
+create policy "members_update_own_church"
+  on public.members
+  for update
+  to authenticated
+  using       (member_of = public.get_my_church_id())
+  with check  (member_of = public.get_my_church_id());
+
+-- No DELETE policy — archive is the only deletion path.
+
+-- Allow authenticated users to read church names (for the joined dropdown / header)
 create policy "Authenticated users can view churches"
   on public.churches for select
   to authenticated
@@ -167,7 +246,7 @@ dashboard-project/
 │   │   └── index.js        # Vue Router with auth guard
 │   ├── views/
 │   │   ├── LoginView.vue   # Sign-in page
-│   │   └── DashboardView.vue # Members table + details modal
+│   │   └── DashboardView.vue # Members table + tri-mode modal (view/edit/create) + archive flow
 │   ├── App.vue
 │   ├── main.js             # App entry point
 │   └── style.css           # Global styles
@@ -203,7 +282,42 @@ dashboard-project/
    - `VITE_SUPABASE_ANON_KEY`
 5. Click **Deploy**.
 
-The included `netlify.toml` already handles SPA routing redirects so deep links (e.g. `/dashboard`) work correctly.
+The included `netlify.toml` already handles SPA routing redirects so deep links (e.g. `/dashboard`) work correctly. It also caches Vite's content-hashed assets (`/assets/*`) for one year (`immutable`) while keeping `index.html` revalidated on every visit so deploys propagate immediately.
+
+---
+
+## Operations
+
+### Supabase free-tier auto-pause
+
+Supabase pauses free-tier projects after **7 consecutive days of no activity**. "Activity" means any authenticated request — a single sign-in + dashboard load is enough to keep the project warm.
+
+**What you'll see when it's paused**
+
+- Sign-in fails with a network error or a long timeout.
+- The project shows a `Paused` banner in the [Supabase dashboard](https://app.supabase.com/).
+
+**How to recover**
+
+1. Open the project in the Supabase dashboard.
+2. Click **Restore project** (one-click; takes ~1–2 minutes).
+3. The next sign-in works normally. No data is lost — auto-pause only suspends compute, not storage.
+
+**What we deliberately do NOT do**
+
+- We do **not** run a synthetic keep-alive cron (e.g. a scheduled function that pings the database). It would consume free-tier budget for no real-user benefit and risks tripping abuse policies. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §12.3 rule 10.
+- For seasonal closures (multi-month gaps), accept the one-time unpause as the operating cost of the free tier.
+
+### Free-tier health checklist
+
+A quick once-a-month look at the Supabase dashboard:
+
+- **Database size** — should stay well under 500 MB (free-tier limit). Each archived member is ~1 KB.
+- **Egress (outgoing bandwidth)** — should stay well under 5 GB/month. Watch the Reports tab.
+- **Auth users** — limit is 50,000 monthly active users; not a realistic concern for a single church.
+- **Netlify bandwidth** — limit is 100 GB/month. Cache headers (above) keep the asset bandwidth near zero on repeat visits.
+
+If any of these get close to a limit, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §12 for the upgrade path.
 
 ---
 
