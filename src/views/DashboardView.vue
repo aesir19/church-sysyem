@@ -116,7 +116,7 @@
           </div>
           <div class="detail-row">
             <span class="detail-label">Member Of</span>
-            <span class="detail-value">{{ selectedMember.churches?.name || '—' }}</span>
+            <span class="detail-value">{{ myChurchName || '—' }}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">Contact Number</span>
@@ -278,8 +278,37 @@ const formSaving = ref(false)
 const archiveReason = ref('')
 
 // Caller's church (resolved via RPC; required for create)
+// Shared explicit column list — used by fetchMembers, handleCreate, handleUpdate.
+// docs/ARCHITECTURE.md §12.3 rule 1: select only what we render.
+const MEMBER_COLUMNS = `
+  id,
+  first_name,
+  last_name,
+  middle_name,
+  birthdate,
+  gender,
+  address,
+  contact_number,
+  email,
+  date_joined,
+  member_of
+`
+
+// localStorage cache for the user's church name — lets the page title render
+// pre-fetch on cold open. docs/ARCHITECTURE.md §12.5 #5.
+const CHURCH_NAME_KEY = 'udfc.myChurchName'
+function readCachedChurchName() {
+  try { return localStorage.getItem(CHURCH_NAME_KEY) } catch { return null }
+}
+function writeCachedChurchName(name) {
+  try {
+    if (name) localStorage.setItem(CHURCH_NAME_KEY, name)
+    else localStorage.removeItem(CHURCH_NAME_KEY)
+  } catch { /* localStorage unavailable (e.g. private mode) — no-op */ }
+}
+
 const myChurchId = ref(null)
-const myChurchName = ref(null)
+const myChurchName = ref(readCachedChurchName())
 
 const sortKey = ref('last_name')
 const sortDir = ref('asc')
@@ -287,8 +316,9 @@ const sortDir = ref('asc')
 const todayIso = computed(() => new Date().toISOString().slice(0, 10))
 
 const pageTitle = computed(() => {
-  const churchName = myChurchName.value || members.value[0]?.churches?.name
-  return churchName ? `UDFC ${churchName} Members` : 'Members'
+  // myChurchName is hydrated from localStorage synchronously; falls back to
+  // "Members" until the RPC resolves on cold first run.
+  return myChurchName.value ? `UDFC ${myChurchName.value} Members` : 'Members'
 })
 
 const modalTitle = computed(() => {
@@ -308,17 +338,15 @@ function fullName(m) {
 }
 
 async function fetchMyChurch() {
-  // RPC returns the caller's church UUID; fetch its name for the header / form display.
-  const { data: churchId, error: rpcError } = await supabase.rpc('get_my_church_id')
-  if (rpcError || !churchId) return
-  myChurchId.value = churchId
-
-  const { data: church } = await supabase
-    .from('churches')
-    .select('name')
-    .eq('id', churchId)
+  // Single round-trip: returns { id, name } via the public.get_my_church() RPC.
+  // Replaces the prior two-call sequence (rpc('get_my_church_id') + churches.select).
+  const { data, error: rpcError } = await supabase
+    .rpc('get_my_church')
     .single()
-  if (church?.name) myChurchName.value = church.name
+  if (rpcError || !data) return
+  myChurchId.value = data.id
+  myChurchName.value = data.name
+  writeCachedChurchName(data.name)
 }
 
 async function fetchMembers() {
@@ -328,7 +356,7 @@ async function fetchMembers() {
   // RLS already filters to the caller's church AND archived_at IS NULL.
   const { data, error: fetchError } = await supabase
     .from('members')
-    .select('*, churches(name)')
+    .select(MEMBER_COLUMNS)
 
   if (fetchError) {
     error.value = `Failed to load members: ${fetchError.message}`
@@ -496,7 +524,7 @@ async function handleCreate() {
   const { data, error: insertError } = await supabase
     .from('members')
     .insert(payload)
-    .select('*, churches(name)')
+    .select(MEMBER_COLUMNS)
     .single()
 
   formSaving.value = false
@@ -518,7 +546,7 @@ async function handleUpdate() {
     .from('members')
     .update(buildPayload())
     .eq('id', selectedMember.value.id)
-    .select('*, churches(name)')
+    .select(MEMBER_COLUMNS)
     .single()
 
   formSaving.value = false
@@ -562,6 +590,9 @@ function handleEsc(e) {
 }
 
 async function handleLogout() {
+  // Clear the localStorage church-name cache so a different user signing in
+  // on the same browser doesn't briefly see the previous church's title.
+  writeCachedChurchName(null)
   await supabase.auth.signOut()
   router.push('/login')
 }
