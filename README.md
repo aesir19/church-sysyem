@@ -148,6 +148,29 @@ revoke execute on function public.get_my_church_id() from public;
 grant execute on function public.get_my_church_id() to authenticated;
 
 -- ─────────────────────────────────────────────────────────────
+-- Single round-trip helper: returns the caller's church id + name
+-- in one call. The frontend uses this on dashboard mount instead
+-- of two serial calls (rpc('get_my_church_id') + churches.select).
+-- Additive — does NOT replace get_my_church_id(), which is still
+-- referenced by the RLS policies below.
+-- ─────────────────────────────────────────────────────────────
+create or replace function public.get_my_church()
+returns table (id uuid, name text)
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select c.id, c.name
+  from public.user_accounts ua
+  join public.members m on m.id = ua.member_id
+  join public.churches c on c.id = m.member_of
+  where ua.id = auth.uid()
+  limit 1;
+$$;
+
+
+-- ─────────────────────────────────────────────────────────────
 -- RLS policies on public.members
 -- ─────────────────────────────────────────────────────────────
 alter table public.members enable row level security;
@@ -259,7 +282,42 @@ dashboard-project/
    - `VITE_SUPABASE_ANON_KEY`
 5. Click **Deploy**.
 
-The included `netlify.toml` already handles SPA routing redirects so deep links (e.g. `/dashboard`) work correctly.
+The included `netlify.toml` already handles SPA routing redirects so deep links (e.g. `/dashboard`) work correctly. It also caches Vite's content-hashed assets (`/assets/*`) for one year (`immutable`) while keeping `index.html` revalidated on every visit so deploys propagate immediately.
+
+---
+
+## Operations
+
+### Supabase free-tier auto-pause
+
+Supabase pauses free-tier projects after **7 consecutive days of no activity**. "Activity" means any authenticated request — a single sign-in + dashboard load is enough to keep the project warm.
+
+**What you'll see when it's paused**
+
+- Sign-in fails with a network error or a long timeout.
+- The project shows a `Paused` banner in the [Supabase dashboard](https://app.supabase.com/).
+
+**How to recover**
+
+1. Open the project in the Supabase dashboard.
+2. Click **Restore project** (one-click; takes ~1–2 minutes).
+3. The next sign-in works normally. No data is lost — auto-pause only suspends compute, not storage.
+
+**What we deliberately do NOT do**
+
+- We do **not** run a synthetic keep-alive cron (e.g. a scheduled function that pings the database). It would consume free-tier budget for no real-user benefit and risks tripping abuse policies. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §12.3 rule 10.
+- For seasonal closures (multi-month gaps), accept the one-time unpause as the operating cost of the free tier.
+
+### Free-tier health checklist
+
+A quick once-a-month look at the Supabase dashboard:
+
+- **Database size** — should stay well under 500 MB (free-tier limit). Each archived member is ~1 KB.
+- **Egress (outgoing bandwidth)** — should stay well under 5 GB/month. Watch the Reports tab.
+- **Auth users** — limit is 50,000 monthly active users; not a realistic concern for a single church.
+- **Netlify bandwidth** — limit is 100 GB/month. Cache headers (above) keep the asset bandwidth near zero on repeat visits.
+
+If any of these get close to a limit, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §12 for the upgrade path.
 
 ---
 

@@ -131,18 +131,18 @@ Defined in [src/router/index.js](src/router/index.js):
 Single-screen view containing all member-management UX.
 
 **State:**
-- `members` — array fetched once on mount via `supabase.from('members').select('*, churches(name)')`.
+- `members` — array fetched once on mount via `supabase.from('members').select(MEMBER_COLUMNS)` (column-explicit; no per-row church join — see §12.3 rule 1).
 - `loading`, `error` — request lifecycle flags.
 - `modalMode` — drives the tri-mode modal: `'view' | 'create' | 'edit' | 'archive-confirm' | null` (null = closed).
 - `selectedMember` — the row being viewed / edited / archived (null in `create` mode).
 - `formData`, `formError`, `formSaving` — shared by `create` and `edit` modes.
 - `archiveReason` — captured by the in-modal archive confirmation panel.
-- `myChurchId`, `myChurchName` — resolved on mount via `supabase.rpc('get_my_church_id')` + a follow-up `churches` lookup. Used to pre-fill `member_of` on create and to label the read-only "Member Of" form field.
+- `myChurchId`, `myChurchName` — resolved on mount via a single `supabase.rpc('get_my_church')` returning `(id, name)`. `myChurchName` is also cached in `localStorage` (`udfc.myChurchName`) so the page title renders pre-fetch on cold opens; `handleLogout()` clears the cache. Used to pre-fill `member_of` on create and to label the read-only "Member Of" form field.
 - `sortKey`, `sortDir` — current column sort.
 
 **Behavior:**
 - Fetches once `onMounted`. RLS at the DB level filters rows to the user's church AND `archived_at IS NULL` automatically.
-- `pageTitle` computes `"UDFC <church> Members"` from `myChurchName` (falling back to the first row's joined `churches.name`).
+- `pageTitle` computes `"UDFC <church> Members"` from `myChurchName` (which is hydrated synchronously from `localStorage` on cold open; falls back to `"Members"` until the RPC resolves on the very first run).
 - `computeAge(birthdate)` — local calculation based on today's date.
 - `setSort(key)` toggles direction or switches column; `sortedMembers` is a `computed` returning a stable copy with `localeCompare` for strings and numeric subtraction otherwise.
 - Row click → `openDetails(member)` opens the modal in `view` mode; `Escape` closes it (listener attached/detached on mount/unmount).
@@ -154,8 +154,8 @@ Single-screen view containing all member-management UX.
 - `handleLogout()` → `supabase.auth.signOut()` then `router.push('/login')`.
 
 **Mutation handlers (all pessimistic — local state only mutates after Supabase confirms):**
-- `handleCreate()` → `supabase.from('members').insert({ ...buildPayload(), member_of: myChurchId }).select('*, churches(name)').single()` → prepend to `members`, close modal. RLS rejects any other `member_of`.
-- `handleUpdate()` → `supabase.update(buildPayload()).eq('id', id).select('*, churches(name)').single()` → splice the row in `members` by id, return modal to `view` mode. The UPDATE policy's `with check` blocks reassigning `member_of` to another church.
+- `handleCreate()` → `supabase.from('members').insert({ ...buildPayload(), member_of: myChurchId }).select(MEMBER_COLUMNS).single()` → prepend to `members`, close modal. RLS rejects any other `member_of`.
+- `handleUpdate()` → `supabase.update(buildPayload()).eq('id', id).select(MEMBER_COLUMNS).single()` → splice the row in `members` by id, return modal to `view` mode. The UPDATE policy's `with check` blocks reassigning `member_of` to another church.
 - `handleArchive()` → `supabase.update({ archived_at: new Date().toISOString(), archived_reason })` → filter the row out of `members` (RLS will hide it on subsequent reloads too).
 - `buildPayload()` trims strings and coerces empty optional fields to `null` so the DB stores `NULL` rather than `""`.
 
@@ -209,7 +209,32 @@ Single-screen view containing all member-management UX.
 | `member_of` | `uuid` |  |
 | `archived_at` | `timestamptz` |  Nullable |
 | `archived_reason` | `text` |  Nullable |
+| `wedding_anniversarry` | `date` |  Nullable |
+| `facebook_link` | `varchar` |  Nullable |
+| `is_one_to_one_completed` | `bool` |  |
+| `is_turning_point_completed` | `bool` |  |
+| `is_baptized` | `bool` |  |
+| `marital_status` | `varchar` |  |
 
+## Table `groups`
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `uuid` | Primary |
+| `name` | `varchar` |  |
+| `type` | `varchar` |  |
+
+## Table `group_members`
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `int8` | Primary Identity |
+| `member_id` | `uuid` |  Nullable |
+| `group_id` | `uuid` |  Nullable |
 
 
 ### 6.2 Authorization Model
@@ -309,15 +334,18 @@ Loaded by Vite from `.env` at the project root. Both must be present at **build 
 These are **not bugs** but explicit non-features in the current build. If asked to add them, treat as new feature work:
 
 1. **No restore UI for archived members** — archiving is exposed in the dashboard, but un-archiving (`update members set archived_at = null`) is a manual SQL operation. There is also no admin view for browsing archived rows.
-2. **No pagination / virtualization** — entire member list is fetched at once. Fine for small congregations; revisit if a church exceeds a few thousand rows.
+2. **No pagination / virtualization** — entire member list is fetched at once. Fine for small congregations; revisit if a church exceeds a few thousand rows. See §12.4 for the free-tier threshold.
 3. **No client-side search/filter.**
-4. **No realtime subscriptions** — the table is a static snapshot until page reload.
+4. **No realtime subscriptions** — the table is a static snapshot until page reload. **Intentional** under the free-tier plan (§12.3).
 5. **No global state store** — state lives in component `ref`s; if multiple views need shared data, introduce Pinia rather than prop-drilling.
 6. **No tests** — no Vitest, no Playwright, no CI checks beyond the Netlify build.
 7. **No TypeScript** — adding types would require migrating `.vue`/`.js` files and updating `vite.config.js`.
 8. **No multi-church admin role** — RLS assumes exactly one church per user. Cross-church access requires schema and policy changes.
 9. **No error reporting** — errors are surfaced inline; no Sentry/logging integration.
 10. **`App.vue` is empty of layout** — any global header/nav/toast container should be added here, not in individual views.
+11. **Egress-wasteful list query** — ~~`select('*, churches(name)')` in [DashboardView.vue](src/views/DashboardView.vue) pulls all member columns plus a redundant per-row church name.~~ **Resolved**: `fetchMembers`, `handleCreate`, `handleUpdate` now share an explicit `MEMBER_COLUMNS` list and no longer join `churches(name)`. See §12.5.
+12. **Two serial round-trips on mount** — ~~`fetchMyChurch()` does `rpc('get_my_church_id')` then a follow-up `churches` lookup.~~ **Resolved**: a new `public.get_my_church()` RPC returns `(id, name)` in a single call. The original `get_my_church_id()` is retained because the `members` RLS policies depend on it. See §12.5.
+13. **No long-cache headers in [netlify.toml](netlify.toml)** — ~~Vite emits content-hashed assets that are safe to cache `immutable`.~~ **Resolved**: `netlify.toml` now serves `/assets/*` as `public, max-age=31536000, immutable` and `/index.html` as `no-cache`. See §12.5.
 
 ---
 
@@ -334,6 +362,7 @@ When modifying this codebase, prefer the following:
 - **Errors** — surface Supabase error `.message` to the user (this is the existing pattern); avoid throwing.
 - **No new dependencies** without a clear reason — the dep list is intentionally minimal.
 - **Color & spacing tokens** — match the existing slate/blue palette and `12px` card radius for visual consistency.
+- **Free-tier discipline** — every change must respect the budget in §12. When in doubt, prefer the cheaper path: fewer columns, fewer round-trips, more client-side reuse, no new background traffic.
 
 ---
 
@@ -345,8 +374,8 @@ When modifying this codebase, prefer the following:
 3. `router.push('/dashboard')`.
 4. Router guard sees a session → allows navigation.
 5. [DashboardView.vue](src/views/DashboardView.vue) `onMounted` runs in parallel:
-   - `supabase.rpc('get_my_church_id')` → caches `myChurchId`; a follow-up `churches` lookup caches `myChurchName`.
-   - `supabase.from('members').select('*, churches(name)')`.
+   - `supabase.rpc('get_my_church').single()` → caches `myChurchId` + `myChurchName` (the latter is also persisted to `localStorage` so the title renders pre-fetch on warm opens).
+   - `supabase.from('members').select(MEMBER_COLUMNS)`.
 6. PostgREST attaches the JWT, Postgres evaluates RLS:
    - `get_my_church_id()` resolves the user's church via `user_accounts → members.member_of`.
    - `members SELECT` policy filters to `member_of = get_my_church_id() AND archived_at IS NULL` (the partial index `members_active_church_idx` is used).
@@ -355,13 +384,13 @@ When modifying this codebase, prefer the following:
 
 ### 11.2 Create
 1. User clicks **+ Add Member** → modal opens in `create` mode with a blank form; `member_of` is pinned to `myChurchId`.
-2. Submit → `handleCreate()` → `insert(payload).select('*, churches(name)').single()`.
+2. Submit → `handleCreate()` → `insert(payload).select(MEMBER_COLUMNS).single()`.
 3. The INSERT policy enforces `member_of = get_my_church_id() AND archived_at IS NULL`; any tampered payload is rejected.
 4. On success, the new row is prepended to `members` and the modal closes. Badge increments.
 
 ### 11.3 Edit
 1. From `view` mode, user clicks the Edit icon → modal switches to `edit`, `formData` is hydrated from `selectedMember`.
-2. Submit → `handleUpdate()` → `update(payload).eq('id', id).select('*, churches(name)').single()`.
+2. Submit → `handleUpdate()` → `update(payload).eq('id', id).select(MEMBER_COLUMNS).single()`.
 3. The UPDATE policy's `with check` enforces `member_of = get_my_church_id()` — reassigning to another church is blocked.
 4. On success, the row in `members` is replaced (splice by id), `selectedMember` is updated, modal returns to `view`.
 
@@ -370,3 +399,97 @@ When modifying this codebase, prefer the following:
 2. Confirm → `handleArchive()` → `update({ archived_at: now, archived_reason }).eq('id', id)`.
 3. The UPDATE policy permits the change (same church); the row remains in the database.
 4. On success, the row is filtered out of `members` and the modal closes. Badge decrements. Subsequent reloads will not return the row because the SELECT policy excludes `archived_at IS NOT NULL`.
+
+---
+
+## 12. Free-Tier Operating Plan
+
+> **Goal:** Run UDFC Church Dashboard on **$0/month for as long as possible.** This section is binding — every architectural change must respect the budgets and principles below. If a feature cannot be built within them, it must be raised explicitly with the owner before work begins.
+
+### 12.1 Why this matters
+
+The app is internal church tooling with no revenue stream. Hosting must remain free indefinitely. Every byte sent to a browser, every Postgres round-trip, every build minute consumed counts toward a hard limit. Efficiency is not a nice-to-have — it is a primary requirement of the design.
+
+### 12.2 Free-tier budgets we live inside
+
+Limits as published by the vendors (verify before any major change — vendors adjust quotas).
+
+| Vendor | Resource | Free-tier limit | Risk for this app |
+|---|---|---|---|
+| **Supabase** | Database storage | 500 MB | Low — members table is narrow text data; even 100 K rows ≪ 500 MB. |
+| **Supabase** | Egress / month | 5 GB | **Medium** — every dashboard load currently ships ~all member columns. The dominant cost as use grows. |
+| **Supabase** | Monthly Active Users | 50 000 | Negligible — internal staff only. |
+| **Supabase** | Storage (files) | 1 GB | None today (no photos / uploads). Re-evaluate if member photos are added. |
+| **Supabase** | Free projects | 2 per org | Constrains multi-tenant expansion. |
+| **Supabase** | Auto-pause | Project pauses after **7 days of inactivity** | **High operationally** — requires manual unpause on revisit. See §12.3 mitigation. |
+| **Netlify** | Bandwidth / month | 100 GB | Low if static assets are properly cached (§12.3). |
+| **Netlify** | Build minutes / month | 300 | Low — build is a fast Vite SPA; well under 1 min per deploy. |
+| **Netlify** | Functions / Edge Functions | Limited | **Not used and must remain unused.** All logic lives in the SPA + Postgres. |
+
+### 12.3 Efficiency principles (binding rules for AI edits)
+
+These rules must be followed unless explicitly overridden by the owner.
+
+1. **Select only what you render.**
+   - Do **not** use `select('*')` on `members`. Enumerate columns: list views select the few columns the table renders; modals/forms can select the full row by id only when opened.
+   - The shared `MEMBER_COLUMNS` constant in [DashboardView.vue](src/views/DashboardView.vue) is the canonical list. New code that reads `members` should reuse it.
+
+2. **One round-trip per intent.**
+   - Prefer a single RPC or a single PostgREST query over chained client-side awaits. If a workflow needs church id + church name + member list, it should be a single RPC returning all three or two parallel calls — never serial awaits.
+
+3. **Cache the church identity for the session.**
+   - `myChurchId` and `myChurchName` change essentially never. Resolve once on login and reuse. Do not re-query them on each navigation.
+
+4. **No realtime subscriptions** unless explicitly requested. Realtime websockets count against egress, keep the project hot (good) but consume budget continuously (bad). The dashboard's static-snapshot model is intentional.
+
+5. **No Netlify Functions / Edge Functions / scheduled functions.** All business logic stays in Postgres + RLS + the SPA.
+
+6. **No Supabase Storage** without an explicit decision. Member photos, attachments, exports, etc. require a written sizing plan first.
+
+7. **Long-cache hashed static assets.** Vite emits `index-<hash>.js` style filenames. The [netlify.toml](netlify.toml) config serves them with `Cache-Control: public, max-age=31536000, immutable` and serves `index.html` with `Cache-Control: no-cache`.
+
+8. **Lazy-load routes once views >2.** When a third route is added, switch `router/index.js` to `() => import('../views/Foo.vue')` so first-paint JS stays small.
+
+9. **Pagination kicks in at the threshold.** When any single church reaches **300 active members**, introduce server-side pagination (`.range()`) before the next list-view feature. Below that, the simpler full-list fetch is preferred for code clarity.
+
+10. **Auto-pause mitigation.** A church using the dashboard at least once a week keeps the project warm. If a longer gap is expected (e.g. seasonal closures), the owner must accept a manual unpause from the Supabase dashboard. **Do not** add a synthetic keep-alive cron — it would consume budget for no real-user benefit and risks tripping abuse policies.
+
+11. **No new runtime dependencies** without a free-tier impact note. UI libraries, state stores, charting libs, telemetry SDKs — each adds bundle bytes that ship to every user on every uncached visit.
+
+12. **Never use the Supabase service role key in the frontend.** The RLS-only model is what makes the free tier safe; replacing it with bypass-the-policy server code would force a paid hosting tier.
+
+### 12.4 Threshold quick-reference
+
+If the project crosses any of these, revisit the plan:
+
+| Signal | Threshold | Required response |
+|---|---|---|
+| Active members per church | 300 | Add `.range()` pagination before adding new list features. |
+| Total Supabase egress | 60 % of 5 GB / month | Audit list queries; tighten column selection; add caching. |
+| Netlify bandwidth | 60 % of 100 GB / month | Verify cache headers; check for an unminified asset; consider image optimization. |
+| Database storage | 60 % of 500 MB | Audit text column sizes; archive old data offline. |
+| Routes added | ≥ 3 | Convert to lazy imports in `router/index.js`. |
+
+### 12.5 Follow-ups
+
+The §12.3 rules listed above are now honored by the codebase. Items 1–5 below were the original gaps; all are resolved.
+
+1. **Replace `select('*, churches(name)')`** in `fetchMembers`, `handleCreate`, `handleUpdate` ([src/views/DashboardView.vue](src/views/DashboardView.vue)) with an explicit column list. The church name is already cached as `myChurchName`; the per-row join is redundant under one-user-one-church RLS. — **Done.** Replaced by the shared `MEMBER_COLUMNS` constant; the per-row join was dropped.
+2. **Collapse `fetchMyChurch()` into one round-trip.** Either extend `get_my_church_id()` to return `(id uuid, name text)` as a row, or replace it with a `SELECT id, name FROM churches WHERE id = (...)` RPC. Eliminates a serialized request on every dashboard mount. — **Done.** A new additive `public.get_my_church()` RPC returns `(id, name)` in one call. The original `get_my_church_id()` was kept untouched because the `members` RLS policies depend on its scalar return type.
+3. **Add cache headers to [netlify.toml](netlify.toml):**
+   ```toml
+   [[headers]]
+     for = "/assets/*"
+     [headers.values]
+       Cache-Control = "public, max-age=31536000, immutable"
+
+   [[headers]]
+     for = "/index.html"
+     [headers.values]
+       Cache-Control = "no-cache"
+   ```
+   — **Done.** Both header blocks added to [netlify.toml](../netlify.toml).
+4. **Document the auto-pause behavior** in [README.md](README.md) so any operator knows to expect a one-time unpause click after long absences. — **Done.** See the new "Operations" section in [README.md](../README.md), which also documents the free-tier health checklist.
+5. **Decide whether to keep church name cached in `localStorage`** so the dashboard can render the title pre-fetch (eliminates one perceptible round-trip on cold open). Low priority. — **Done.** Cached as `udfc.myChurchName`; `handleLogout()` clears the key so a different user signing in on the same browser doesn't see the previous church's title.
+
+None of these were required for the app to function — they were the path to keeping the cost line at $0 as usage grows.
