@@ -1,5 +1,11 @@
 <template>
   <div class="dashboard-container">
+    <!-- Toast Notification -->
+    <Transition name="toast">
+      <div v-if="toast.visible" :class="['toast', toast.type]" role="alert">
+        {{ toast.message }}
+      </div>
+    </Transition>
     <header class="dashboard-header">
       <h1>UDFC Dashboard</h1>
       <button @click="handleLogout" class="btn-logout">Sign Out</button>
@@ -103,12 +109,24 @@
             <span class="detail-value">{{ fullName(selectedMember) }}</span>
           </div>
           <div class="detail-row">
+            <span class="detail-label">Birthdate</span>
+            <span class="detail-value">{{ formatDate(selectedMember.birthdate) }}</span>
+          </div>
+          <div class="detail-row">
             <span class="detail-label">Age</span>
             <span class="detail-value">{{ computeAge(selectedMember.birthdate) }}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">Gender</span>
             <span class="detail-value">{{ selectedMember.gender }}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Marital Status</span>
+            <span class="detail-value">{{ selectedMember.marital_status }}</span>
+          </div>
+          <div v-if="selectedMember.marital_status === 'Married'" class="detail-row">
+            <span class="detail-label">Wedding Anniversary</span>
+            <span class="detail-value">{{ formatDate(selectedMember.wedding_anniversarry) }}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">Address</span>
@@ -127,8 +145,24 @@
             <span class="detail-value">{{ selectedMember.email || '—' }}</span>
           </div>
           <div class="detail-row">
+            <span class="detail-label">Facebook</span>
+            <span class="detail-value">{{ selectedMember.facebook_link || '—' }}</span>
+          </div>
+          <div class="detail-row">
             <span class="detail-label">Date Joined</span>
             <span class="detail-value">{{ formatDate(selectedMember.date_joined) }}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Baptized</span>
+            <span class="detail-value">{{ selectedMember.is_baptized ? 'Yes' : 'No' }}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">One-to-One Completed</span>
+            <span class="detail-value">{{ selectedMember.is_one_to_one_completed ? 'Yes' : 'No' }}</span>
+          </div>
+          <div class="detail-row">
+            <span class="detail-label">Turning Point Completed</span>
+            <span class="detail-value">{{ selectedMember.is_turning_point_completed ? 'Yes' : 'No' }}</span>
           </div>
         </div>
 
@@ -165,26 +199,58 @@
                 <option value="Female">Female</option>
               </select>
             </label>
+            <label class="form-field">
+              <span class="form-label">Marital Status <em>*</em></span>
+              <select v-model="formData.marital_status" required>
+                <option value="" disabled>Select…</option>
+                <option value="Single">Single</option>
+                <option value="Married">Married</option>
+                <option value="Widowed">Widowed</option>
+                <option value="Separated">Separated</option>
+              </select>
+            </label>
+            <label v-if="formData.marital_status === 'Married'" class="form-field">
+              <span class="form-label">Wedding Anniversary</span>
+              <input v-model="formData.wedding_anniversarry" type="date" :max="todayIso" />
+            </label>
             <label class="form-field form-field-full">
-              <span class="form-label">Address <em>*</em></span>
-              <input v-model="formData.address" type="text" required maxlength="255" />
+              <span class="form-label">Address</span>
+              <input v-model="formData.address" type="text" maxlength="255" />
             </label>
             <label class="form-field">
               <span class="form-label">Date Joined</span>
               <input v-model="formData.date_joined" type="date" :max="todayIso" />
             </label>
             <label class="form-field">
-              <span class="form-label">Contact Number <em>*</em></span>
-              <input v-model="formData.contact_number" type="tel" required maxlength="32" />
+              <span class="form-label">Contact Number</span>
+              <input v-model="formData.contact_number" type="tel" maxlength="32" />
             </label>
-            <label class="form-field form-field-full">
-              <span class="form-label">Email <em>*</em></span>
-              <input v-model="formData.email" type="email" required maxlength="255" />
+            <label class="form-field">
+              <span class="form-label">Email</span>
+              <input v-model="formData.email" type="email" maxlength="255" />
+            </label>
+            <label class="form-field">
+              <span class="form-label">Facebook Link</span>
+              <input v-model="formData.facebook_link" type="url" maxlength="255" placeholder="https://facebook.com/..." />
             </label>
             <label class="form-field form-field-full">
               <span class="form-label">Member Of</span>
               <input :value="myChurchName || myChurchId || '—'" type="text" disabled readonly />
             </label>
+            <div class="form-field form-field-full form-checkboxes">
+              <label class="checkbox-field">
+                <input v-model="formData.is_baptized" type="checkbox" />
+                <span>Baptized</span>
+              </label>
+              <label class="checkbox-field">
+                <input v-model="formData.is_one_to_one_completed" type="checkbox" />
+                <span>One-to-One Completed</span>
+              </label>
+              <label class="checkbox-field">
+                <input v-model="formData.is_turning_point_completed" type="checkbox" />
+                <span>Turning Point Completed</span>
+              </label>
+            </div>
           </div>
 
           <div class="modal-footer">
@@ -269,6 +335,12 @@ const blankForm = () => ({
   date_joined: '',
   contact_number: '',
   email: '',
+  marital_status: '',
+  wedding_anniversarry: '',
+  facebook_link: '',
+  is_one_to_one_completed: false,
+  is_turning_point_completed: false,
+  is_baptized: false,
 })
 const formData = ref(blankForm())
 const formError = ref('')
@@ -276,6 +348,18 @@ const formSaving = ref(false)
 
 // Archive state
 const archiveReason = ref('')
+
+// Toast notification state
+const toast = ref({ visible: false, message: '', type: 'success' })
+let toastTimeout = null
+
+function showToast(message, type = 'success') {
+  if (toastTimeout) clearTimeout(toastTimeout)
+  toast.value = { visible: true, message, type }
+  toastTimeout = setTimeout(() => {
+    toast.value.visible = false
+  }, 3000)
+}
 
 // Caller's church (resolved via RPC; required for create)
 // Shared explicit column list — used by fetchMembers, handleCreate, handleUpdate.
@@ -291,7 +375,13 @@ const MEMBER_COLUMNS = `
   contact_number,
   email,
   date_joined,
-  member_of
+  member_of,
+  marital_status,
+  wedding_anniversarry,
+  facebook_link,
+  is_one_to_one_completed,
+  is_turning_point_completed,
+  is_baptized
 `
 
 // localStorage cache for the user's church name — lets the page title render
@@ -458,6 +548,12 @@ function startEdit() {
     date_joined: m.date_joined ?? '',
     contact_number: m.contact_number != null ? String(m.contact_number) : '',
     email: m.email ?? '',
+    marital_status: m.marital_status ?? '',
+    wedding_anniversarry: m.wedding_anniversarry ?? '',
+    facebook_link: m.facebook_link ?? '',
+    is_one_to_one_completed: m.is_one_to_one_completed ?? false,
+    is_turning_point_completed: m.is_turning_point_completed ?? false,
+    is_baptized: m.is_baptized ?? false,
   }
   formError.value = ''
   modalMode.value = 'edit'
@@ -509,6 +605,12 @@ function buildPayload() {
     date_joined: f.date_joined || null,
     contact_number: f.contact_number.trim() || null,
     email: f.email.trim() || null,
+    marital_status: f.marital_status,
+    wedding_anniversarry: f.wedding_anniversarry || null,
+    facebook_link: f.facebook_link.trim() || null,
+    is_one_to_one_completed: f.is_one_to_one_completed,
+    is_turning_point_completed: f.is_turning_point_completed,
+    is_baptized: f.is_baptized,
   }
 }
 
@@ -531,10 +633,12 @@ async function handleCreate() {
 
   if (insertError) {
     formError.value = insertError.message
+    showToast('Failed to create member.', 'error')
     return
   }
   members.value = [data, ...members.value]
   closeModal()
+  showToast('Member created successfully.', 'success')
 }
 
 async function handleUpdate() {
@@ -553,12 +657,14 @@ async function handleUpdate() {
 
   if (updateError) {
     formError.value = updateError.message
+    showToast('Failed to update member.', 'error')
     return
   }
   const idx = members.value.findIndex(m => m.id === data.id)
   if (idx !== -1) members.value.splice(idx, 1, data)
   selectedMember.value = data
   modalMode.value = 'view'
+  showToast('Member updated successfully.', 'success')
 }
 
 async function handleArchive() {
@@ -578,11 +684,13 @@ async function handleArchive() {
 
   if (archiveError) {
     formError.value = archiveError.message
+    showToast('Failed to archive member.', 'error')
     return
   }
   // Drop from local list — RLS will hide it on next reload too.
   members.value = members.value.filter(m => m.id !== selectedMember.value.id)
   closeModal()
+  showToast('Member archived successfully.', 'success')
 }
 
 function handleEsc(e) {
@@ -811,6 +919,8 @@ onUnmounted(() => {
   border-radius: 12px;
   width: 100%;
   max-width: 520px;
+  max-height: 90vh;
+  overflow-y: auto;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
   animation: slideUp 0.2s ease-out;
 }
@@ -1074,6 +1184,29 @@ onUnmounted(() => {
   min-height: 72px;
 }
 
+.form-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding-top: 0.5rem;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  font-size: 0.88rem;
+  color: #1e293b;
+}
+
+.checkbox-field input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #1a56db;
+  cursor: pointer;
+}
+
 .form-error {
   background: #fef2f2;
   color: #b91c1c;
@@ -1124,6 +1257,42 @@ onUnmounted(() => {
   color: #64748b;
   line-height: 1.45;
   margin-bottom: 1rem;
+}
+
+/* Toast Notification */
+.toast {
+  position: fixed;
+  top: 1.25rem;
+  right: 1.25rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  z-index: 200;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.toast.success {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+
+.toast.error {
+  background: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity 0.3s, transform 0.3s;
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
 }
 
 @media (max-width: 600px) {
