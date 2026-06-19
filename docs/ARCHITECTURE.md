@@ -6,6 +6,18 @@
 
 ---
 
+## 0. Project Goal & Priority Order
+
+This is a public-internet deployment of an internal-organization tool. Every architectural and implementation decision MUST be evaluated against the following priority order, in order:
+
+1. **Cost — keep operating cost at $0/month indefinitely.** Binding constraint. See §12 ("Free-Tier Operating Plan") for the budgets, principles, and thresholds that follow from this. Any change that risks pushing the project off the free tier requires an explicit owner decision before work begins.
+2. **Security — close second.** The app is reachable from the public internet and stores PII (names, birthdates, addresses, contact info, baptismal status) for church members. Security controls MUST be applied unless they conflict with priority 1; when they do, prefer the controls in [SECURITY.md](SECURITY.md) Tier 1 (all free) and document any deferred control with its cost rationale. The default posture is "fail closed" — if a feature can't be made safe within the free-tier budget, it is not built.
+3. Everything else (DX, polish, additional features) ranks below the two above.
+
+When priorities 1 and 2 conflict, the resolution is captured in [SECURITY.md](SECURITY.md) — read that document alongside §12 of this file before proposing changes that touch auth, data exposure, or deployment configuration.
+
+---
+
 ## 1. Project Identity
 
 | Attribute | Value |
@@ -317,15 +329,24 @@ Loaded by Vite from `.env` at the project root. Both must be present at **build 
 
 ## 8. Security Posture
 
-| Concern | Status |
-|---|---|
-| Secrets in repo | None. Anon key is intentionally public; service role key is **never** used in the frontend. |
-| Authorization | Enforced server-side by Postgres RLS. Frontend cannot bypass it. |
-| Transport | HTTPS only (Supabase + Netlify). |
-| XSS | Vue auto-escapes interpolation; no `v-html` is used in current views. |
-| CSRF | N/A — Supabase uses Bearer JWTs in headers, not cookies. |
-| Password storage | Handled by Supabase (bcrypt). App never touches password material after submission. |
-| Open redirects | Router only navigates to known named routes. |
+For the full vulnerability analysis, threat model, OWASP Top 10 mapping, and prioritized mitigations (Tier 1 = free, do now), see **[SECURITY.md](SECURITY.md)**. The table below is a snapshot of the controls that exist today; gaps and remediations are tracked in that document.
+
+| Concern | Status | Notes |
+|---|---|---|
+| Secrets in repo | None | Anon key is intentionally public; service-role key is **never** used in the frontend. |
+| Authorization | Enforced server-side by Postgres RLS | Frontend cannot bypass it. RLS coverage of `user_accounts`, `groups`, `group_members` must be verified — see [SECURITY.md](SECURITY.md) §3.2. |
+| Cross-tenant `churches` exposure | **Known gap** | Current `churches` SELECT policy is `using (true)`. Tighten per [SECURITY.md](SECURITY.md) §3.3. |
+| Transport | HTTPS only | Supabase + Netlify. HSTS not yet emitted — [SECURITY.md](SECURITY.md) §3.1. |
+| HTTP security headers | **Known gap** | No CSP / X-Frame-Options / Referrer-Policy / Permissions-Policy in [netlify.toml](../netlify.toml). [SECURITY.md](SECURITY.md) §3.1. |
+| XSS | Low risk today | Vue auto-escapes interpolation; no `v-html`; no `:href` to user-supplied URLs. Latent risk if `facebook_link` becomes a clickable link — [SECURITY.md](SECURITY.md) §4.1. |
+| CSRF | N/A | Supabase uses Bearer JWTs in `Authorization` headers, not cookies. |
+| Password storage | Handled by Supabase (bcrypt) | App never touches password material after submission. |
+| Session storage | JWT in `localStorage` (Supabase SDK default) | XSS-exfiltratable. Compensated by strict CSP — [SECURITY.md](SECURITY.md) §3.4. HttpOnly-cookie alternative is rejected under §12.3 rule 5. |
+| Auth hardening (MFA / CAPTCHA / leaked-password / sign-up disabled) | **Known gap** | Configured in the Supabase dashboard, not as code. [SECURITY.md](SECURITY.md) §3.6. |
+| Audit trail | **Known gap** | No `created_by` / `updated_by` / `archived_by` on `members`. [SECURITY.md](SECURITY.md) §3.7. |
+| Dependency scanning | **Known gap** | No Dependabot, no `npm audit` in CI. [SECURITY.md](SECURITY.md) §3.8. |
+| Open redirects | Not present | Router only navigates to known named routes. |
+| Data retention / right-to-erasure | **Known gap** | Soft-delete is the only deletion path; no purge policy. [SECURITY.md](SECURITY.md) §3.10. |
 
 ---
 
