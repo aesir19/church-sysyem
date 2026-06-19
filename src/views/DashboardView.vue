@@ -164,6 +164,10 @@
             <span class="detail-label">Turning Point Completed</span>
             <span class="detail-value">{{ selectedMember.is_turning_point_completed ? 'Yes' : 'No' }}</span>
           </div>
+          <div class="detail-row">
+            <span class="detail-label">Submitted Membership Form</span>
+            <span class="detail-value">{{ selectedMember.has_submitted_membership_form ? 'Yes' : 'No' }}</span>
+          </div>
         </div>
 
         <!-- Body: CREATE / EDIT form -->
@@ -249,6 +253,10 @@
               <label class="checkbox-field">
                 <input v-model="formData.is_turning_point_completed" type="checkbox" />
                 <span>Turning Point Completed</span>
+              </label>
+              <label class="checkbox-field">
+                <input v-model="formData.has_submitted_membership_form" type="checkbox" />
+                <span>Submitted Membership Form</span>
               </label>
             </div>
           </div>
@@ -341,6 +349,7 @@ const blankForm = () => ({
   is_one_to_one_completed: false,
   is_turning_point_completed: false,
   is_baptized: false,
+  has_submitted_membership_form: false,
 })
 const formData = ref(blankForm())
 const formError = ref('')
@@ -381,7 +390,8 @@ const MEMBER_COLUMNS = `
   facebook_link,
   is_one_to_one_completed,
   is_turning_point_completed,
-  is_baptized
+  is_baptized,
+  has_submitted_membership_form
 `
 
 // localStorage cache for the user's church name — lets the page title render
@@ -554,6 +564,7 @@ function startEdit() {
     is_one_to_one_completed: m.is_one_to_one_completed ?? false,
     is_turning_point_completed: m.is_turning_point_completed ?? false,
     is_baptized: m.is_baptized ?? false,
+    has_submitted_membership_form: m.has_submitted_membership_form ?? false,
   }
   formError.value = ''
   modalMode.value = 'edit'
@@ -611,6 +622,7 @@ function buildPayload() {
     is_one_to_one_completed: f.is_one_to_one_completed,
     is_turning_point_completed: f.is_turning_point_completed,
     is_baptized: f.is_baptized,
+    has_submitted_membership_form: f.has_submitted_membership_form,
   }
 }
 

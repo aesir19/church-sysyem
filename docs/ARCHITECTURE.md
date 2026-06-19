@@ -227,6 +227,7 @@ Single-screen view containing all member-management UX.
 | `is_turning_point_completed` | `bool` |  |
 | `is_baptized` | `bool` |  |
 | `marital_status` | `varchar` |  |
+| `has_submitted_membership_form` | `bool` |  |
 
 ## Table `groups`
 
@@ -247,6 +248,8 @@ Single-screen view containing all member-management UX.
 | `id` | `int8` | Primary Identity |
 | `member_id` | `uuid` |  Nullable |
 | `group_id` | `uuid` |  Nullable |
+
+
 
 
 ### 6.2 Authorization Model
