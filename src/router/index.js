@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { supabase } from '../lib/supabase'
 import LoginView from '../views/LoginView.vue'
 import SetPasswordView from '../views/SetPasswordView.vue'
+import AccountPendingView from '../views/AccountPendingView.vue'
 import DashboardView from '../views/DashboardView.vue'
 
 const routes = [
@@ -18,6 +19,12 @@ const routes = [
     path: '/set-password',
     name: 'SetPassword',
     component: SetPasswordView,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/account-pending',
+    name: 'AccountPending',
+    component: AccountPendingView,
     meta: { requiresAuth: true }
   },
   {
@@ -53,27 +60,65 @@ supabase.auth.onAuthStateChange((event) => {
   }
 })
 
+// Check if the authenticated user has a linked user_accounts row
+async function isAccountLinked(userId) {
+  const { data } = await supabase
+    .from('user_accounts')
+    .select('id')
+    .eq('id', userId)
+    .maybeSingle()
+  return !!data
+}
+
 router.beforeEach(async (to, from, next) => {
   const { data: { session } } = await supabase.auth.getSession()
 
   if (to.meta.requiresAuth && !session) {
     next('/login')
-  } else if (to.path === '/login' && session) {
-    // If user arrived via invite, send to set-password instead of dashboard
+    return
+  }
+
+  if (to.path === '/login' && session) {
     if (pendingPasswordSet) {
       next('/set-password')
     } else {
       next('/dashboard')
     }
-  } else if (to.path === '/set-password' && session) {
-    // Allow access; clear flag after navigation completes
-    next()
-  } else if (to.path === '/dashboard' && session && pendingPasswordSet) {
-    // Prevent skipping password setup
-    next('/set-password')
-  } else {
-    next()
+    return
   }
+
+  if (to.path === '/set-password' && session) {
+    next()
+    return
+  }
+
+  if (to.path === '/account-pending' && session) {
+    // If account is now linked, send them to dashboard instead
+    const linked = await isAccountLinked(session.user.id)
+    if (linked) {
+      next('/dashboard')
+    } else {
+      next()
+    }
+    return
+  }
+
+  if (to.path === '/dashboard' && session) {
+    if (pendingPasswordSet) {
+      next('/set-password')
+      return
+    }
+    // Check if user has a linked account; if not, show pending page
+    const linked = await isAccountLinked(session.user.id)
+    if (!linked) {
+      next('/account-pending')
+      return
+    }
+    next()
+    return
+  }
+
+  next()
 })
 
 // Clear the flag once user successfully navigates away from set-password

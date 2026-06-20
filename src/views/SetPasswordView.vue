@@ -110,7 +110,7 @@ async function handleSetPassword() {
   } else {
     successMessage.value = 'Password set successfully. Redirecting...'
     setTimeout(() => {
-      router.push('/dashboard')
+      router.push('/account-pending')
     }, 1500)
   }
 
