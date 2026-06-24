@@ -201,6 +201,7 @@ Single-screen view containing all member-management UX.
 |------|------|-------------|
 | `id` | `uuid` | Primary |
 | `member_id` | `uuid` |  Nullable |
+| `role` | `varchar` |  |
 
 ## Table `members`
 
@@ -245,10 +246,21 @@ Single-screen view containing all member-management UX.
 
 | Name | Type | Constraints |
 |------|------|-------------|
-| `id` | `int8` | Primary Identity |
+| `id` | `uuid` | Primary Identity |
 | `member_id` | `uuid` |  Nullable |
 | `group_id` | `uuid` |  Nullable |
 
+## Table `collections`
+
+### Columns
+
+| Name | Type | Constraints |
+|------|------|-------------|
+| `id` | `int8` | Primary Identity |
+| `from` | `uuid` |  |
+| `amount` | `float4` |  |
+| `isTithes` | `bool` |  |
+| `collectedOn` | `date` |  |
 
 
 

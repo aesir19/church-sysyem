@@ -3,7 +3,11 @@ import { supabase } from '../lib/supabase'
 import LoginView from '../views/LoginView.vue'
 import SetPasswordView from '../views/SetPasswordView.vue'
 import AccountPendingView from '../views/AccountPendingView.vue'
+import DashboardLayout from '../layouts/DashboardLayout.vue'
 import DashboardView from '../views/DashboardView.vue'
+import MinistrySmallGroupView from '../views/MinistrySmallGroupView.vue'
+import ReportsView from '../views/ReportsView.vue'
+import ChurchFundsView from '../views/ChurchFundsView.vue'
 
 const routes = [
   {
@@ -29,9 +33,15 @@ const routes = [
   },
   {
     path: '/dashboard',
-    name: 'Dashboard',
-    component: DashboardView,
-    meta: { requiresAuth: true }
+    component: DashboardLayout,
+    meta: { requiresAuth: true },
+    children: [
+      { path: '', redirect: '/dashboard/members' },
+      { path: 'members', name: 'Members', component: DashboardView },
+      { path: 'ministry', name: 'Ministry', component: MinistrySmallGroupView },
+      { path: 'reports', name: 'Reports', component: ReportsView },
+      { path: 'funds', name: 'ChurchFunds', component: ChurchFundsView }
+    ]
   }
 ]
 
@@ -103,7 +113,7 @@ router.beforeEach(async (to, from, next) => {
     return
   }
 
-  if (to.path === '/dashboard' && session) {
+  if (to.path.startsWith('/dashboard') && session) {
     if (pendingPasswordSet) {
       next('/set-password')
       return

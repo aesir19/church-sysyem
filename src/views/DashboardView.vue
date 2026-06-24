@@ -6,10 +6,6 @@
         {{ toast.message }}
       </div>
     </Transition>
-    <header class="dashboard-header">
-      <h1>UDFC Dashboard</h1>
-      <button @click="handleLogout" class="btn-logout">Sign Out</button>
-    </header>
 
     <main class="dashboard-content">
       <div class="page-header">
@@ -709,14 +705,6 @@ function handleEsc(e) {
   if (e.key === 'Escape' && modalMode.value) closeModal()
 }
 
-async function handleLogout() {
-  // Clear the localStorage church-name cache so a different user signing in
-  // on the same browser doesn't briefly see the previous church's title.
-  writeCachedChurchName(null)
-  await supabase.auth.signOut()
-  router.push('/login')
-}
-
 onMounted(() => {
   fetchMyChurch()
   fetchMembers()
@@ -732,39 +720,6 @@ onUnmounted(() => {
 .dashboard-container {
   min-height: 100vh;
   background: #f8fafc;
-}
-
-.dashboard-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1rem 2rem;
-  background: #ffffff;
-  border-bottom: 1px solid #e2e8f0;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-
-.dashboard-header h1 {
-  font-size: 1.25rem;
-  color: #1e293b;
-  font-weight: 700;
-}
-
-.btn-logout {
-  padding: 0.5rem 1rem;
-  background: transparent;
-  color: #64748b;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.btn-logout:hover {
-  background: #f1f5f9;
 }
 
 .dashboard-content {
