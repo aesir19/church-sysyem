@@ -50,6 +50,63 @@
         </div>
       </div>
 
+      <!-- Member Search Section -->
+      <div class="member-search-section card">
+        <div class="member-search-header">
+          <h4>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+            </svg>
+            Member Lookup
+          </h4>
+          <span class="member-search-hint">Find which groups a member belongs to</span>
+        </div>
+        <div class="member-search-bar">
+          <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input
+            v-model="memberSearchQuery"
+            type="text"
+            placeholder="Search by member name…"
+            class="search-input member-search-input"
+          />
+        </div>
+        <!-- Member Search Results -->
+        <div v-if="memberSearchQuery.length >= 2" class="member-search-results">
+          <div v-if="memberSearchLoading" class="state-message small">
+            <div class="spinner"></div>
+          </div>
+          <div v-else-if="memberSearchResults.length === 0" class="member-search-empty">
+            No members found matching "{{ memberSearchQuery }}".
+          </div>
+          <div v-else class="member-results-list">
+            <div
+              v-for="result in memberSearchResults"
+              :key="result.member.id"
+              class="member-result-card"
+            >
+              <div class="member-result-header">
+                <span class="member-avatar">{{ result.member.first_name?.[0] }}{{ result.member.last_name?.[0] }}</span>
+                <span class="member-result-name">{{ result.member.first_name }} {{ result.member.last_name }}</span>
+              </div>
+              <div v-if="result.groups.length === 0" class="member-result-nogroups">
+                Not a member of any group.
+              </div>
+              <div v-else class="member-result-groups">
+                <span
+                  v-for="g in result.groups"
+                  :key="g.id"
+                  :class="['member-group-tag', g.type === 'Ministry' ? 'tag-ministry' : 'tag-smallgroup']"
+                >
+                  {{ g.name }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Loading -->
       <div v-if="loading" class="card">
         <div class="state-message">
@@ -287,6 +344,12 @@ const error = ref('')
 const activeTab = ref('all')
 const searchQuery = ref('')
 
+// Member search
+const memberSearchQuery = ref('')
+const memberSearchResults = ref([])
+const memberSearchLoading = ref(false)
+let memberSearchTimeout = null
+
 // Toast
 const toast = ref({ visible: false, message: '', type: 'success' })
 let toastTimeout = null
@@ -354,6 +417,55 @@ watch(showMemberPicker, async (val) => {
     pickerInput.value?.focus()
   }
 })
+
+// Member search debounce
+watch(memberSearchQuery, (val) => {
+  if (memberSearchTimeout) clearTimeout(memberSearchTimeout)
+  if (val.trim().length < 2) {
+    memberSearchResults.value = []
+    return
+  }
+  memberSearchLoading.value = true
+  memberSearchTimeout = setTimeout(() => {
+    searchMemberGroups(val.trim())
+  }, 300)
+})
+
+async function searchMemberGroups(query) {
+  memberSearchLoading.value = true
+  const q = query.toLowerCase()
+
+  // Search members matching the query
+  const { data: members, error: membersError } = await supabase
+    .from('members')
+    .select('id, first_name, last_name')
+    .or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%`)
+    .limit(10)
+
+  if (membersError || !members || members.length === 0) {
+    memberSearchResults.value = []
+    memberSearchLoading.value = false
+    return
+  }
+
+  // For each member, fetch their group memberships
+  const memberIds = members.map(m => m.id)
+  const { data: groupMemberships } = await supabase
+    .from('group_members')
+    .select('member_id, groups(id, name, type)')
+    .in('member_id', memberIds)
+
+  // Build results
+  const results = members.map(member => {
+    const memberGroups = (groupMemberships || [])
+      .filter(gm => gm.member_id === member.id && gm.groups)
+      .map(gm => gm.groups)
+    return { member, groups: memberGroups }
+  })
+
+  memberSearchResults.value = results
+  memberSearchLoading.value = false
+}
 
 // ── Data Fetching ──────────────────────────────────────────────
 
@@ -1450,9 +1562,122 @@ onUnmounted(() => {
   transform: translateY(-10px);
 }
 
+/* Member Search Section */
+.member-search-section {
+  margin-bottom: 1.5rem;
+  padding: 1.25rem;
+}
+
+.member-search-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.member-search-header h4 {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #1e293b;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.member-search-hint {
+  font-size: 0.82rem;
+  color: #94a3b8;
+}
+
+.member-search-bar {
+  position: relative;
+  max-width: 360px;
+}
+
+.member-search-input {
+  width: 100% !important;
+}
+
+.member-search-results {
+  margin-top: 1rem;
+}
+
+.member-search-empty {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  padding: 0.5rem 0;
+}
+
+.member-results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.member-result-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+}
+
+.member-result-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.member-result-name {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.member-result-nogroups {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+.member-result-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.member-group-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.tag-ministry {
+  background: #eff6ff;
+  color: #1a56db;
+}
+
+.tag-smallgroup {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
 @media (max-width: 600px) {
   .page-content {
     padding: 1rem;
+  }
+
+  .member-search-bar {
+    max-width: 100%;
+  }
+
+  .member-search-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
   }
 
   .toolbar {
