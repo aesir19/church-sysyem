@@ -6,7 +6,6 @@ import AccountPendingView from '../views/AccountPendingView.vue'
 import DashboardLayout from '../layouts/DashboardLayout.vue'
 import DashboardView from '../views/DashboardView.vue'
 import MinistrySmallGroupView from '../views/MinistrySmallGroupView.vue'
-import ReportsView from '../views/ReportsView.vue'
 import ChurchFundsView from '../views/ChurchFundsView.vue'
 import CollectionsInputView from '../views/CollectionsInputView.vue'
 
