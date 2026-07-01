@@ -39,7 +39,6 @@ const routes = [
       { path: '', redirect: '/dashboard/members' },
       { path: 'members', name: 'Members', component: DashboardView },
       { path: 'ministry', name: 'Ministry', component: MinistrySmallGroupView },
-      { path: 'reports', name: 'Reports', component: ReportsView },
       { path: 'funds', name: 'ChurchFunds', component: ChurchFundsView },
       { path: 'funds/collections', name: 'Collections', component: CollectionsInputView }
     ]
