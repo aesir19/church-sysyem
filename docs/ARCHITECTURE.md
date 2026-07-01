@@ -133,7 +133,14 @@ Defined in [src/router/index.js](src/router/index.js):
 |---|---|---|---|
 | `/` | — | redirect → `/login` | — |
 | `/login` | `Login` | `LoginView` | — |
-| `/dashboard` | `Dashboard` | `DashboardView` | `requiresAuth: true` |
+| `/set-password` | `SetPassword` | `SetPasswordView` | `requiresAuth: true` |
+| `/account-pending` | `AccountPending` | `AccountPendingView` | `requiresAuth: true` |
+| `/dashboard` | — | `DashboardLayout` | `requiresAuth: true` |
+
+`/dashboard` child routes:
+- `/dashboard/members` (`Members`)
+- `/dashboard/ministry` (`Ministry`)
+- `/dashboard/funds` (`ChurchFunds`)
 
 `router.beforeEach` calls `supabase.auth.getSession()` on every navigation:
 - Redirects unauthenticated users away from `requiresAuth` routes → `/login`.
