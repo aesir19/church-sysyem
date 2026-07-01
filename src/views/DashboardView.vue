@@ -6,6 +6,10 @@
         {{ toast.message }}
       </div>
     </Transition>
+    <header class="dashboard-header">
+      <h1>UDFC Dashboard</h1>
+      <button @click="handleLogout" class="btn-logout">Sign Out</button>
+    </header>
 
     <main class="dashboard-content">
       <div class="page-header">
@@ -160,10 +164,6 @@
             <span class="detail-label">Turning Point Completed</span>
             <span class="detail-value">{{ selectedMember.is_turning_point_completed ? 'Yes' : 'No' }}</span>
           </div>
-          <div class="detail-row">
-            <span class="detail-label">Submitted Membership Form</span>
-            <span class="detail-value">{{ selectedMember.has_submitted_membership_form ? 'Yes' : 'No' }}</span>
-          </div>
         </div>
 
         <!-- Body: CREATE / EDIT form -->
@@ -250,10 +250,6 @@
                 <input v-model="formData.is_turning_point_completed" type="checkbox" />
                 <span>Turning Point Completed</span>
               </label>
-              <label class="checkbox-field">
-                <input v-model="formData.has_submitted_membership_form" type="checkbox" />
-                <span>Submitted Membership Form</span>
-              </label>
             </div>
           </div>
 
@@ -317,6 +313,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { supabase } from '../lib/supabase'
+import { buildMemberPayload } from '../utils/memberPayload'
 
 const router = useRouter()
 
@@ -345,7 +342,6 @@ const blankForm = () => ({
   is_one_to_one_completed: false,
   is_turning_point_completed: false,
   is_baptized: false,
-  has_submitted_membership_form: false,
 })
 const formData = ref(blankForm())
 const formError = ref('')
@@ -386,8 +382,7 @@ const MEMBER_COLUMNS = `
   facebook_link,
   is_one_to_one_completed,
   is_turning_point_completed,
-  is_baptized,
-  has_submitted_membership_form
+  is_baptized
 `
 
 // localStorage cache for the user's church name — lets the page title render
@@ -560,7 +555,6 @@ function startEdit() {
     is_one_to_one_completed: m.is_one_to_one_completed ?? false,
     is_turning_point_completed: m.is_turning_point_completed ?? false,
     is_baptized: m.is_baptized ?? false,
-    has_submitted_membership_form: m.has_submitted_membership_form ?? false,
   }
   formError.value = ''
   modalMode.value = 'edit'
@@ -600,26 +594,7 @@ function closeModal() {
 // ── Mutations ─────────────────────────────────────────────────────
 
 function buildPayload() {
-  // Trim strings, coerce empty optional fields to null so the DB stores NULL not "".
-  const f = formData.value
-  return {
-    first_name: f.first_name.trim(),
-    last_name: f.last_name.trim(),
-    middle_name: f.middle_name.trim() || null,
-    birthdate: f.birthdate || null,
-    gender: f.gender,
-    address: f.address.trim() || null,
-    date_joined: f.date_joined || null,
-    contact_number: f.contact_number.trim() || null,
-    email: f.email.trim() || null,
-    marital_status: f.marital_status,
-    wedding_anniversarry: f.wedding_anniversarry || null,
-    facebook_link: f.facebook_link.trim() || null,
-    is_one_to_one_completed: f.is_one_to_one_completed,
-    is_turning_point_completed: f.is_turning_point_completed,
-    is_baptized: f.is_baptized,
-    has_submitted_membership_form: f.has_submitted_membership_form,
-  }
+  return buildMemberPayload(formData.value)
 }
 
 async function handleCreate() {
@@ -705,6 +680,14 @@ function handleEsc(e) {
   if (e.key === 'Escape' && modalMode.value) closeModal()
 }
 
+async function handleLogout() {
+  // Clear the localStorage church-name cache so a different user signing in
+  // on the same browser doesn't briefly see the previous church's title.
+  writeCachedChurchName(null)
+  await supabase.auth.signOut()
+  router.push('/login')
+}
+
 onMounted(() => {
   fetchMyChurch()
   fetchMembers()
@@ -720,6 +703,39 @@ onUnmounted(() => {
 .dashboard-container {
   min-height: 100vh;
   background: #f8fafc;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background: #ffffff;
+  border-bottom: 1px solid #e2e8f0;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.dashboard-header h1 {
+  font-size: 1.25rem;
+  color: #1e293b;
+  font-weight: 700;
+}
+
+.btn-logout {
+  padding: 0.5rem 1rem;
+  background: transparent;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-logout:hover {
+  background: #f1f5f9;
 }
 
 .dashboard-content {
