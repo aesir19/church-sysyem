@@ -334,6 +334,7 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { supabase } from '../lib/supabase'
+import { buildMemberNameOrFilter } from '../utils/searchFilters'
 
 // ── State ──────────────────────────────────────────────────────
 
@@ -433,13 +434,18 @@ watch(memberSearchQuery, (val) => {
 
 async function searchMemberGroups(query) {
   memberSearchLoading.value = true
-  const q = query.toLowerCase()
+  const filter = buildMemberNameOrFilter(query)
+  if (!filter) {
+    memberSearchResults.value = []
+    memberSearchLoading.value = false
+    return
+  }
 
   // Search members matching the query
   const { data: members, error: membersError } = await supabase
     .from('members')
     .select('id, first_name, last_name')
-    .or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%`)
+    .or(filter)
     .limit(10)
 
   if (membersError || !members || members.length === 0) {

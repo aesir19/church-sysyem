@@ -76,6 +76,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { supabase } from '../lib/supabase'
+import { validateNewPassword } from '../utils/authValidation'
 
 const router = useRouter()
 const password = ref('')
@@ -89,14 +90,9 @@ async function handleSetPassword() {
   errorMessage.value = ''
   successMessage.value = ''
 
-  if (password.value !== confirmPassword.value) {
-    errorMessage.value = 'Passwords do not match.'
-    loading.value = false
-    return
-  }
-
-  if (password.value.length < 8) {
-    errorMessage.value = 'Password must be at least 8 characters.'
+  const validationError = validateNewPassword(password.value, confirmPassword.value)
+  if (validationError) {
+    errorMessage.value = validationError
     loading.value = false
     return
   }

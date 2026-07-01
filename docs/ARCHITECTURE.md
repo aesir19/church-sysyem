@@ -66,6 +66,7 @@ The system is a **two-tier serverless web app**:
 | Routing | Vue Router 4 | `^4.5.0` |
 | Build tool | Vite | `^6.3.5` |
 | Vue plugin | `@vitejs/plugin-vue` | `^5.2.3` |
+| Testing | Vitest | `^4.1.9` |
 | Backend SDK | `@supabase/supabase-js` | `^2.49.1` |
 | Backend (BaaS) | Supabase (Postgres + Auth) | n/a |
 | Hosting | Netlify | n/a |
@@ -73,7 +74,7 @@ The system is a **two-tier serverless web app**:
 | State management | None (local component state via `ref` / `computed`) | — |
 | CSS | Plain CSS (scoped per SFC) + global [src/style.css](src/style.css) | — |
 
-There is **no TypeScript, no test framework, no linter, no Pinia/Vuex, and no UI component library.**
+There is **no TypeScript, no linter, no Pinia/Vuex, and no UI component library.**
 
 ---
 
@@ -81,13 +82,18 @@ There is **no TypeScript, no test framework, no linter, no Pinia/Vuex, and no UI
 
 ```
 dashboard-project/
+├── .github/
+│   └── workflows/
+│       └── ci.yml            # GitHub Actions gate: npm test + npm run build
 ├── index.html                  # Single HTML entry; mounts #app
 ├── netlify.toml                # build = `npm run build`, publish = `dist`, SPA fallback redirect
-├── package.json                # Scripts: dev, build, preview
+├── package.json                # Scripts: dev, build, preview, test
 ├── vite.config.js              # Minimal — only registers @vitejs/plugin-vue
+├── vitest.config.js            # Vitest runner config
 ├── README.md                   # Human-facing setup & deployment guide
 ├── public/
 │   └── vite.svg                # Favicon (default Vite asset)
+├── tests/                      # Unit tests (router guards + security/util logic)
 └── src/
     ├── main.js                 # createApp(App).use(router).mount('#app')
     ├── App.vue                 # Root component — renders <router-view /> only
@@ -128,7 +134,7 @@ Defined in [src/router/index.js](src/router/index.js):
 
 [src/lib/supabase.js](src/lib/supabase.js):
 - Reads `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from `import.meta.env`.
-- Falls back to `https://placeholder.supabase.co` + `'placeholder-key'` if env vars are missing, and logs a `console.warn`. This prevents a hard crash in dev when `.env` is absent but the app will not function.
+- Throws a startup error if either variable is missing so invalid deployments fail closed.
 - Exports a single shared `supabase` client.
 
 ### 5.4 Views
@@ -328,6 +334,7 @@ values ('<auth-user-uuid>', '<auth-user-uuid>');
 | `dev` | `vite` | Dev server, HMR, default port 5173 |
 | `build` | `vite build` | Outputs to `dist/` |
 | `preview` | `vite preview` | Serves the production build locally |
+| `test` | `vitest run` | Runs unit tests |
 
 ### 7.2 Environment Variables
 Loaded by Vite from `.env` at the project root. Both must be present at **build time** for production:
@@ -374,7 +381,7 @@ These are **not bugs** but explicit non-features in the current build. If asked 
 3. **No client-side search/filter.**
 4. **No realtime subscriptions** — the table is a static snapshot until page reload. **Intentional** under the free-tier plan (§12.3).
 5. **No global state store** — state lives in component `ref`s; if multiple views need shared data, introduce Pinia rather than prop-drilling.
-6. **No tests** — no Vitest, no Playwright, no CI checks beyond the Netlify build.
+6. **No integration/E2E tests yet** — Vitest unit coverage exists for router auth guards plus payload/search/password validation and Supabase bootstrap checks, and GitHub Actions now enforces `npm test` + `npm run build` on pull requests and pushes to `main`. There is still no Playwright/Cypress suite.
 7. **No TypeScript** — adding types would require migrating `.vue`/`.js` files and updating `vite.config.js`.
 8. **No multi-church admin role** — RLS assumes exactly one church per user. Cross-church access requires schema and policy changes.
 9. **No error reporting** — errors are surfaced inline; no Sentry/logging integration.
