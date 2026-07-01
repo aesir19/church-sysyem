@@ -68,13 +68,14 @@ The system is a **two-tier serverless web app**:
 | Vue plugin | `@vitejs/plugin-vue` | `^5.2.3` |
 | Testing | Vitest | `^4.1.9` |
 | Backend SDK | `@supabase/supabase-js` | `^2.49.1` |
+| Database ORM tooling | Prisma CLI + Prisma Client | `^6.16.0` |
 | Backend (BaaS) | Supabase (Postgres + Auth) | n/a |
 | Hosting | Netlify | n/a |
 | Module type | ESM (`"type": "module"`) | — |
 | State management | None (local component state via `ref` / `computed`) | — |
 | CSS | Plain CSS (scoped per SFC) + global [src/style.css](src/style.css) | — |
 
-There is **no TypeScript, no linter, no Pinia/Vuex, and no UI component library.**
+There is **no TypeScript, no linter, no Pinia/Vuex, and no UI component library.** Prisma is used for **schema introspection and migrations only** (Node CLI), not for browser runtime queries.
 
 ---
 
@@ -91,9 +92,18 @@ dashboard-project/
 ├── vite.config.js              # Minimal — only registers @vitejs/plugin-vue
 ├── vitest.config.js            # Vitest runner config
 ├── README.md                   # Human-facing setup & deployment guide
+├── prisma/
+│   ├── schema.prisma           # Prisma data model mapped to Supabase Postgres
+│   └── migrations/             # SQL migrations managed by Prisma
+├── prisma.config.js            # Prisma CLI configuration
+├── scripts/
+│   └── prisma/
+│       ├── check-env.js        # Prisma env preflight checks
+│       └── env-utils.js        # Shared env validation helpers
 ├── public/
 │   └── vite.svg                # Favicon (default Vite asset)
 ├── tests/                      # Unit tests (router guards + security/util logic)
+│   └── prisma/                 # Prisma env validation tests
 └── src/
     ├── main.js                 # createApp(App).use(router).mount('#app')
     ├── App.vue                 # Root component — renders <router-view /> only
@@ -187,88 +197,11 @@ Single-screen view containing all member-management UX.
 
 ## 6. Backend (Supabase)
 
-### 6.1 Required Tables
+### 6.1 Database Structure Source of Truth
 
-## Table `churches`
+The canonical database structure (tables, columns, relations, and constraints) is defined in `prisma/schema.prisma`.
 
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `name` | `varchar` |  |
-| `address` | `varchar` |  Nullable |
-
-## Table `user_accounts`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `member_id` | `uuid` |  Nullable |
-| `role` | `varchar` |  |
-
-## Table `members`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `first_name` | `varchar` |  |
-| `last_name` | `varchar` |  |
-| `middle_name` | `varchar` |  Nullable |
-| `birthdate` | `date` |  |
-| `gender` | `varchar` |  |
-| `address` | `varchar` |  Nullable |
-| `date_joined` | `date` |  Nullable |
-| `contact_number` | `numeric` |  Nullable |
-| `email` | `varchar` |  Nullable |
-| `member_of` | `uuid` |  |
-| `archived_at` | `timestamptz` |  Nullable |
-| `archived_reason` | `text` |  Nullable |
-| `wedding_anniversarry` | `date` |  Nullable |
-| `facebook_link` | `varchar` |  Nullable |
-| `is_one_to_one_completed` | `bool` |  |
-| `is_turning_point_completed` | `bool` |  |
-| `is_baptized` | `bool` |  |
-| `marital_status` | `varchar` |  |
-| `has_submitted_membership_form` | `bool` |  |
-
-## Table `groups`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary |
-| `name` | `varchar` |  |
-| `type` | `varchar` |  |
-
-## Table `group_members`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `uuid` | Primary Identity |
-| `member_id` | `uuid` |  Nullable |
-| `group_id` | `uuid` |  Nullable |
-
-## Table `collections`
-
-### Columns
-
-| Name | Type | Constraints |
-|------|------|-------------|
-| `id` | `int8` | Primary Identity |
-| `from` | `uuid` |  |
-| `amount` | `float4` |  |
-| `isTithes` | `bool` |  |
-| `collectedOn` | `date` |  |
-
-
+To avoid drift, this architecture document intentionally does not duplicate full table/column inventories.
 
 ### 6.2 Authorization Model
 
@@ -301,13 +234,13 @@ Policies (summarized from [README.md](README.md)):
 
 ### 6.2.1 Archiving Model (soft delete)
 
-Members are never hard-deleted. The schema uses two nullable columns plus a partial index:
+Members are never hard-deleted. The model uses archive metadata plus an active-only index:
 
-- `members.archived_at TIMESTAMPTZ NULL` — `NULL` = active; non-null timestamp = archived.
-- `members.archived_reason TEXT NULL` — optional free-text reason captured at archive time.
-- Partial index `members_active_church_idx ON members(member_of) WHERE archived_at IS NULL` — every dashboard query has the predicate `archived_at IS NULL` injected by the `SELECT` policy, so the planner uses this index. Its size scales with the **active** member count, not the total.
+- `archived_at` — `NULL` = active, non-null = archived.
+- `archived_reason` — optional free-text reason captured at archive time.
+- Active-only index on church membership with `archived_at IS NULL` so SELECT policy filtering stays fast as archived rows grow.
 
-**Storage rationale.** NULL columns cost ~1 bit each in Postgres' null bitmap (with no per-row payload when null), so the two nullable columns add negligible weight to active rows. A partial index over the active set keeps lookups fast even if archived rows accumulate over years. Restoring an archived member is a single `update members set archived_at = null, archived_reason = null where id = ...` — currently a manual SQL operation (no UI).
+**Storage rationale.** Nullable archive metadata keeps active-row overhead minimal, and an active-only partial index keeps lookups fast even when archived rows accumulate. Restoring an archived member is currently a manual SQL operation (no UI).
 
 ### 6.3 Authentication
 - Supabase Auth, email + password, bcrypt-hashed server-side.
@@ -315,14 +248,20 @@ Members are never hard-deleted. The schema uses two nullable columns plus a part
 - The frontend never sees or stores password hashes.
 
 ### 6.4 Linking a New Auth User to a Member
-Manual SQL (no UI yet):
-```sql
-insert into public.members (id, first_name, last_name, birthdate, gender, member_of, date_joined)
-values ('<auth-user-uuid>', 'First', 'Last', '1990-01-01', 'Male', '<church-uuid>', current_date);
+No UI yet. The operational rule is to link a new auth user to exactly one church member and one user account record, using the same auth user UUID for identity mapping.
 
-insert into public.user_accounts (id, member_id)
-values ('<auth-user-uuid>', '<auth-user-uuid>');
-```
+### 6.5 Prisma Schema Management Layer
+Prisma is now the source-controlled schema/migration workflow for the existing Supabase Postgres database.
+
+- Prisma datasource targets the existing Supabase database via `DATABASE_URL` and `DIRECT_URL`.
+- `DATABASE_URL` can be a pooled Supabase connection string.
+- `DIRECT_URL` should be the non-transaction pooling connection used by Prisma migrations (typically port `5432`).
+- Frontend runtime queries remain on `@supabase/supabase-js` so RLS continues to enforce authorization exactly as before.
+- Schema lifecycle commands (from `package.json` scripts):
+  - `npm run prisma:pull` — introspect current Supabase schema into `prisma/schema.prisma`.
+  - `npm run prisma:migrate:create` — create a new SQL migration from schema changes.
+  - `npm run prisma:migrate:deploy` — apply pending migrations to the target database.
+  - `npm run prisma:migrate:status` — check migration state.
 
 ---
 
@@ -400,10 +339,11 @@ When modifying this codebase, prefer the following:
 - **Scoped styles per SFC** — only put truly global rules in [src/style.css](src/style.css).
 - **Route-level code splitting** — when adding new views, register them in [src/router/index.js](src/router/index.js) and consider `() => import('...')` for lazy loading once the bundle grows.
 - **Auth guard** — any new authenticated route must include `meta: { requiresAuth: true }`.
-- **Database access** — go through the shared `supabase` import from [src/lib/supabase.js](src/lib/supabase.js); do not instantiate a new client.
+- **Database access (frontend runtime)** — go through the shared `supabase` import from [src/lib/supabase.js](src/lib/supabase.js); do not instantiate a new client.
+- **Database schema changes** — use Prisma (`prisma/schema.prisma` + `prisma/migrations`) and apply with `npm run prisma:migrate:deploy`.
 - **RLS first** — never replicate authorization logic in the frontend. If the user shouldn't see a row, the policy must reject it.
 - **Errors** — surface Supabase error `.message` to the user (this is the existing pattern); avoid throwing.
-- **No new dependencies** without a clear reason — the dep list is intentionally minimal.
+- **No new dependencies** without a clear reason — the dep list is intentionally minimal. Prisma is the approved schema-management exception.
 - **Color & spacing tokens** — match the existing slate/blue palette and `12px` card radius for visual consistency.
 - **Free-tier discipline** — every change must respect the budget in §12. When in doubt, prefer the cheaper path: fewer columns, fewer round-trips, more client-side reuse, no new background traffic.
 

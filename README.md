@@ -40,6 +40,22 @@ If you cannot sign in, cannot find a member, or see information that looks incor
 
 Member information is limited to authorized users only. Please keep your sign-in details private and log out when you are finished.
 
+## Developer workflow: Prisma schema migrations
+
+Prisma is now used to manage database schema changes in code while Supabase remains the hosted Postgres/Auth/RLS platform.
+
+1. Configure `.env` with:
+   - `DATABASE_URL` (Supabase pooled URL)
+   - `DIRECT_URL` (Supabase direct URL)
+2. Pull existing schema:
+   - `npm run prisma:pull`
+3. Create migration from schema changes:
+   - `npm run prisma:migrate:create -- --name your_change_name`
+4. Deploy migrations:
+   - `npm run prisma:migrate:deploy`
+
+Detailed plan: see `docs/prisma-migration.md`.
+
 ## License
 
 This project is for internal use by UDFC. All rights reserved.
