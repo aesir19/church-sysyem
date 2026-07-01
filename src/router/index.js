@@ -8,6 +8,7 @@ import DashboardView from '../views/DashboardView.vue'
 import MinistrySmallGroupView from '../views/MinistrySmallGroupView.vue'
 import ReportsView from '../views/ReportsView.vue'
 import ChurchFundsView from '../views/ChurchFundsView.vue'
+import CollectionsInputView from '../views/CollectionsInputView.vue'
 
 const routes = [
   {
@@ -40,7 +41,8 @@ const routes = [
       { path: 'members', name: 'Members', component: DashboardView },
       { path: 'ministry', name: 'Ministry', component: MinistrySmallGroupView },
       { path: 'reports', name: 'Reports', component: ReportsView },
-      { path: 'funds', name: 'ChurchFunds', component: ChurchFundsView }
+      { path: 'funds', name: 'ChurchFunds', component: ChurchFundsView },
+      { path: 'funds/collections', name: 'Collections', component: CollectionsInputView }
     ]
   }
 ]
