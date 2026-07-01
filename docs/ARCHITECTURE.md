@@ -112,9 +112,14 @@ dashboard-project/
     │   └── supabase.js         # Singleton Supabase client (uses VITE_SUPABASE_*)
     ├── router/
     │   └── index.js            # Routes + global beforeEach auth guard
+    ├── utils/
+    │   └── collectivesReport.js # Pure calculator for the monthly collectives report
+    │   └── collectionsDate.js   # Service-date auto-selection + 3-hour edit window check
     └── views/
         ├── LoginView.vue       # Email/password sign-in form
-        └── DashboardView.vue   # Members table + sortable columns + details modal
+        ├── DashboardView.vue   # Members table + sortable columns + details modal
+        ├── ChurchFundsView.vue # Monthly collectives report (allocations, expenses, balance)
+        └── CollectionsInputView.vue # Tithes & offerings data entry + recent entries
 ```
 
 ---
@@ -133,7 +138,12 @@ Defined in [src/router/index.js](src/router/index.js):
 |---|---|---|---|
 | `/` | — | redirect → `/login` | — |
 | `/login` | `Login` | `LoginView` | — |
-| `/set-password` | `SetPassword` | `SetPasswordView` | `requiresAuth: true` |
+| `/set-password` | — | `SetPasswordLayout` (children below) | `requiresAuth: true` |
+| `/dashboard/members` | `Members` | `SetPasswordView` | (inherited) |
+| `/dashboard/ministry` | `Ministry` | `MinistrySmallGroupView` | (inherited) |
+| `/dashboard/reports` | `Reports` | `ReportsView` | (inherited) |
+| `/dashboard/funds` | `ChurchFunds` | `ChurchFundsView` | (inherited) |
+| `/dashboard/funds/collections` | `Collections` | `CollectionsInputView` | (inherited) |
 | `/account-pending` | `AccountPending` | `AccountPendingView` | `requiresAuth: true` |
 | `/dashboard` | — | `DashboardLayout` | `requiresAuth: true` |
 
@@ -193,6 +203,45 @@ Single-screen view containing all member-management UX.
 - `handleUpdate()` → `supabase.update(buildPayload()).eq('id', id).select(MEMBER_COLUMNS).single()` → splice the row in `members` by id, return modal to `view` mode. The UPDATE policy's `with check` blocks reassigning `member_of` to another church.
 - `handleArchive()` → `supabase.update({ archived_at: new Date().toISOString(), archived_reason })` → filter the row out of `members` (RLS will hide it on subsequent reloads too).
 - `buildPayload()` trims strings and coerces empty optional fields to `null` so the DB stores `NULL` rather than `""`.
+
+#### `ChurchFundsView.vue` — [src/views/ChurchFundsView.vue](src/views/ChurchFundsView.vue)
+Renders a **monthly collectives report** modeled after the paper "DFC Summary Report" workbook (one weekly Collectives sheet per Sunday, rolled up into a month).
+
+**Composition:**
+- Header + preview banner (data source is a sample fixture; Supabase persistence is a follow-up).
+- Month navigator (prev/next).
+- KPI cards: Total Funds, Tithes, Offering, Expenses, Closing Balance.
+- Weekly Breakdown table: one column per service Sunday + a Month total column.
+- Allocations panel with a proportional distribution bar.
+- Expenses table (aggregated by description).
+- Contributors table (aggregated by name; anonymous entries grouped as "Unknown").
+- Rolling balance card: Church Allocation − Expenses + Opening Balance = Current Church Funds.
+- Print stylesheet so the page saves cleanly to PDF via the browser.
+
+**Data flow:**
+- `SAMPLE_COLLECTIVES` fixture in [src/utils/sampleCollectives.js](src/utils/sampleCollectives.js) feeds a `Map` of `"<year>-<month>" → month data`.
+- The month cursor drives a `computed` that calls `computeMonthlyReport(...)` from [src/utils/collectivesReport.js](src/utils/collectivesReport.js).
+- All allocation math (10 % tithes-of-tithes, 5 % project, 5 % student program with an optional personal draw, 50/50 pastor/church split of the remainder, expenses off church allocation, opening balance carry) lives in the calculator so the view stays presentational.
+- No Supabase queries yet; the calculator's input shape is the contract that a future backing table set will satisfy.
+
+#### `CollectionsInputView.vue` — [src/views/CollectionsInputView.vue](src/views/CollectionsInputView.vue)
+Data-entry view nested under Church Funds (`/dashboard/funds/collections`). Allows staff to record individual tithes and offerings.
+
+**Composition:**
+- Form: contributor lookup from the `members` table, type (tithes / offering), amount, and service date.
+- Recent entries table (name + type + date only — amount is hidden until a row is clicked).
+- Detail modal on row click shows amount; supports inline editing and deletion.
+
+**Key logic:**
+- **Auto service-date** — computed by `getDefaultServiceDate()` in [src/utils/collectionsDate.js](src/utils/collectionsDate.js): Sunday/Friday → today; Saturday → Friday; Mon–Thu → previous Sunday.
+- **3-hour edit window** — `isWithinEditWindow(created_at)` returns `true` only within 3 hours of insertion. After that the record is locked (no edit/delete from the UI).
+- **Pessimistic mutations** — insert/update/delete go through Supabase; local state updates only on success.
+
+**Data flow:**
+- Reads/writes the `collections` table via `supabase.from('collections')`, storing the contributor as `collections.from` (member UUID), the kind as `is_tithes`, and the service date as `collectedOn`. The 3-hour edit lock depends on `collections.created_at`. RLS enforces per-church isolation.
+
+**Future plan:**
+- A "Report Discrepancy" button will allow a user to request editing or deletion of a locked entry under the `collections` table. This will involve a `collection_discrepancies` table (or similar) where requests are queued for an admin to approve.
 
 ### 5.5 Styling Conventions
 - Global reset in [src/style.css](src/style.css) (`*` reset + body font stack).
@@ -335,6 +384,8 @@ These are **not bugs** but explicit non-features in the current build. If asked 
 11. **Egress-wasteful list query** — ~~`select('*, churches(name)')` in [DashboardView.vue](src/views/DashboardView.vue) pulls all member columns plus a redundant per-row church name.~~ **Resolved**: `fetchMembers`, `handleCreate`, `handleUpdate` now share an explicit `MEMBER_COLUMNS` list and no longer join `churches(name)`. See §12.5.
 12. **Two serial round-trips on mount** — ~~`fetchMyChurch()` does `rpc('get_my_church_id')` then a follow-up `churches` lookup.~~ **Resolved**: a new `public.get_my_church()` RPC returns `(id, name)` in a single call. The original `get_my_church_id()` is retained because the `members` RLS policies depend on it. See §12.5.
 13. **No long-cache headers in [netlify.toml](netlify.toml)** — ~~Vite emits content-hashed assets that are safe to cache `immutable`.~~ **Resolved**: `netlify.toml` now serves `/assets/*` as `public, max-age=31536000, immutable` and `/index.html` as `no-cache`. See §12.5.
+14. **Church Funds report has no persistence yet** — [ChurchFundsView.vue](src/views/ChurchFundsView.vue) renders from the `SAMPLE_COLLECTIVES` fixture in [src/utils/sampleCollectives.js](src/utils/sampleCollectives.js) and displays a "Preview mode" banner. A future PR needs to design the schema (candidate tables: `collective_services`, `collective_contributions`, `collective_expenses`) with per-church RLS mirroring `members`, wire it through the existing `computeMonthlyReport` calculator, and drop the sample fixture.
+15. **Report Discrepancy workflow (future)** — When a `collections` entry passes the 3-hour edit window and is locked, there is currently no way for a user to request corrections. A planned feature will add a "Report Discrepancy" button in the detail modal that creates a request row (candidate table: `collection_discrepancies`) for an admin/treasurer to approve or reject the edit/delete. This enables an audit trail for post-lock corrections without weakening the time-lock policy.
 
 ---
 

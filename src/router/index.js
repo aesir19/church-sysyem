@@ -7,6 +7,7 @@ import DashboardLayout from '../layouts/DashboardLayout.vue'
 import DashboardView from '../views/DashboardView.vue'
 import MinistrySmallGroupView from '../views/MinistrySmallGroupView.vue'
 import ChurchFundsView from '../views/ChurchFundsView.vue'
+import CollectionsInputView from '../views/CollectionsInputView.vue'
 
 const routes = [
   {
@@ -38,7 +39,9 @@ const routes = [
       { path: '', redirect: '/dashboard/members' },
       { path: 'members', name: 'Members', component: DashboardView },
       { path: 'ministry', name: 'Ministry', component: MinistrySmallGroupView },
-      { path: 'funds', name: 'ChurchFunds', component: ChurchFundsView }
+      { path: 'reports', name: 'Reports', component: ReportsView },
+      { path: 'funds', name: 'ChurchFunds', component: ChurchFundsView },
+      { path: 'funds/collections', name: 'Collections', component: CollectionsInputView }
     ]
   }
 ]

@@ -512,6 +512,7 @@ model collections {
   amount      Float    @default(0) @db.Real
   is_tithes   Boolean  @default(true)
   collectedOn DateTime @db.Date
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
   from_church String   @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   churches    churches @relation(fields: [from_church], references: [id], onDelete: Cascade)
   members     members  @relation(fields: [from], references: [id], onDelete: Cascade)
