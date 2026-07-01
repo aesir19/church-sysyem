@@ -108,7 +108,7 @@ describe('router auth guards', () => {
     await loadRouter()
 
     const next = vi.fn()
-    await state.guard({ path: '/dashboard/reports', meta: { requiresAuth: true } }, {}, next)
+    await state.guard({ path: '/dashboard/funds', meta: { requiresAuth: true } }, {}, next)
 
     expect(next).toHaveBeenCalledWith('/account-pending')
   })
