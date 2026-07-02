@@ -138,12 +138,19 @@ Defined in [src/router/index.js](src/router/index.js):
 |---|---|---|---|
 | `/` | — | redirect → `/login` | — |
 | `/login` | `Login` | `LoginView` | — |
-| `/dashboard` | — | `DashboardLayout` (children below) | `requiresAuth: true` |
-| `/dashboard/members` | `Members` | `DashboardView` | (inherited) |
+| `/set-password` | — | `SetPasswordLayout` (children below) | `requiresAuth: true` |
+| `/dashboard/members` | `Members` | `SetPasswordView` | (inherited) |
 | `/dashboard/ministry` | `Ministry` | `MinistrySmallGroupView` | (inherited) |
 | `/dashboard/reports` | `Reports` | `ReportsView` | (inherited) |
 | `/dashboard/funds` | `ChurchFunds` | `ChurchFundsView` | (inherited) |
 | `/dashboard/funds/collections` | `Collections` | `CollectionsInputView` | (inherited) |
+| `/account-pending` | `AccountPending` | `AccountPendingView` | `requiresAuth: true` |
+| `/dashboard` | — | `DashboardLayout` | `requiresAuth: true` |
+
+`/dashboard` child routes:
+- `/dashboard/members` (`Members`)
+- `/dashboard/ministry` (`Ministry`)
+- `/dashboard/funds` (`ChurchFunds`)
 
 `router.beforeEach` calls `supabase.auth.getSession()` on every navigation:
 - Redirects unauthenticated users away from `requiresAuth` routes → `/login`.
