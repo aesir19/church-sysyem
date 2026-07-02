@@ -33,7 +33,7 @@
                   id="contributor-name"
                   v-model.trim="form.memberQuery"
                   type="text"
-                  placeholder="Search a registered member"
+                  placeholder="Search a registered member or type Anonymous"
                   required
                   autocomplete="off"
                   @focus="handleMemberFocus"
@@ -69,7 +69,8 @@
               </ul>
               <p class="field-note">
                 <template v-if="selectedMemberName">Selected: {{ selectedMemberName }}</template>
-                <template v-else>Only names from the members list can be submitted.</template>
+                <template v-else-if="isAnonymous">Contributor: Anonymous</template>
+                <template v-else>Select from the members list or type "Anonymous".</template>
               </p>
             </div>
 
@@ -255,6 +256,10 @@ const editAmount = ref(0)
 const editSaving = ref(false)
 const editError = ref('')
 
+const isAnonymous = computed(() => {
+  return form.value.memberQuery.toLowerCase() === 'anonymous'
+})
+
 const selectedMemberName = computed(() => {
   const match = memberOptions.value.find((member) => member.id === form.value.memberId)
   return match ? match.fullName : ''
@@ -263,10 +268,20 @@ const selectedMemberName = computed(() => {
 const filteredMembers = computed(() => {
   const query = form.value.memberQuery.trim().toLowerCase()
   const base = memberOptions.value
-  if (!query) return base.slice(0, 8)
-  return base
-    .filter((member) => member.fullName.toLowerCase().includes(query))
-    .slice(0, 8)
+  const filtered = query
+    ? base.filter((member) => member.fullName.toLowerCase().includes(query)).slice(0, 8)
+    : base.slice(0, 8)
+
+  const hasAnonymous = filtered.some((member) => member.id === 'anonymous')
+  const allowAnonymous = !query || 'anonymous'.includes(query)
+  if (allowAnonymous && !hasAnonymous) {
+    filtered.unshift({
+      id: 'anonymous',
+      fullName: 'Anonymous'
+    })
+  }
+
+  return filtered
 })
 
 onMounted(async () => {
@@ -360,6 +375,13 @@ function handleMemberBlur() {
 }
 
 function selectMember(member) {
+  if (member.id === 'anonymous') {
+    form.value.memberId = ''
+    form.value.memberQuery = 'Anonymous'
+    showSuggestions.value = false
+    return
+  }
+
   form.value.memberId = member.id
   form.value.memberQuery = member.fullName
   showSuggestions.value = false
@@ -375,8 +397,8 @@ async function handleSubmit() {
   formError.value = ''
   formSuccess.value = ''
 
-  if (!form.value.memberId) {
-    formError.value = 'Select a contributor from the member list.'
+  if (!form.value.memberId && !isAnonymous.value) {
+    formError.value = 'Select a contributor from the member list or type "Anonymous".'
     return
   }
 
@@ -386,15 +408,18 @@ async function handleSubmit() {
   }
 
   saving.value = true
+  const payload = {
+    amount: form.value.amount,
+    is_tithes: form.value.type === 'tithes',
+    collectedOn: form.value.date,
+    from_church: myChurchId.value
+  }
+  if (form.value.memberId) {
+    payload.from = form.value.memberId
+  }
   const { data, error } = await supabase
     .from('collections')
-    .insert({
-      from: form.value.memberId,
-      amount: form.value.amount,
-      is_tithes: form.value.type === 'tithes',
-      collectedOn: form.value.date,
-      from_church: myChurchId.value
-    })
+    .insert(payload)
     .select(COLLECTION_SELECT)
     .single()
 
@@ -640,6 +665,8 @@ function formatDisplayDate(dateStr) {
 }
 
 .autocomplete-shell input {
+  width: 100%;
+  box-sizing: border-box;
   padding-right: 40px;
 }
 
