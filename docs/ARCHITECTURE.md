@@ -115,11 +115,13 @@ dashboard-project/
     ├── utils/
     │   └── collectivesReport.js # Pure calculator for the monthly collectives report
     │   └── collectionsDate.js   # Service-date auto-selection + 3-hour edit window check
+   │   └── expensesMonth.js     # Month parsing and date-range helpers for expenses queries
     └── views/
         ├── LoginView.vue       # Email/password sign-in form
         ├── DashboardView.vue   # Members table + sortable columns + details modal
         ├── ChurchFundsView.vue # Monthly collectives report (allocations, expenses, balance)
-        └── CollectionsInputView.vue # Tithes & offerings data entry + recent entries
+      ├── CollectionsInputView.vue # Tithes & offerings data entry + recent entries
+      └── ExpensesInputView.vue # Monthly expense entry with existing/new description flow
 ```
 
 ---
@@ -142,15 +144,19 @@ Defined in [src/router/index.js](src/router/index.js):
 | `/dashboard/members` | `Members` | `SetPasswordView` | (inherited) |
 | `/dashboard/ministry` | `Ministry` | `MinistrySmallGroupView` | (inherited) |
 | `/dashboard/reports` | `Reports` | `ReportsView` | (inherited) |
-| `/dashboard/funds` | `ChurchFunds` | `ChurchFundsView` | (inherited) |
+| `/dashboard/funds` | — | redirect → `/dashboard/funds/reports` | (inherited) |
+| `/dashboard/funds/reports` | `ChurchFunds` | `ChurchFundsView` | (inherited) |
 | `/dashboard/funds/collections` | `Collections` | `CollectionsInputView` | (inherited) |
+| `/dashboard/funds/expenses` | `Expenses` | `ExpensesInputView` | (inherited) |
 | `/account-pending` | `AccountPending` | `AccountPendingView` | `requiresAuth: true` |
 | `/dashboard` | — | `DashboardLayout` | `requiresAuth: true` |
 
 `/dashboard` child routes:
 - `/dashboard/members` (`Members`)
 - `/dashboard/ministry` (`Ministry`)
-- `/dashboard/funds` (`ChurchFunds`)
+- `/dashboard/funds/reports` (`ChurchFunds`)
+- `/dashboard/funds/collections` (`Collections`)
+- `/dashboard/funds/expenses` (`Expenses`)
 
 `router.beforeEach` calls `supabase.auth.getSession()` on every navigation:
 - Redirects unauthenticated users away from `requiresAuth` routes → `/login`.
@@ -208,6 +214,7 @@ Single-screen view containing all member-management UX.
 Renders a **monthly collectives report** modeled after the paper "DFC Summary Report" workbook (one weekly Collectives sheet per Sunday, rolled up into a month).
 
 **Composition:**
+- Funds tab navigation (Reports / Collections / Expenses) shared with the other Church Funds views.
 - Header + preview banner (data source is a sample fixture; Supabase persistence is a follow-up).
 - Month navigator (prev/next).
 - KPI cards: Total Funds, Tithes, Offering, Expenses, Closing Balance.
@@ -220,9 +227,10 @@ Renders a **monthly collectives report** modeled after the paper "DFC Summary Re
 
 **Data flow:**
 - `SAMPLE_COLLECTIVES` fixture in [src/utils/sampleCollectives.js](src/utils/sampleCollectives.js) feeds a `Map` of `"<year>-<month>" → month data`.
+- Live rows from `public.expenses` are loaded month-by-month and merged into the report source via [src/utils/reportExpenseMerge.js](src/utils/reportExpenseMerge.js), replacing fixture expenses for that month when live expenses exist.
 - The month cursor drives a `computed` that calls `computeMonthlyReport(...)` from [src/utils/collectivesReport.js](src/utils/collectivesReport.js).
 - All allocation math (10 % tithes-of-tithes, 5 % project, 5 % student program with an optional personal draw, 50/50 pastor/church split of the remainder, expenses off church allocation, opening balance carry) lives in the calculator so the view stays presentational.
-- No Supabase queries yet; the calculator's input shape is the contract that a future backing table set will satisfy.
+- Contribution lines remain sample-backed for now; expense persistence is live.
 
 #### `CollectionsInputView.vue` — [src/views/CollectionsInputView.vue](src/views/CollectionsInputView.vue)
 Data-entry view nested under Church Funds (`/dashboard/funds/collections`). Allows staff to record individual tithes and offerings.
@@ -242,6 +250,25 @@ Data-entry view nested under Church Funds (`/dashboard/funds/collections`). Allo
 
 **Future plan:**
 - A "Report Discrepancy" button will allow a user to request editing or deletion of a locked entry under the `collections` table. This will involve a `collection_discrepancies` table (or similar) where requests are queued for an admin to approve.
+
+#### `ExpensesInputView.vue` — [src/views/ExpensesInputView.vue](src/views/ExpensesInputView.vue)
+Data-entry view nested under Church Funds (`/dashboard/funds/expenses`). Allows staff to record month-scoped operating expenses.
+
+**Composition:**
+- Funds tab navigation (Reports / Collections / Expenses).
+- Month filter (`YYYY-MM`) that scopes the list and the "existing description" options.
+- Expense form (date spent, amount, description choice, optional notes).
+- Monthly table with per-row expense entries and a month total summary.
+
+**Key logic:**
+- Users can either select an existing description from expenses already recorded in the selected month, or choose "Create new description" and enter a new label.
+- Date and month are synchronized so entering an expense date automatically targets that month for filtering.
+- Mutations are pessimistic: the UI updates only after Supabase confirms INSERT success.
+
+**Data flow:**
+- Reads/writes the `expenses` table via `supabase.from('expenses')`.
+- Month boundaries for queries are computed by [src/utils/expensesMonth.js](src/utils/expensesMonth.js).
+- Per-church isolation is enforced by RLS on `expenses`.
 
 ### 5.5 Styling Conventions
 - Global reset in [src/style.css](src/style.css) (`*` reset + body font stack).
@@ -384,7 +411,7 @@ These are **not bugs** but explicit non-features in the current build. If asked 
 11. **Egress-wasteful list query** — ~~`select('*, churches(name)')` in [DashboardView.vue](src/views/DashboardView.vue) pulls all member columns plus a redundant per-row church name.~~ **Resolved**: `fetchMembers`, `handleCreate`, `handleUpdate` now share an explicit `MEMBER_COLUMNS` list and no longer join `churches(name)`. See §12.5.
 12. **Two serial round-trips on mount** — ~~`fetchMyChurch()` does `rpc('get_my_church_id')` then a follow-up `churches` lookup.~~ **Resolved**: a new `public.get_my_church()` RPC returns `(id, name)` in a single call. The original `get_my_church_id()` is retained because the `members` RLS policies depend on it. See §12.5.
 13. **No long-cache headers in [netlify.toml](netlify.toml)** — ~~Vite emits content-hashed assets that are safe to cache `immutable`.~~ **Resolved**: `netlify.toml` now serves `/assets/*` as `public, max-age=31536000, immutable` and `/index.html` as `no-cache`. See §12.5.
-14. **Church Funds report has no persistence yet** — [ChurchFundsView.vue](src/views/ChurchFundsView.vue) renders from the `SAMPLE_COLLECTIVES` fixture in [src/utils/sampleCollectives.js](src/utils/sampleCollectives.js) and displays a "Preview mode" banner. A future PR needs to design the schema (candidate tables: `collective_services`, `collective_contributions`, `collective_expenses`) with per-church RLS mirroring `members`, wire it through the existing `computeMonthlyReport` calculator, and drop the sample fixture.
+14. **Church Funds report is partially sample-backed** — [ChurchFundsView.vue](src/views/ChurchFundsView.vue) still uses `SAMPLE_COLLECTIVES` for contribution lines, but monthly expenses now come from `public.expenses` when available (merged in [src/utils/reportExpenseMerge.js](src/utils/reportExpenseMerge.js)). Full production parity still requires contributions/services persistence wired into `computeMonthlyReport`.
 15. **Report Discrepancy workflow (future)** — When a `collections` entry passes the 3-hour edit window and is locked, there is currently no way for a user to request corrections. A planned feature will add a "Report Discrepancy" button in the detail modal that creates a request row (candidate table: `collection_discrepancies`) for an admin/treasurer to approve or reject the edit/delete. This enables an audit trail for post-lock corrections without weakening the time-lock policy.
 
 ---
