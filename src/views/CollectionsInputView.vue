@@ -6,15 +6,9 @@
           <h2>Collections</h2>
           <p class="page-subtitle">Record tithes and offerings from registered members</p>
         </div>
-        <div class="page-header-actions">
-          <router-link to="/dashboard/funds" class="btn-secondary">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="15 18 9 12 15 6"/>
-            </svg>
-            Funds Report
-          </router-link>
-        </div>
       </div>
+
+      <FundsTabs />
 
       <section class="card form-card">
         <div class="form-heading">
@@ -22,9 +16,39 @@
             <h3 class="form-title">New Contribution</h3>
             <p class="form-copy">Choose a member from the church list to avoid unverified contributor names.</p>
           </div>
+          <div class="month-filter">
+            <label for="collections-month">Month</label>
+            <input id="collections-month" v-model="selectedMonth" type="month" />
+          </div>
         </div>
 
         <form @submit.prevent="handleSubmit" class="contribution-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="service-date">Service Date</label>
+              <input
+                id="service-date"
+                v-model="form.date"
+                type="date"
+                required
+                @change="syncMonthToDate"
+              />
+            </div>
+
+            <div class="form-group">
+              <label for="contribution-amount">Amount</label>
+              <input
+                id="contribution-amount"
+                v-model.number="form.amount"
+                type="number"
+                min="1"
+                step="0.01"
+                placeholder="0.00"
+                required
+              />
+            </div>
+          </div>
+
           <div class="form-row">
             <div class="form-group autocomplete-group">
               <label for="contributor-name">Contributor Name</label>
@@ -83,30 +107,6 @@
             </div>
           </div>
 
-          <div class="form-row">
-            <div class="form-group">
-              <label for="contribution-amount">Amount</label>
-              <input
-                id="contribution-amount"
-                v-model.number="form.amount"
-                type="number"
-                min="1"
-                step="0.01"
-                placeholder="0.00"
-                required
-              />
-            </div>
-            <div class="form-group">
-              <label for="service-date">Service Date</label>
-              <input
-                id="service-date"
-                v-model="form.date"
-                type="date"
-                required
-              />
-            </div>
-          </div>
-
           <div class="form-actions">
             <button type="submit" class="btn-primary" :disabled="saving || !myChurchId">
               {{ saving ? 'Saving...' : 'Add Contribution' }}
@@ -121,17 +121,19 @@
       <section class="card">
         <header class="section-header">
           <div>
-            <h3>Recent Entries</h3>
-            <span class="section-hint">Click a row to view the contribution amount</span>
+            <h3>Monthly Entries</h3>
+            <span class="section-hint">{{ entries.length }} entries · {{ monthLabel }}</span>
           </div>
+          <div class="month-total">Total: {{ formatMoney(monthTotal) }}</div>
         </header>
         <div class="table-wrap">
           <table v-if="entries.length > 0" class="collections-table">
             <thead>
               <tr>
+                <th>Date</th>
                 <th>Name</th>
                 <th>Type</th>
-                <th>Date</th>
+                <th>Amount</th>
               </tr>
             </thead>
             <tbody>
@@ -141,16 +143,17 @@
                 class="entry-row"
                 @click="openDetail(entry)"
               >
+                <td class="col-date">{{ formatDisplayDate(entry.date) }}</td>
                 <td>{{ entry.name }}</td>
                 <td>
                   <span :class="['type-badge', entry.typeClass]">{{ entry.typeLabel }}</span>
                 </td>
-                <td class="col-date">{{ formatDisplayDate(entry.date) }}</td>
+                <td class="amount-cell">{{ formatMoney(entry.amount) }}</td>
               </tr>
             </tbody>
           </table>
           <div v-else class="state-message">
-            <p>No contributions recorded yet.</p>
+            <p>No contributions recorded for this month yet.</p>
           </div>
         </div>
       </section>
@@ -230,9 +233,11 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { supabase } from '../lib/supabase'
 import { getDefaultServiceDate, isWithinEditWindow } from '../utils/collectionsDate'
+import FundsTabs from '../components/FundsTabs.vue'
+import { defaultMonthKey, getMonthRange, monthKeyFromDate } from '../utils/expensesMonth'
 
 const COLLECTION_SELECT = 'id, from, amount, is_tithes, collectedOn, created_at, members!collections_from_fkey(first_name, middle_name, last_name)'
 
@@ -255,6 +260,18 @@ const editing = ref(false)
 const editAmount = ref(0)
 const editSaving = ref(false)
 const editError = ref('')
+const selectedMonth = ref(defaultMonthKey())
+
+const monthLabel = computed(() => {
+  const [year, month] = selectedMonth.value.split('-')
+  if (!year || !month) return ''
+  const monthDate = new Date(Number(year), Number(month) - 1, 1)
+  return monthDate.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })
+})
+
+const monthTotal = computed(() => {
+  return entries.value.reduce((sum, row) => sum + Number(row.amount || 0), 0)
+})
 
 const isAnonymous = computed(() => {
   return form.value.memberQuery.toLowerCase() === 'anonymous'
@@ -286,11 +303,16 @@ const filteredMembers = computed(() => {
 
 onMounted(async () => {
   document.addEventListener('keydown', onKeydown)
-  await Promise.all([fetchMyChurch(), loadMembers(), loadRecentEntries()])
+  await Promise.all([fetchMyChurch(), loadMembers()])
+  await loadMonthEntries()
 })
 
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
+})
+
+watch(selectedMonth, async () => {
+  await loadMonthEntries()
 })
 
 function onKeydown(event) {
@@ -344,12 +366,21 @@ async function loadMembers() {
     .sort((a, b) => a.fullName.localeCompare(b.fullName))
 }
 
-async function loadRecentEntries() {
+async function loadMonthEntries() {
+  formError.value = ''
+  const range = getMonthRange(selectedMonth.value)
+  if (!range) {
+    entries.value = []
+    return
+  }
+
   const { data, error } = await supabase
     .from('collections')
     .select(COLLECTION_SELECT)
+    .gte('collectedOn', range.start)
+    .lt('collectedOn', range.endExclusive)
+    .order('collectedOn', { ascending: false })
     .order('created_at', { ascending: false })
-    .limit(50)
 
   if (error) {
     formError.value = `Failed to load collections: ${error.message}`
@@ -393,6 +424,13 @@ function clearSelectedMember() {
   showSuggestions.value = false
 }
 
+function syncMonthToDate() {
+  const monthFromDate = monthKeyFromDate(form.value.date)
+  if (monthFromDate) {
+    selectedMonth.value = monthFromDate
+  }
+}
+
 async function handleSubmit() {
   formError.value = ''
   formSuccess.value = ''
@@ -431,7 +469,10 @@ async function handleSubmit() {
   }
 
   const insertedEntry = normalizeEntry(data)
-  entries.value.unshift(insertedEntry)
+  const insertedMonth = monthKeyFromDate(insertedEntry.date)
+  if (insertedMonth === selectedMonth.value) {
+    entries.value.unshift(insertedEntry)
+  }
   formSuccess.value = `Added ${insertedEntry.name}'s ${insertedEntry.typeLabel.toLowerCase()}.`
   form.value.memberId = ''
   form.value.memberQuery = ''
@@ -534,36 +575,38 @@ function formatDisplayDate(dateStr) {
 
 <style scoped>
 .page-container {
-  padding: 0;
+  padding: 24px 32px;
+  background: #f8fafc;
+  min-height: 100vh;
 }
 
 .page-content {
-  max-width: 900px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 32px 24px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
 }
 
 .page-header {
   display: flex;
+  align-items: flex-end;
   justify-content: space-between;
-  align-items: flex-start;
+  gap: 16px;
   flex-wrap: wrap;
-  gap: 12px;
 }
 
 .page-header h2 {
-  font-size: 1.5rem;
+  font-size: 24px;
   font-weight: 700;
-  color: #1e293b;
+  color: #0f172a;
+  letter-spacing: -0.02em;
 }
 
 .page-subtitle {
-  font-size: 0.875rem;
   color: #64748b;
-  margin-top: 2px;
+  font-size: 14px;
+  margin-top: 4px;
 }
 
 .page-header-actions {
@@ -603,6 +646,27 @@ function formatDisplayDate(dateStr) {
   margin-top: 4px;
   font-size: 0.8125rem;
   color: #64748b;
+}
+
+.month-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.month-filter label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  font-weight: 700;
+}
+
+.month-filter input {
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #f8fafc;
 }
 
 .contribution-form {
@@ -852,6 +916,12 @@ function formatDisplayDate(dateStr) {
   margin-top: 2px;
 }
 
+.month-total {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
 /* Table */
 .table-wrap {
   overflow-x: auto;
@@ -892,6 +962,12 @@ function formatDisplayDate(dateStr) {
 .col-date {
   white-space: nowrap;
   color: #64748b;
+}
+
+.amount-cell {
+  font-variant-numeric: tabular-nums;
+  color: #dc2626;
+  font-weight: 700;
 }
 
 .type-badge {
@@ -1028,7 +1104,7 @@ function formatDisplayDate(dateStr) {
 
 /* Responsive */
 @media (max-width: 600px) {
-  .page-content {
+  .page-container {
     padding: 20px 12px;
   }
 

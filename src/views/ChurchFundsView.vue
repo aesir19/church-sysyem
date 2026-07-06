@@ -9,13 +9,6 @@
         </div>
         <div class="page-header-actions">
           <span class="stat-badge">{{ report.weeks.length }} services</span>
-          <router-link to="/dashboard/funds/collections" class="btn-collections" title="Record Collections">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19"/>
-              <line x1="5" y1="12" x2="19" y2="12"/>
-            </svg>
-            Collections
-          </router-link>
           <button class="btn-secondary" @click="handlePrint" title="Print / Save as PDF">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="6 9 6 2 18 2 18 9"/>
@@ -27,6 +20,8 @@
         </div>
       </div>
 
+      <FundsTabs />
+
       <!-- Preview banner -->
       <div class="preview-banner" role="note">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -36,10 +31,11 @@
         </svg>
         <span>
           <strong>Preview mode.</strong>
-          Showing sample data mirrored from the DFC summary workbook. Persistence
-          for weekly contributions and expenses will be added in a follow-up.
+          Showing sample contribution data mirrored from the DFC summary workbook.
+          Monthly expenses are loaded from live records when available.
         </span>
       </div>
+      <p v-if="expensesLoadError" class="load-warning">{{ expensesLoadError }}</p>
 
       <!-- Month navigator -->
       <div class="report-toolbar card">
@@ -309,8 +305,8 @@
           </section>
         </div>
 
-        <!-- Contributors -->
-        <section class="card report-section section-contributors">
+        <!-- Contributors (finance team only) -->
+        <section v-if="isFinance" class="card report-section section-contributors">
           <header class="section-header">
             <div>
               <h3>Contributors</h3>
@@ -422,9 +418,13 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { computeMonthlyReport } from '../utils/collectivesReport'
 import { SAMPLE_COLLECTIVES } from '../utils/sampleCollectives'
+import FundsTabs from '../components/FundsTabs.vue'
+import { supabase } from '../lib/supabase'
+import { getMonthRange } from '../utils/expensesMonth'
+import { mergeMonthSourceWithLiveExpenses } from '../utils/reportExpenseMerge'
 
 // Currently only the sample month is available; other months render as empty.
 // A future PR will replace this with a Supabase-backed lookup keyed by
@@ -436,6 +436,21 @@ const availableMonths = new Map([
 const cursor = ref({ year: SAMPLE_COLLECTIVES.year, month: SAMPLE_COLLECTIVES.month })
 const weeklyExpanded = ref(true)
 const contributorsExpanded = ref(true)
+const liveExpenses = ref([])
+const expensesLoadError = ref('')
+const isFinance = ref(false)
+
+onMounted(async () => {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (user) {
+    const { data } = await supabase
+      .from('user_accounts')
+      .select('role')
+      .eq('id', user.id)
+      .maybeSingle()
+    isFinance.value = data?.role === 'finance'
+  }
+})
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -443,6 +458,11 @@ const MONTH_NAMES = [
 ]
 
 const monthLabel = computed(() => `${MONTH_NAMES[cursor.value.month - 1]} ${cursor.value.year}`)
+const cursorMonthKey = computed(() => `${cursor.value.year}-${String(cursor.value.month).padStart(2, '0')}`)
+
+watch(cursorMonthKey, async () => {
+  await loadLiveExpenses()
+}, { immediate: true })
 
 const report = computed(() => {
   const key = `${cursor.value.year}-${cursor.value.month}`
@@ -452,8 +472,34 @@ const report = computed(() => {
     openingBalance: 0,
     weeks: [],
   }
-  return computeMonthlyReport(source)
+
+  const merged = mergeMonthSourceWithLiveExpenses(source, liveExpenses.value)
+  return computeMonthlyReport(merged)
 })
+
+async function loadLiveExpenses() {
+  expensesLoadError.value = ''
+  const range = getMonthRange(cursorMonthKey.value)
+  if (!range) {
+    liveExpenses.value = []
+    return
+  }
+
+  const { data, error } = await supabase
+    .from('expenses')
+    .select('spent_on, description, amount')
+    .gte('spent_on', range.start)
+    .lt('spent_on', range.endExclusive)
+    .order('spent_on', { ascending: true })
+
+  if (error) {
+    liveExpenses.value = []
+    expensesLoadError.value = `Unable to load live expenses for ${monthLabel.value}. Showing sample expenses only.`
+    return
+  }
+
+  liveExpenses.value = data || []
+}
 
 const allocationSegments = computed(() => {
   const t = report.value.totals
@@ -699,6 +745,12 @@ function afterCollapse(el) {
 .preview-banner svg {
   flex-shrink: 0;
   margin-top: 2px;
+}
+
+.load-warning {
+  margin-top: -8px;
+  color: #b45309;
+  font-size: 12px;
 }
 
 /* Month navigator */
