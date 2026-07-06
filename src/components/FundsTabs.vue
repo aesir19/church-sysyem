@@ -7,22 +7,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { supabase } from '../lib/supabase'
+import { useFinanceMember } from '../composables/useFinanceMember'
 
-const isFinance = ref(false)
-
-onMounted(async () => {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (user) {
-    const { data } = await supabase
-      .from('user_accounts')
-      .select('role')
-      .eq('id', user.id)
-      .maybeSingle()
-    isFinance.value = data?.role === 'finance'
-  }
-})
+const { isFinance } = useFinanceMember()
 </script>
 
 <style scoped>
