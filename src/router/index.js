@@ -42,8 +42,8 @@ const routes = [
       { path: 'ministry', name: 'Ministry', component: MinistrySmallGroupView },
       { path: 'funds', redirect: '/dashboard/funds/reports' },
       { path: 'funds/reports', name: 'ChurchFunds', component: ChurchFundsView },
-      { path: 'funds/collections', name: 'Collections', component: CollectionsInputView },
-      { path: 'funds/expenses', name: 'Expenses', component: ExpensesInputView }
+      { path: 'funds/collections', name: 'Collections', component: CollectionsInputView, meta: { requiresFinance: true } },
+      { path: 'funds/expenses', name: 'Expenses', component: ExpensesInputView, meta: { requiresFinance: true } }
     ]
   }
 ]
@@ -81,6 +81,16 @@ async function isAccountLinked(userId) {
     .eq('id', userId)
     .maybeSingle()
   return !!data
+}
+
+// Check if the authenticated user has the 'finance' role
+async function hasFinanceRole(userId) {
+  const { data } = await supabase
+    .from('user_accounts')
+    .select('role')
+    .eq('id', userId)
+    .maybeSingle()
+  return data?.role === 'finance'
 }
 
 router.beforeEach(async (to, from, next) => {
@@ -126,6 +136,14 @@ router.beforeEach(async (to, from, next) => {
     if (!linked) {
       next('/account-pending')
       return
+    }
+    // Finance-only routes require 'finance' role
+    if (to.meta.requiresFinance) {
+      const allowed = await hasFinanceRole(session.user.id)
+      if (!allowed) {
+        next('/dashboard/funds/reports')
+        return
+      }
     }
     next()
     return

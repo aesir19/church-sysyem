@@ -305,8 +305,8 @@
           </section>
         </div>
 
-        <!-- Contributors -->
-        <section class="card report-section section-contributors">
+        <!-- Contributors (finance team only) -->
+        <section v-if="isFinance" class="card report-section section-contributors">
           <header class="section-header">
             <div>
               <h3>Contributors</h3>
@@ -418,7 +418,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { computeMonthlyReport } from '../utils/collectivesReport'
 import { SAMPLE_COLLECTIVES } from '../utils/sampleCollectives'
 import FundsTabs from '../components/FundsTabs.vue'
@@ -438,6 +438,19 @@ const weeklyExpanded = ref(true)
 const contributorsExpanded = ref(true)
 const liveExpenses = ref([])
 const expensesLoadError = ref('')
+const isFinance = ref(false)
+
+onMounted(async () => {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (user) {
+    const { data } = await supabase
+      .from('user_accounts')
+      .select('role')
+      .eq('id', user.id)
+      .maybeSingle()
+    isFinance.value = data?.role === 'finance'
+  }
+})
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',

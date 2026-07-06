@@ -146,8 +146,8 @@ Defined in [src/router/index.js](src/router/index.js):
 | `/dashboard/reports` | `Reports` | `ReportsView` | (inherited) |
 | `/dashboard/funds` | — | redirect → `/dashboard/funds/reports` | (inherited) |
 | `/dashboard/funds/reports` | `ChurchFunds` | `ChurchFundsView` | (inherited) |
-| `/dashboard/funds/collections` | `Collections` | `CollectionsInputView` | (inherited) |
-| `/dashboard/funds/expenses` | `Expenses` | `ExpensesInputView` | (inherited) |
+| `/dashboard/funds/collections` | `Collections` | `CollectionsInputView` | `requiresFinance: true` |
+| `/dashboard/funds/expenses` | `Expenses` | `ExpensesInputView` | `requiresFinance: true` |
 | `/account-pending` | `AccountPending` | `AccountPendingView` | `requiresAuth: true` |
 | `/dashboard` | — | `DashboardLayout` | `requiresAuth: true` |
 
@@ -155,12 +155,13 @@ Defined in [src/router/index.js](src/router/index.js):
 - `/dashboard/members` (`Members`)
 - `/dashboard/ministry` (`Ministry`)
 - `/dashboard/funds/reports` (`ChurchFunds`)
-- `/dashboard/funds/collections` (`Collections`)
-- `/dashboard/funds/expenses` (`Expenses`)
+- `/dashboard/funds/collections` (`Collections`) — **finance role required**
+- `/dashboard/funds/expenses` (`Expenses`) — **finance role required**
 
 `router.beforeEach` calls `supabase.auth.getSession()` on every navigation:
 - Redirects unauthenticated users away from `requiresAuth` routes → `/login`.
 - Redirects authenticated users away from `/login` → `/dashboard`.
+- Redirects non-finance users away from `requiresFinance` routes → `/dashboard/funds/reports`.
 - **Note:** `getSession()` is awaited per navigation; this is acceptable because the session is cached client-side by the Supabase SDK.
 
 ### 5.3 Supabase Client

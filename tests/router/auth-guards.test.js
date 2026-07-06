@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({
   session: null,
   linked: false,
+  role: 'unassigned',
   hash: '',
   guard: null,
   afterGuard: null,
@@ -27,9 +28,13 @@ const supabaseMock = vi.hoisted(() => ({
     }),
   },
   from: vi.fn(() => ({
-    select: vi.fn(() => ({
+    select: vi.fn((columns) => ({
       eq: vi.fn(() => ({
-        maybeSingle: vi.fn(async () => ({ data: state.linked ? { id: 'user-1' } : null })),
+        maybeSingle: vi.fn(async () => {
+          if (!state.linked) return { data: null }
+          if (columns === 'role') return { data: { role: state.role } }
+          return { data: { id: 'user-1' } }
+        }),
       })),
     })),
   })),
@@ -66,6 +71,7 @@ describe('router auth guards', () => {
   beforeEach(() => {
     state.session = null
     state.linked = false
+    state.role = 'unassigned'
     state.hash = ''
     vi.clearAllMocks()
   })
@@ -152,5 +158,69 @@ describe('router auth guards', () => {
     const secondNext = vi.fn()
     await state.guard({ path: '/login', meta: {} }, {}, secondNext)
     expect(secondNext).toHaveBeenCalledWith('/dashboard')
+  })
+
+  it('redirects non-finance users away from collections route', async () => {
+    state.session = { user: { id: 'user-1' } }
+    state.linked = true
+    state.role = 'unassigned'
+    await loadRouter()
+
+    const next = vi.fn()
+    await state.guard(
+      { path: '/dashboard/funds/collections', meta: { requiresAuth: true, requiresFinance: true } },
+      {},
+      next
+    )
+
+    expect(next).toHaveBeenCalledWith('/dashboard/funds/reports')
+  })
+
+  it('redirects non-finance users away from expenses route', async () => {
+    state.session = { user: { id: 'user-1' } }
+    state.linked = true
+    state.role = 'unassigned'
+    await loadRouter()
+
+    const next = vi.fn()
+    await state.guard(
+      { path: '/dashboard/funds/expenses', meta: { requiresAuth: true, requiresFinance: true } },
+      {},
+      next
+    )
+
+    expect(next).toHaveBeenCalledWith('/dashboard/funds/reports')
+  })
+
+  it('allows finance-role users to access collections route', async () => {
+    state.session = { user: { id: 'user-1' } }
+    state.linked = true
+    state.role = 'finance'
+    await loadRouter()
+
+    const next = vi.fn()
+    await state.guard(
+      { path: '/dashboard/funds/collections', meta: { requiresAuth: true, requiresFinance: true } },
+      {},
+      next
+    )
+
+    expect(next).toHaveBeenCalledWith()
+  })
+
+  it('allows finance-role users to access expenses route', async () => {
+    state.session = { user: { id: 'user-1' } }
+    state.linked = true
+    state.role = 'finance'
+    await loadRouter()
+
+    const next = vi.fn()
+    await state.guard(
+      { path: '/dashboard/funds/expenses', meta: { requiresAuth: true, requiresFinance: true } },
+      {},
+      next
+    )
+
+    expect(next).toHaveBeenCalledWith()
   })
 })

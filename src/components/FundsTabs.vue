@@ -1,10 +1,29 @@
 <template>
-  <nav class="funds-tabs" aria-label="Church funds sections">
+  <nav v-if="isFinance" class="funds-tabs" aria-label="Church funds sections">
     <router-link to="/dashboard/funds/reports" class="funds-tab">Reports</router-link>
     <router-link to="/dashboard/funds/collections" class="funds-tab">Collections</router-link>
     <router-link to="/dashboard/funds/expenses" class="funds-tab">Expenses</router-link>
   </nav>
 </template>
+
+<script setup>
+import { ref, onMounted } from 'vue'
+import { supabase } from '../lib/supabase'
+
+const isFinance = ref(false)
+
+onMounted(async () => {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (user) {
+    const { data } = await supabase
+      .from('user_accounts')
+      .select('role')
+      .eq('id', user.id)
+      .maybeSingle()
+    isFinance.value = data?.role === 'finance'
+  }
+})
+</script>
 
 <style scoped>
 .funds-tabs {
