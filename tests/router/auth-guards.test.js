@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({
   session: null,
   linked: false,
-  role: 'unassigned',
+  inFinanceGroup: false,
   hash: '',
   guard: null,
   afterGuard: null,
@@ -27,17 +27,27 @@ const supabaseMock = vi.hoisted(() => ({
       state.authStateChangeHandler = cb
     }),
   },
-  from: vi.fn(() => ({
-    select: vi.fn((columns) => ({
-      eq: vi.fn(() => ({
-        maybeSingle: vi.fn(async () => {
-          if (!state.linked) return { data: null }
-          if (columns === 'role') return { data: { role: state.role } }
-          return { data: { id: 'user-1' } }
-        }),
-      })),
-    })),
-  })),
+  from: vi.fn((table) => {
+    const makeChain = (resolver) => {
+      const chain = {
+        select: vi.fn(() => chain),
+        eq: vi.fn(() => chain),
+        maybeSingle: vi.fn(async () => resolver()),
+      }
+      return chain
+    }
+    if (table === 'group_members') {
+      return makeChain(() => {
+        if (state.inFinanceGroup) return { data: { id: 'gm-1', groups: { name: 'Finance Team' } } }
+        return { data: null }
+      })
+    }
+    // user_accounts
+    return makeChain(() => {
+      if (!state.linked) return { data: null }
+      return { data: { id: 'user-1', member_id: 'member-1' } }
+    })
+  }),
 }))
 
 vi.mock('vue-router', () => ({
@@ -192,10 +202,10 @@ describe('router auth guards', () => {
     expect(next).toHaveBeenCalledWith('/dashboard/funds/reports')
   })
 
-  it('allows finance-role users to access collections route', async () => {
+  it('allows finance-group members to access collections route', async () => {
     state.session = { user: { id: 'user-1' } }
     state.linked = true
-    state.role = 'finance'
+    state.inFinanceGroup = true
     await loadRouter()
 
     const next = vi.fn()
@@ -208,10 +218,10 @@ describe('router auth guards', () => {
     expect(next).toHaveBeenCalledWith()
   })
 
-  it('allows finance-role users to access expenses route', async () => {
+  it('allows finance-group members to access expenses route', async () => {
     state.session = { user: { id: 'user-1' } }
     state.linked = true
-    state.role = 'finance'
+    state.inFinanceGroup = true
     await loadRouter()
 
     const next = vi.fn()

@@ -83,14 +83,21 @@ async function isAccountLinked(userId) {
   return !!data
 }
 
-// Check if the authenticated user has the 'finance' role
+// Check if the authenticated user is in the 'Finance Team' group
 async function hasFinanceRole(userId) {
-  const { data } = await supabase
+  const { data: account } = await supabase
     .from('user_accounts')
-    .select('role')
+    .select('member_id')
     .eq('id', userId)
     .maybeSingle()
-  return data?.role === 'finance'
+  if (!account?.member_id) return false
+  const { data: membership } = await supabase
+    .from('group_members')
+    .select('id, groups!inner(name)')
+    .eq('member_id', account.member_id)
+    .eq('groups.name', 'Finance Team')
+    .maybeSingle()
+  return !!membership
 }
 
 router.beforeEach(async (to, from, next) => {

@@ -418,13 +418,16 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, onMounted } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { computeMonthlyReport } from '../utils/collectivesReport'
 import { SAMPLE_COLLECTIVES } from '../utils/sampleCollectives'
 import FundsTabs from '../components/FundsTabs.vue'
 import { supabase } from '../lib/supabase'
 import { getMonthRange } from '../utils/expensesMonth'
 import { mergeMonthSourceWithLiveExpenses } from '../utils/reportExpenseMerge'
+import { useFinanceMember } from '../composables/useFinanceMember'
+
+const { isFinance } = useFinanceMember()
 
 // Currently only the sample month is available; other months render as empty.
 // A future PR will replace this with a Supabase-backed lookup keyed by
@@ -438,19 +441,6 @@ const weeklyExpanded = ref(true)
 const contributorsExpanded = ref(true)
 const liveExpenses = ref([])
 const expensesLoadError = ref('')
-const isFinance = ref(false)
-
-onMounted(async () => {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (user) {
-    const { data } = await supabase
-      .from('user_accounts')
-      .select('role')
-      .eq('id', user.id)
-      .maybeSingle()
-    isFinance.value = data?.role === 'finance'
-  }
-})
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
