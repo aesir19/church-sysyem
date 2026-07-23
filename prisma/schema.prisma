@@ -501,6 +501,7 @@ model churches {
   address     String?       @db.VarChar
   collections collections[]
   expenses    expenses[]
+  groups      groups[]
   members     members[]
 
   @@schema("public")
@@ -546,16 +547,27 @@ model group_members {
   groups    groups  @relation(fields: [group_id], references: [id], onDelete: Cascade)
   members   members @relation(fields: [member_id], references: [id], onDelete: Cascade)
 
+  @@unique([group_id, member_id], map: "group_members_group_id_member_id_key")
+  @@index([member_id], map: "group_members_member_id_idx")
   @@schema("public")
 }
 
+/// The database also enforces partial case-insensitive unique indexes for global
+/// ministry names and church-scoped small-group names; Prisma cannot model them.
+/// The color_slot range check and automatic BEFORE INSERT assignment trigger are
+/// also enforced in PostgreSQL because Prisma cannot model either behavior.
+/// This table contains check constraints and requires additional setup for migrations.
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model groups {
   id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name          String          @db.VarChar
   type          String          @db.VarChar
+  church_id     String?         @db.Uuid
+  color_slot    Int             @unique(map: "groups_color_slot_key")
+  churches      churches?       @relation(fields: [church_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   group_members group_members[]
 
+  @@index([church_id, type], map: "groups_church_type_idx")
   @@schema("public")
 }
 
