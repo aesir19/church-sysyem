@@ -17,7 +17,7 @@ The findings below are sorted by impact × likelihood within the current threat 
 | # | Finding | Severity | Where |
 |---|---|---|---|
 | 1 | No HTTP security headers (CSP, HSTS, X-Frame-Options, etc.) | **High** | [netlify.toml](../netlify.toml) — §3.1 |
-| 2 | RLS status of `user_accounts`, `groups`, `group_members` is undocumented | **High** | Supabase — §3.2 |
+| 2 | `user_accounts` RLS still requires remote verification; `groups` / `group_members` are now explicitly protected | **High / mitigated in part** | Supabase — §3.2 |
 | 3 | `churches` RLS is `using (true)` — leaks every church's name + address to every authenticated user | **High** | Supabase — §3.3 |
 | 4 | JWT stored in `localStorage` is exfiltratable by any XSS — must be paired with strict CSP | **High** | Supabase SDK default — §3.4 |
 | 5 | Raw Supabase `error.message` rendered verbatim in UI (info disclosure) | Medium | [LoginView.vue](../src/views/LoginView.vue), [DashboardView.vue](../src/views/DashboardView.vue) — §3.5 |
@@ -81,7 +81,7 @@ Mapped to the [OWASP Top 10 (2021)](https://owasp.org/www-project-top-ten/).
 
 | OWASP | Status today | Notes |
 |---|---|---|
-| A01 — Broken Access Control | **Partial** | RLS is the only line of defense; `churches` policy is too permissive; non-`members` tables have undocumented RLS. |
+| A01 — Broken Access Control | **Partial** | RLS is the only line of defense; `churches` is too permissive and `user_accounts` still needs remote verification. Group definitions and memberships now have source-controlled tenant policies. |
 | A02 — Cryptographic Failures | **OK** | HTTPS everywhere; bcrypt by Supabase; no plaintext secrets in repo. JWT-in-localStorage is a transport-layer concern, covered under A07. |
 | A03 — Injection | **OK** | PostgREST parameterizes queries; Vue auto-escapes interpolation; no `v-html` or `innerHTML` usage. (See §4.1 for a future-risk note.) |
 | A04 — Insecure Design | **Partial** | No MFA; no rate-limit/CAPTCHA on sign-in; no audit trail; soft-delete only (no purge). |
@@ -132,73 +132,49 @@ Notes:
 
 ---
 
-### 3.2 Undocumented RLS on `user_accounts`, `groups`, `group_members` — High
+### 3.2 Tenant RLS on `user_accounts`, `groups`, and `group_members` — High / partially mitigated
 
-**Finding.** [ARCHITECTURE.md](ARCHITECTURE.md) §6.1 lists `user_accounts`, `groups`, and `group_members` tables but only documents RLS policies for `members` and `churches`. If those tables have RLS *disabled* or have an overly broad policy, any authenticated user could:
-- Read all `user_accounts` rows and learn which member is linked to which auth user across every church.
-- Insert / update / delete rows in `groups` or `group_members` and corrupt other churches' group structure.
+**Current status.** Migration `0004_church_scoped_groups` enables RLS, removes every legacy policy, resets grants, and installs the complete policy set for `groups` and `group_members`. The migration does not alter `user_accounts`; its self-only SELECT policy must still be verified remotely because account linking is part of the existing auth flow.
 
-This is the classic Supabase mistake — it's easy to forget that `alter table … enable row level security` is opt-in per table, and any table without it is wide open to the `anon` and `authenticated` roles by default of the API.
+**Exact group policy contract.**
 
-**Mitigation (free).** Run in the Supabase SQL editor and commit the result to [README.md](../README.md) alongside the existing `members` block:
+| Table / operation | Authenticated grant | RLS rule |
+|---|---:|---|
+| `groups SELECT` | Yes | The caller must have a non-null `get_my_church_id()`. A row is then visible when it is a global Ministry (`type = 'Ministry' AND church_id IS NULL`) or an own-church Small Group (`type = 'Small Group' AND church_id = get_my_church_id()`). |
+| `groups INSERT` | Columns only | The grant permits only `name`, `type`, and `church_id`; `WITH CHECK` requires a Small Group owned by `get_my_church_id()`. PostgreSQL generates `color_slot`. |
+| `groups UPDATE` | `name` only | The column grant blocks changes to `color_slot`, `type`, and `church_id`; both `USING` and `WITH CHECK` still require an own-church Small Group. |
+| `groups DELETE` | Yes | `USING` requires an own-church Small Group. Ministry deletion is denied. |
+| `group_members SELECT` | Yes | `is_member_in_my_church(member_id)` and `is_group_available_to_my_church(group_id)` must both be true. |
+| `group_members INSERT` | Yes | The same two predicates are required by `WITH CHECK`. |
+| `group_members DELETE` | Yes | The same two predicates are required by `USING`. |
+| `group_members UPDATE` | **No** | No grant and no policy; memberships are add/remove only. |
 
-```sql
--- Lock down user_accounts: a user may only see their own row.
-alter table public.user_accounts enable row level security;
+The membership predicates are `SECURITY DEFINER`, `STABLE`, fixed-`search_path` functions. The member predicate requires `members.member_of = get_my_church_id()` and `archived_at IS NULL`. The group predicate accepts only a valid global ministry or own-church small group. Using these narrow predicates avoids policy recursion when PostgREST performs nested `groups` / `members` reads. It also lets the Finance Team guard read only the signed-in user's own-church Finance Team membership.
 
-drop policy if exists "user_accounts_self_select" on public.user_accounts;
-create policy "user_accounts_self_select"
-  on public.user_accounts
-  for select
-  to authenticated
-  using (id = auth.uid());
+**Threat boundaries.**
+- Ordinary users can never create, rename, tenant-assign, or delete global Ministry definitions through PostgREST. Trusted operators manage them manually in Supabase. Ordinary users also cannot choose or update any group's generated `color_slot`.
+- A church A user cannot discover church B small groups, membership rows, member counts, or nested member data; direct ID probing returns no row or an RLS error.
+- A user cannot attach a church B member to any group, attach an own member to a church B small group, or mutate an archived member's memberships.
+- The database check constraint independently enforces Ministry/global and Small Group/church ownership even for privileged maintenance.
+- Direct Supabase project-owner access remains trusted and out of scope. `user_accounts` remains a separate verification item.
 
--- No INSERT / UPDATE / DELETE policies — linking is a privileged manual SQL step
--- performed by the Supabase project owner via the dashboard SQL editor.
+**Verification matrix.**
 
--- Lock down groups: same-church visibility (groups are scoped via group_members).
-alter table public.groups enable row level security;
+| Scenario | Expected result |
+|---|---|
+| Church A / B list groups | Both see all global ministries; each sees only its own small groups. |
+| Church A reads a global ministry's memberships/count | Only active church A members are returned/counted. |
+| Church A probes church B group or membership UUID | Zero rows or RLS rejection. |
+| Ordinary user inserts/updates/deletes a Ministry | RLS rejection. |
+| Ordinary user CRUDs own Small Group | Allowed; insert returns the generated `color_slot`; changing `color_slot`, `church_id`, or `type` is rejected by column grants. |
+| Two transactions concurrently insert groups | Advisory locking serializes slot search; both receive different slots or the full-capacity insert fails clearly. |
+| User inserts duplicate membership | Unique-constraint rejection. |
+| Linked Finance Team member runs nested auth query | Own membership and global Ministry join resolve; an unassigned user gets no row. |
+| Anonymous caller accesses either table | Denied (grants revoked and no anonymous policy). |
+| Authenticated but unlinked caller lists groups | Zero rows, including for global ministries. |
+| Authenticated user reads `user_accounts` | Exactly its own row; this must be confirmed against the remote policy. |
 
-drop policy if exists "groups_select_same_church" on public.groups;
-create policy "groups_select_same_church"
-  on public.groups
-  for select
-  to authenticated
-  using (
-    exists (
-      select 1
-      from public.group_members gm
-      join public.members m on m.id = gm.member_id
-      where gm.group_id = groups.id
-        and m.member_of = public.get_my_church_id()
-    )
-  );
-
--- Lock down group_members: only rows whose member belongs to the caller's church.
-alter table public.group_members enable row level security;
-
-drop policy if exists "group_members_select_same_church" on public.group_members;
-create policy "group_members_select_same_church"
-  on public.group_members
-  for select
-  to authenticated
-  using (
-    exists (
-      select 1 from public.members m
-      where m.id = group_members.member_id
-        and m.member_of = public.get_my_church_id()
-    )
-  );
-```
-
-If the `groups` / `group_members` tables are not yet exposed via the dashboard, the safest interim posture is **enable RLS with no policies** so PostgREST denies everything until intentional policies are written.
-
-**Verification.**
-1. In a fresh browser as user A (church X), call `supabase.from('user_accounts').select('*')` → expect exactly **one** row (user A's own).
-2. As user A, attempt to read user B's record → expect 0 rows.
-3. `select relname, relrowsecurity from pg_class where relnamespace = 'public'::regnamespace;` — every table in `public` should have `relrowsecurity = true`.
-
-**Cost.** $0.
+**Cost.** $0. No service, function host, realtime subscription, or runtime dependency was added.
 
 ---
 
@@ -575,7 +551,7 @@ A monthly 10-minute review keeps the posture from drifting:
 | Finding | Verification step |
 |---|---|
 | §3.1 Headers | `curl -I https://<site>` → all six headers present; [securityheaders.com](https://securityheaders.com) grade ≥ A. |
-| §3.2 RLS | `select relname from pg_class where relnamespace='public'::regnamespace and not relrowsecurity;` returns zero rows. |
+| §3.2 RLS | Run the §3.2 two-church matrix; inspect `pg_policies` for the seven exact group policies; confirm both tables have `relrowsecurity = true`; separately verify `user_accounts` returns only the caller's row. |
 | §3.3 Churches RLS | As authenticated user, `supabase.from('churches').select('*')` returns exactly one row. |
 | §3.4 JWT | Application Tab → Local Storage → token present. Confirmed compensating controls (CSP) are active per §3.1. |
 | §3.5 Errors | Force a duplicate insert (constraint violation) → UI shows generic message; raw `error.message` only visible in `npm run dev`. |

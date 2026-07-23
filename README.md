@@ -54,6 +54,16 @@ Prisma is now used to manage database schema changes in code while Supabase rema
 4. Deploy migrations:
    - `npm run prisma:migrate:deploy`
 
+### Ministries and small-groups migrations
+
+Migration `0004_church_scoped_groups` must be deployed before using the updated Ministries & Small Groups screen. It adds church ownership, curated colors, uniqueness constraints, grants, and RLS for `groups` / `group_members`.
+
+The migration preserves existing ministry definitions and memberships, removes duplicate copies of the same membership association, and deterministically assigns colors. It intentionally aborts if it finds any existing non-Ministry group because no legacy small groups are expected and assigning those rows to a church automatically would risk cross-tenant exposure. If it aborts, inspect the unexpected rows and either export/remove them or add a reviewed church-specific backfill to the migration before retrying. Apply and verify this migration in a non-production Supabase project first, including the two-church RLS checks in `docs/SECURITY.md` §3.2.
+
+Migration `0005_group_color_slots` must be deployed **after `0004_church_scoped_groups`** and before deploying frontend code that selects `groups.color_slot`. Do not edit or replace `0004` if it is already deployed. `0005` replaces the old eight-token `color` column with 3,240 globally unique integer slots, deterministically backfills all existing groups, and installs concurrency-safe automatic assignment for new groups. It aborts without applying changes if the existing group count exceeds 3,240.
+
+Deploy database migrations before the matching SPA release to avoid a window where the frontend requests a column that does not exist. Validate `0005` in a non-production Supabase project first; confirm existing groups have distinct slots, concurrent inserts receive distinct slots, normal small-group creation succeeds without a color field, and authenticated attempts to insert or update `color_slot` are denied. The application does not deploy migrations automatically.
+
 Detailed plan: see `docs/prisma-migration.md`.
 
 ## License

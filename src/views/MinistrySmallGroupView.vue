@@ -15,8 +15,8 @@
         </div>
         <div class="page-header-actions">
           <span class="stat-badge">{{ filteredGroups.length }} total</span>
-          <button @click="openCreateGroup" class="btn-primary">
-            <span aria-hidden="true">+</span> Add Group
+          <button @click="openCreateGroup" class="btn-primary" :disabled="!myChurchId">
+            <span aria-hidden="true">+</span> Add Small Group
           </button>
         </div>
       </div>
@@ -126,27 +126,21 @@
       <div v-else-if="filteredGroups.length === 0" class="card">
         <div class="state-message">
           <p v-if="searchQuery || activeTab !== 'all'">No groups match your filter.</p>
-          <p v-else>No groups yet. Create your first ministry or small group!</p>
+          <p v-else>No ministries or small groups are available yet.</p>
         </div>
       </div>
 
       <!-- Group Cards Grid -->
       <div v-else class="group-grid">
-        <div
+        <button
           v-for="group in filteredGroups"
           :key="group.id"
+          type="button"
           class="group-card"
+          :style="getGroupAccentStyle(group.color_slot)"
           @click="openGroupDetail(group)"
         >
           <div class="group-card-header">
-            <div class="group-icon" :class="group.type === 'Ministry' ? 'icon-ministry' : 'icon-smallgroup'">
-              <svg v-if="group.type === 'Ministry'" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
-              </svg>
-              <svg v-else xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-              </svg>
-            </div>
             <span class="group-type-label">{{ group.type === 'Ministry' ? 'Ministry' : 'Small Group' }}</span>
           </div>
           <h3 class="group-card-name">{{ group.name }}</h3>
@@ -158,7 +152,7 @@
               {{ group.member_count }} {{ group.member_count === 1 ? 'member' : 'members' }}
             </span>
           </div>
-        </div>
+        </button>
       </div>
     </main>
 
@@ -168,7 +162,13 @@
         <div class="modal-header">
           <h3>{{ detailModal.group?.name }}</h3>
           <div class="modal-header-actions">
-            <button @click="openEditGroup(detailModal.group)" class="btn-icon" aria-label="Edit group" title="Edit">
+            <button
+              v-if="detailModal.group?.type === 'Small Group'"
+              @click="openEditGroup(detailModal.group)"
+              class="btn-icon"
+              aria-label="Edit small group"
+              title="Edit"
+            >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
@@ -183,6 +183,7 @@
         </div>
 
         <div class="modal-body">
+          <span class="detail-type-badge">{{ detailModal.group?.type }}</span>
           <!-- Members Section -->
           <div class="members-section">
             <div class="members-section-header">
@@ -254,6 +255,10 @@
           </div>
         </div>
 
+        <div v-if="detailModal.group?.type === 'Small Group'" class="modal-footer view-footer">
+          <button type="button" class="btn-link-danger" @click="startDeleteGroup">Delete small group</button>
+        </div>
+
       </div>
     </div>
 
@@ -261,7 +266,7 @@
     <div v-if="deleteModal.open" class="modal-overlay" @click.self="closeDeleteModal">
       <div class="modal" role="dialog" aria-modal="true">
         <div class="modal-header">
-          <h3>Delete Group</h3>
+          <h3>Delete Small Group</h3>
           <button @click="closeDeleteModal" class="btn-close" aria-label="Close">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -272,7 +277,7 @@
           <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
           <h4 class="archive-heading">Delete "{{ deleteModal.group?.name }}"?</h4>
           <p class="archive-description">
-            This will permanently remove the group and all its member associations. Individual member records will not be affected.
+            This will permanently remove the small group and all its member associations. Individual member records will not be affected.
           </p>
         </div>
         <div class="modal-footer">
@@ -291,7 +296,7 @@
     <div v-if="groupFormModal.open" class="modal-overlay" @click.self="closeGroupFormModal">
       <div class="modal" role="dialog" aria-modal="true">
         <div class="modal-header">
-          <h3>{{ groupFormModal.mode === 'create' ? 'Add Group' : 'Edit Group' }}</h3>
+          <h3>{{ groupFormModal.mode === 'create' ? 'Add Small Group' : 'Edit Small Group' }}</h3>
           <button @click="closeGroupFormModal" class="btn-close" aria-label="Close">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -306,14 +311,10 @@
               <span class="form-label">Name <em>*</em></span>
               <input v-model="groupForm.name" type="text" required maxlength="100" />
             </label>
-            <label class="form-field form-field-full">
-              <span class="form-label">Type <em>*</em></span>
-              <select v-model="groupForm.type" required>
-                <option value="" disabled>Select…</option>
-                <option value="Ministry">Ministry</option>
-                <option value="Small Group">Small Group</option>
-              </select>
-            </label>
+            <div class="form-field form-field-full">
+              <span class="form-label">Type</span>
+              <span class="form-static-value">Small Group</span>
+            </div>
           </div>
 
           <div class="modal-footer">
@@ -321,7 +322,7 @@
             <div class="modal-footer-right">
               <button type="button" class="btn-secondary" @click="closeGroupFormModal" :disabled="formSaving">Cancel</button>
               <button type="submit" class="btn-primary" :disabled="formSaving">
-                {{ formSaving ? 'Saving…' : (groupFormModal.mode === 'create' ? 'Create Group' : 'Save Changes') }}
+                {{ formSaving ? 'Saving…' : (groupFormModal.mode === 'create' ? 'Create Small Group' : 'Save Changes') }}
               </button>
             </div>
           </div>
@@ -334,6 +335,8 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { supabase } from '../lib/supabase'
+import { getGroupAccentStyle } from '../utils/groupPresentation'
+import { buildSmallGroupCreatePayload, buildSmallGroupUpdatePayload } from '../utils/groupPayload'
 import { buildMemberNameOrFilter } from '../utils/searchFilters'
 
 // ── State ──────────────────────────────────────────────────────
@@ -341,6 +344,7 @@ import { buildMemberNameOrFilter } from '../utils/searchFilters'
 const groups = ref([])
 const loading = ref(true)
 const error = ref('')
+const myChurchId = ref(null)
 
 const activeTab = ref('all')
 const searchQuery = ref('')
@@ -363,7 +367,7 @@ function showToast(message, type = 'success') {
 
 // Group form modal (create / edit)
 const groupFormModal = ref({ open: false, mode: 'create', groupId: null })
-const groupForm = ref({ name: '', type: '' })
+const groupForm = ref({ name: '' })
 const formError = ref('')
 const formSaving = ref(false)
 
@@ -434,6 +438,11 @@ watch(memberSearchQuery, (val) => {
 
 async function searchMemberGroups(query) {
   memberSearchLoading.value = true
+  if (!myChurchId.value) {
+    memberSearchResults.value = []
+    memberSearchLoading.value = false
+    return
+  }
   const filter = buildMemberNameOrFilter(query)
   if (!filter) {
     memberSearchResults.value = []
@@ -445,6 +454,7 @@ async function searchMemberGroups(query) {
   const { data: members, error: membersError } = await supabase
     .from('members')
     .select('id, first_name, last_name')
+    .eq('member_of', myChurchId.value)
     .or(filter)
     .limit(10)
 
@@ -462,9 +472,10 @@ async function searchMemberGroups(query) {
     .in('member_id', memberIds)
 
   // Build results
+  const visibleGroupIds = new Set(groups.value.map(group => group.id))
   const results = members.map(member => {
     const memberGroups = (groupMemberships || [])
-      .filter(gm => gm.member_id === member.id && gm.groups)
+      .filter(gm => gm.member_id === member.id && gm.groups && visibleGroupIds.has(gm.groups.id))
       .map(gm => gm.groups)
     return { member, groups: memberGroups }
   })
@@ -475,13 +486,29 @@ async function searchMemberGroups(query) {
 
 // ── Data Fetching ──────────────────────────────────────────────
 
+async function fetchMyChurch() {
+  const { data, error: churchError } = await supabase
+    .rpc('get_my_church')
+    .single()
+
+  if (churchError || !data?.id) {
+    error.value = churchError?.message || 'Unable to resolve church context.'
+    loading.value = false
+    return false
+  }
+
+  myChurchId.value = data.id
+  return true
+}
+
 async function fetchGroups() {
   loading.value = true
   error.value = ''
 
   const { data, error: fetchError } = await supabase
     .from('groups')
-    .select('id, name, type, group_members(count)')
+    .select('id, name, type, church_id, color_slot, group_members(count)')
+    .or(`and(type.eq.Ministry,church_id.is.null),and(type.eq.Small Group,church_id.eq.${myChurchId.value})`)
 
   if (fetchError) {
     error.value = `Failed to load groups: ${fetchError.message}`
@@ -498,8 +525,9 @@ async function fetchGroupMembers(groupId) {
   detailModal.membersLoading = true
   const { data, error: fetchError } = await supabase
     .from('group_members')
-    .select('id, member_id, members(first_name, last_name)')
+    .select('id, member_id, members!inner(first_name, last_name, member_of)')
     .eq('group_id', groupId)
+    .eq('members.member_of', myChurchId.value)
 
   if (fetchError) {
     showToast(`Failed to load members: ${fetchError.message}`, 'error')
@@ -515,19 +543,22 @@ async function fetchAllMembers() {
   const { data } = await supabase
     .from('members')
     .select('id, first_name, last_name')
+    .eq('member_of', myChurchId.value)
   allMembers.value = data || []
 }
 
 // ── Group CRUD ─────────────────────────────────────────────────
 
 function openCreateGroup() {
-  groupForm.value = { name: '', type: '' }
+  if (!myChurchId.value) return
+  groupForm.value = { name: '' }
   formError.value = ''
   groupFormModal.value = { open: true, mode: 'create', groupId: null }
 }
 
 function openEditGroup(group) {
-  groupForm.value = { name: group.name, type: group.type }
+  if (group?.type !== 'Small Group' || group.church_id !== myChurchId.value) return
+  groupForm.value = { name: group.name }
   formError.value = ''
   groupFormModal.value = { open: true, mode: 'edit', groupId: group.id }
 }
@@ -541,16 +572,13 @@ function closeGroupFormModal() {
 async function handleGroupFormSubmit() {
   formError.value = ''
   formSaving.value = true
-  const payload = {
-    name: groupForm.value.name.trim(),
-    type: groupForm.value.type,
-  }
 
   if (groupFormModal.value.mode === 'create') {
+    const payload = buildSmallGroupCreatePayload(groupForm.value, myChurchId.value)
     const { data, error: insertError } = await supabase
       .from('groups')
       .insert(payload)
-      .select('id, name, type')
+      .select('id, name, type, church_id, color_slot')
       .single()
 
     formSaving.value = false
@@ -561,13 +589,16 @@ async function handleGroupFormSubmit() {
     }
     groups.value = [{ ...data, member_count: 0 }, ...groups.value]
     closeGroupFormModal()
-    showToast('Group created successfully.')
+    showToast('Small group created successfully.')
   } else {
+    const payload = buildSmallGroupUpdatePayload(groupForm.value)
     const { data, error: updateError } = await supabase
       .from('groups')
       .update(payload)
       .eq('id', groupFormModal.value.groupId)
-      .select('id, name, type')
+      .eq('church_id', myChurchId.value)
+      .eq('type', 'Small Group')
+      .select('id, name, type, church_id, color_slot')
       .single()
 
     formSaving.value = false
@@ -585,7 +616,7 @@ async function handleGroupFormSubmit() {
       detailModal.group = { ...detailModal.group, ...data }
     }
     closeGroupFormModal()
-    showToast('Group updated successfully.')
+    showToast('Small group updated successfully.')
   }
 }
 
@@ -613,6 +644,7 @@ function closeDetailModal() {
 // ── Delete Group ───────────────────────────────────────────────
 
 function startDeleteGroup() {
+  if (detailModal.group?.type !== 'Small Group' || detailModal.group.church_id !== myChurchId.value) return
   deleteModal.open = true
   deleteModal.group = detailModal.group
   formError.value = ''
@@ -626,27 +658,20 @@ function closeDeleteModal() {
 }
 
 async function handleDeleteGroup() {
-  if (!deleteModal.group) return
+  if (
+    !deleteModal.group ||
+    deleteModal.group.type !== 'Small Group' ||
+    deleteModal.group.church_id !== myChurchId.value
+  ) return
   formError.value = ''
   formSaving.value = true
-
-  // Delete member associations first
-  const { error: gmError } = await supabase
-    .from('group_members')
-    .delete()
-    .eq('group_id', deleteModal.group.id)
-
-  if (gmError) {
-    formError.value = gmError.message
-    formSaving.value = false
-    showToast('Failed to delete group.', 'error')
-    return
-  }
 
   const { error: delError } = await supabase
     .from('groups')
     .delete()
     .eq('id', deleteModal.group.id)
+    .eq('church_id', myChurchId.value)
+    .eq('type', 'Small Group')
 
   formSaving.value = false
   if (delError) {
@@ -658,16 +683,22 @@ async function handleDeleteGroup() {
   groups.value = groups.value.filter(g => g.id !== deleteModal.group.id)
   closeDeleteModal()
   closeDetailModal()
-  showToast('Group deleted successfully.')
+  showToast('Small group deleted successfully.')
 }
 
 // ── Add / Remove Members ───────────────────────────────────────
 
 async function addMemberToGroup(member) {
+  const targetGroup = groups.value.find(group => group.id === detailModal.group?.id)
+  if (
+    !myChurchId.value ||
+    !targetGroup ||
+    !allMembers.value.some(candidate => candidate.id === member.id)
+  ) return
   const { data, error: insertError } = await supabase
     .from('group_members')
     .insert({ group_id: detailModal.group.id, member_id: member.id })
-    .select('id, member_id, members(first_name, last_name)')
+    .select('id, member_id, members!inner(first_name, last_name, member_of)')
     .single()
 
   if (insertError) {
@@ -688,6 +719,8 @@ async function removeMemberFromGroup(gm) {
     .from('group_members')
     .delete()
     .eq('id', gm.id)
+    .eq('group_id', detailModal.group.id)
+    .eq('member_id', gm.member_id)
 
   if (delError) {
     showToast(`Failed to remove member: ${delError.message}`, 'error')
@@ -709,12 +742,14 @@ function handleEsc(e) {
   if (detailModal.open) { closeDetailModal(); return }
 }
 
-onMounted(() => {
-  fetchGroups()
+onMounted(async () => {
+  if (await fetchMyChurch()) await fetchGroups()
   window.addEventListener('keydown', handleEsc)
 })
 
 onUnmounted(() => {
+  if (memberSearchTimeout) clearTimeout(memberSearchTimeout)
+  if (toastTimeout) clearTimeout(toastTimeout)
   window.removeEventListener('keydown', handleEsc)
 })
 </script>
@@ -883,19 +918,29 @@ onUnmounted(() => {
 }
 
 .group-card {
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  font: inherit;
   background: #ffffff;
   border-radius: 12px;
   padding: 1.25rem;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(26, 86, 219, 0.04);
   cursor: pointer;
-  transition: box-shadow 0.2s, transform 0.15s;
-  border: 1px solid transparent;
+  transition: box-shadow 0.2s, transform 0.15s, background 0.15s;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid var(--group-accent, #1d4ed8);
 }
 
 .group-card:hover {
-  box-shadow: 0 4px 16px rgba(26, 86, 219, 0.1);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--group-accent, #1d4ed8) 16%, transparent);
   transform: translateY(-2px);
-  border-color: #dbeafe;
+  background: #f8fafc;
+}
+
+.group-card:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--group-accent, #1d4ed8) 32%, transparent);
+  outline-offset: 3px;
 }
 
 .group-card-header {
@@ -905,31 +950,16 @@ onUnmounted(() => {
   margin-bottom: 0.75rem;
 }
 
-.group-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.icon-ministry {
-  background: #eff6ff;
-  color: #1a56db;
-}
-
-.icon-smallgroup {
-  background: #f0fdf4;
-  color: #15803d;
-}
-
 .group-type-label {
+  display: inline-flex;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  background: #f1f5f9;
   font-size: 0.72rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #94a3b8;
+  color: #475569;
 }
 
 .group-card-name {
@@ -1048,6 +1078,18 @@ onUnmounted(() => {
 
 .modal-body {
   padding: 1rem 1.5rem 1.5rem;
+}
+
+.detail-type-badge {
+  display: inline-flex;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .detail-row {
@@ -1374,6 +1416,15 @@ onUnmounted(() => {
   color: #dc2626;
   font-style: normal;
   margin-left: 0.15rem;
+}
+
+.form-static-value {
+  padding: 0.55rem 0.75rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.92rem;
 }
 
 .form-field input,
