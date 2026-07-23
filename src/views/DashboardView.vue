@@ -76,7 +76,7 @@
     </main>
 
     <!-- Member Modal (view / create / edit / archive-confirm) -->
-    <div v-if="modalMode" class="modal-overlay" @click.self="closeModal">
+    <div v-if="modalMode" class="modal-overlay" @click.self="handleOutsideClick">
       <div class="modal" role="dialog" aria-modal="true">
         <div class="modal-header">
           <h3>{{ modalTitle }}</h3>
@@ -93,7 +93,7 @@
                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
               </svg>
             </button>
-            <button @click="closeModal" class="btn-close" aria-label="Close">
+            <button @click="requestClose" class="btn-close" aria-label="Close">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <line x1="18" y1="6" x2="6" y2="18"/>
                 <line x1="6" y1="6" x2="18" y2="18"/>
@@ -171,7 +171,9 @@
           v-else-if="modalMode === 'create' || modalMode === 'edit'"
           class="modal-body modal-form"
           @submit.prevent="modalMode === 'create' ? handleCreate() : handleUpdate()"
+          @input="discardWarning = ''"
         >
+          <p v-if="discardWarning" class="form-warning" role="alert">{{ discardWarning }}</p>
           <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
 
           <div class="form-grid">
@@ -313,6 +315,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { supabase } from '../lib/supabase'
+import { isMemberFormDirty, snapshotMemberForm } from '../utils/memberFormDirty'
 import { buildMemberPayload } from '../utils/memberPayload'
 
 const router = useRouter()
@@ -344,8 +347,15 @@ const blankForm = () => ({
   is_baptized: false,
 })
 const formData = ref(blankForm())
+const initialFormData = ref(snapshotMemberForm(formData.value))
 const formError = ref('')
+const discardWarning = ref('')
 const formSaving = ref(false)
+
+const formIsDirty = computed(() => (
+  (modalMode.value === 'create' || modalMode.value === 'edit')
+  && isMemberFormDirty(formData.value, initialFormData.value)
+))
 
 // Archive state
 const archiveReason = ref('')
@@ -523,6 +533,7 @@ function openDetails(member) {
   selectedMember.value = member
   modalMode.value = 'view'
   formError.value = ''
+  discardWarning.value = ''
 }
 
 function openCreate() {
@@ -532,7 +543,9 @@ function openCreate() {
   }
   selectedMember.value = null
   formData.value = blankForm()
+  initialFormData.value = snapshotMemberForm(formData.value)
   formError.value = ''
+  discardWarning.value = ''
   modalMode.value = 'create'
 }
 
@@ -556,7 +569,9 @@ function startEdit() {
     is_turning_point_completed: m.is_turning_point_completed ?? false,
     is_baptized: m.is_baptized ?? false,
   }
+  initialFormData.value = snapshotMemberForm(formData.value)
   formError.value = ''
+  discardWarning.value = ''
   modalMode.value = 'edit'
 }
 
@@ -574,7 +589,12 @@ function cancelArchive() {
 
 function cancelForm() {
   // Edit → return to view; Create → close entirely
+  if (formSaving.value) return
+  if (formIsDirty.value && !window.confirm('Discard your unfinished member entries? This cannot be undone.')) {
+    return
+  }
   formError.value = ''
+  discardWarning.value = ''
   if (modalMode.value === 'edit' && selectedMember.value) {
     modalMode.value = 'view'
   } else {
@@ -582,11 +602,30 @@ function cancelForm() {
   }
 }
 
+function handleOutsideClick() {
+  if (formSaving.value) return
+  if (formIsDirty.value) {
+    discardWarning.value = 'You have unfinished entries. The form was kept open; use Cancel or Close if you want to discard them.'
+    return
+  }
+  closeModal()
+}
+
+function requestClose() {
+  if (formSaving.value) return
+  if (formIsDirty.value && !window.confirm('Discard your unfinished member entries? This cannot be undone.')) {
+    return
+  }
+  closeModal()
+}
+
 function closeModal() {
   modalMode.value = null
   selectedMember.value = null
   formData.value = blankForm()
+  initialFormData.value = snapshotMemberForm(formData.value)
   formError.value = ''
+  discardWarning.value = ''
   archiveReason.value = ''
   formSaving.value = false
 }
@@ -677,7 +716,7 @@ async function handleArchive() {
 }
 
 function handleEsc(e) {
-  if (e.key === 'Escape' && modalMode.value) closeModal()
+  if (e.key === 'Escape' && modalMode.value) requestClose()
 }
 
 async function handleLogout() {
@@ -1194,6 +1233,16 @@ onUnmounted(() => {
   background: #fef2f2;
   color: #b91c1c;
   border: 1px solid #fecaca;
+  padding: 0.6rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+
+.form-warning {
+  background: #fffbeb;
+  color: #92400e;
+  border: 1px solid #fde68a;
   padding: 0.6rem 0.85rem;
   border-radius: 8px;
   font-size: 0.85rem;
