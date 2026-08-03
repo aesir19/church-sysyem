@@ -458,6 +458,9 @@ async function fetchMembers() {
   const { data, error: fetchError } = await supabase
     .from('members')
     .select(MEMBER_COLUMNS)
+    // Required since 0010_members_select_allow_archived: RLS no longer excludes
+    // archived rows, because doing so made archiving itself impossible.
+    .is('archived_at', null)
 
   if (fetchError) {
     error.value = `Failed to load members: ${fetchError.message}`

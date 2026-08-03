@@ -455,6 +455,9 @@ async function searchMemberGroups(query) {
     .from('members')
     .select('id, first_name, last_name')
     .eq('member_of', myChurchId.value)
+    // Required since 0010_members_select_allow_archived — RLS no longer filters
+    // archived members, so they would otherwise be addable to groups.
+    .is('archived_at', null)
     .or(filter)
     .limit(10)
 
@@ -544,6 +547,8 @@ async function fetchAllMembers() {
     .from('members')
     .select('id, first_name, last_name')
     .eq('member_of', myChurchId.value)
+    // Required since 0010_members_select_allow_archived — see the search query above.
+    .is('archived_at', null)
   allMembers.value = data || []
 }
 
