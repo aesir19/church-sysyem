@@ -117,6 +117,7 @@ dashboard-project/
     ├── utils/
     │   └── collectivesReport.js # Pure calculator for the monthly collectives report
     │   └── collectionsDate.js   # Service-date auto-selection + 3-hour edit window check
+    │   └── collectionPayload.js # Collections insert payload + contributor label (Anonymous/Unknown)
    │   └── expensesMonth.js     # Month parsing and date-range helpers for expenses queries
     └── views/
         ├── LoginView.vue       # Email/password sign-in form
@@ -224,7 +225,7 @@ Renders a **monthly collectives report** modeled after the paper "DFC Summary Re
 - Weekly Breakdown table: one column per service Sunday + a Month total column.
 - Allocations panel with a proportional distribution bar.
 - Expenses table (aggregated by description).
-- Contributors table (aggregated by name; anonymous entries grouped as "Unknown").
+- Contributors table (aggregated by name; anonymous entries grouped as "Unknown"). Note this is fixture behaviour — real anonymous rows carry `from IS NULL` and render as "Anonymous" in Collections. Reconcile the two when this report is wired to live data (§9.14).
 - Rolling balance card: Church Allocation − Expenses + Opening Balance = Current Church Funds.
 - Print stylesheet so the page saves cleanly to PDF via the browser.
 
@@ -249,11 +250,12 @@ Data-entry view nested under Church Funds (`/dashboard/funds/collections`). Allo
 - **Pessimistic mutations** — insert/update/delete go through Supabase; local state updates only on success.
 
 **Data flow:**
-- Reads/writes the `collections` table via `supabase.from('collections')`, storing the contributor as `collections.from` (member UUID), the kind as `is_tithes`, and the service date as `collectedOn`. The 3-hour edit lock depends on `collections.created_at`. RLS enforces per-church isolation.
+- Reads/writes the `collections` table via `supabase.from('collections')`, storing the contributor as `collections.from` (member UUID, **or `NULL` for an anonymous gift** — see §9.16), the kind as `is_tithes`, and the service date as `collectedOn`. The 3-hour edit lock depends on `collections.created_at`. RLS enforces per-church isolation.
+- The insert payload is built by `buildCollectionPayload()` in [src/utils/collectionPayload.js](src/utils/collectionPayload.js), which always sends `from` explicitly rather than omitting it. Contributor rendering goes through `contributorLabel()` in the same module, which separates three states that must not collapse: `from IS NULL` → "Anonymous", a readable member → their name, and a set `from` whose member embed came back empty → "Unknown".
 
 **Future plan:**
 - A "Report Discrepancy" button will allow a user to request editing or deletion of a locked entry under the `collections` table. This will involve a `collection_discrepancies` table (or similar) where requests are queued for an admin to approve.
-- **Multiple anonymous contributors per service (requested).** Tithes from people who are not named must be recordable as *several individual entries* — one per giver, each with its own amount — rather than a single collective total. The intent is that the count of anonymous givers and the distribution of their amounts both survive into the report, instead of collapsing into one lump sum. See §9.16 for the blocker and the design options.
+- ~~**Multiple anonymous contributors per service (requested).**~~ **Delivered** by `0011_collections_anonymous_from`. Each anonymous gift is its own row with its own amount, so the count of anonymous givers and the spread of their amounts are both preserved in the table. What remains is report-side aggregation, which is blocked on §9.14 (the report does not read `collections` yet).
 
 #### `ExpensesInputView.vue` — [src/views/ExpensesInputView.vue](src/views/ExpensesInputView.vue)
 Data-entry view nested under Church Funds (`/dashboard/funds/expenses`). Allows staff to record month-scoped operating expenses.
@@ -338,6 +340,8 @@ $$;
 
 - `churches SELECT` → `using (id = get_my_church_id())`, and `authenticated` holds **no grant on the table at all**, so the policy is unreachable from the SPA — `churches` is read only through the `SECURITY DEFINER` `get_my_church()` RPC. `0009_narrow_grants` closed the previous `using (true)` cross-tenant leak ([SECURITY.md](SECURITY.md) §3.3) this way; the scoped policy is defence in depth should the grant ever be restored.
 - `collections SELECT` → church-scoped. `INSERT` → church-scoped **and** finance-gated. `UPDATE` / `DELETE` → church-scoped, finance-gated, and limited to rows with `created_at > now() - interval '3 hours'`.
+
+  > The `INSERT` policy scopes on `from_church` and says nothing about `from` — the contributor is **not** required to be a member of the caller's church. That is deliberate, not an oversight: visiting members give at other churches' services. `from` may also be `NULL`, meaning anonymous (`0011_collections_anonymous_from`). See §9.17 before adding `is_member_in_my_church()` here.
 - `expenses SELECT` → church-scoped only. `INSERT` → church-scoped **and** finance-gated.
 
   > **Funds rule: reads are church-scoped, writes are finance-gated.** `ChurchFundsView.vue` builds the monthly report from `expenses` and is not a finance-only route, so finance-gating `SELECT` would break reports for non-finance staff. `collections SELECT` stays church-scoped for the same reason — §9.14 plans to feed contributions into that report. Installed by `0008_funds_write_policies`; before it, finance-role authorization existed only in the browser.
@@ -471,32 +475,36 @@ These are **not bugs** but explicit non-features in the current build. If asked 
 13. **No long-cache headers in [netlify.toml](netlify.toml)** — ~~Vite emits content-hashed assets that are safe to cache `immutable`.~~ **Resolved**: `netlify.toml` now serves `/assets/*` as `public, max-age=31536000, immutable` and `/index.html` as `no-cache`. See §12.5.
 14. **Church Funds report is partially sample-backed** — [ChurchFundsView.vue](src/views/ChurchFundsView.vue) still uses `SAMPLE_COLLECTIVES` for contribution lines, but monthly expenses now come from `public.expenses` when available (merged in [src/utils/reportExpenseMerge.js](src/utils/reportExpenseMerge.js)). Full production parity still requires contributions/services persistence wired into `computeMonthlyReport`.
 15. **Report Discrepancy workflow (future)** — When a `collections` entry passes the 3-hour edit window and is locked, there is currently no way for a user to request corrections. A planned feature will add a "Report Discrepancy" button in the detail modal that creates a request row (candidate table: `collection_discrepancies`) for an admin/treasurer to approve or reject the edit/delete. This enables an audit trail for post-lock corrections without weakening the time-lock policy.
-16. **Anonymous contributions cannot be recorded at all, and multiple anonymous givers per service are a requested feature.**
+16. ~~**Anonymous contributions cannot be recorded at all, and multiple anonymous givers per service are a requested feature.**~~ **Resolved** by `0011_collections_anonymous_from`.
 
-    **Requested behaviour.** When several unnamed people give tithes at one service, each should be recordable as its own entry with its own amount — not merged into a single collective total. Both the number of anonymous givers and the spread of amounts should reach the monthly report.
-
-    **Blocker — anonymous entry is currently broken.** `CollectionsInputView.handleSubmit()` has an "Anonymous" path that omits `from` from the insert payload. That does not produce a null contributor: `collections.from` is `NOT NULL` with `DEFAULT gen_random_uuid()`, so a random UUID is generated and the `collections_from_fkey` foreign key to `members` rejects it. Verified against production inside a rolled-back transaction:
+    **What was broken.** `CollectionsInputView.handleSubmit()` omitted `from` from the insert payload on the "Anonymous" path. That never produced a null contributor: `collections.from` was `NOT NULL DEFAULT gen_random_uuid()`, so Postgres minted a random UUID and the `collections_from_fkey` foreign key rejected it. Verified against production inside a rolled-back transaction:
 
     ```
     23503: insert or update on table "collections" violates foreign key constraint "collections_from_fkey"
     ```
 
-    So the UI offers anonymous entry, but any attempt fails. The "anonymous entries grouped as Unknown" behaviour described for the report in §5.4 exists only in the `SAMPLE_COLLECTIVES` fixture — no real anonymous row can exist today.
+    The UI had offered anonymous entry since it was written, and every attempt had failed.
 
-    **Design options** (none chosen — needs an owner decision):
-    - *Nullable `from`.* Drop `NOT NULL` and the `gen_random_uuid()` default, letting `from IS NULL` mean anonymous. Smallest schema change; each anonymous gift is naturally its own row, so "multiple anonymous givers" falls out for free. Requires auditing every read that joins `members` through `collections.from` to handle nulls, and the report's contributor aggregation must bucket nulls rather than dropping them.
-    - *Sentinel "Anonymous" member row per church.* No schema change, but it pollutes the members table with non-people, would be caught by member counts and pickers, and interacts badly with the archived-member filters added in `0010`.
-    - *Separate `anonymous_collections` table.* Cleanest separation, but duplicates the amount/date/church/window logic and doubles the read path in the report.
+    **Chosen design — nullable `from`.** The default was dropped and the column made nullable; **`from IS NULL` means anonymous**. This was picked over the two alternatives (a sentinel "Anonymous" member row per church, which pollutes member counts and pickers and collides with the `0010` archived-member filters; and a separate `anonymous_collections` table, which duplicates the amount/date/church/edit-window logic) because each anonymous gift stays its own row — so **multiple anonymous givers per service works by construction**, which was the actual request.
 
-    A nullable `from` is the most likely fit, but it touches `MEMBER`-joined reads and the report calculator, so it should be planned before implementation rather than added ad hoc.
+    **Consequences to respect in new code:**
+    - Any read joining `members` through `collections.from` must handle null. Use `contributorLabel()` from [src/utils/collectionPayload.js](src/utils/collectionPayload.js) rather than re-deriving the label; it keeps "Anonymous" (`from IS NULL`) distinct from "Unknown" (a set `from` whose member could not be read).
+    - `onDelete` on the `from` relation stays `Cascade`. `SetNull` would silently reclassify a deleted member's gifts as anonymous.
+    - Report-side aggregation is **not** done — §9.14 still applies, and the "grouped as Unknown" behaviour in §5.4 remains fixture-only. When the report is wired to live `collections`, null contributors must be bucketed as Anonymous rather than dropped.
 
-17. **No export path.** Reports are `window.print()` only ([ChurchFundsView.vue:543](../src/views/ChurchFundsView.vue#L543)). There is no CSV/XLSX export for the treasurer and no **per-member annual giving statement** — a routine church requirement that members ask for at year end. Blocked on §9.14 (the report must read real `collections` first).
-18. **No bulk import.** The README's stated premise is replacing paper files and spreadsheets, but the only way in is the one-at-a-time Add Member modal. Onboarding an existing congregation currently means manual retyping. A CSV importer with a dry-run preview is the natural companion to §9.1.
-19. **No attendance or service records.** There is no `services` or `attendance` table. The monthly report's "weeks" concept exists only inside the `SAMPLE_COLLECTIVES` fixture and has no persistent counterpart, so attendance cannot be correlated with giving or used for follow-up.
-20. **No household / family grouping.** `Ado Family` appears in the sample fixture as a free-text contributor name. Families are a first-class concept in church records (one address, joint giving, children linked to guardians) and are currently unrepresentable.
-21. **Discipleship progress is three booleans.** `is_one_to_one_completed`, `is_turning_point_completed`, `is_baptized` carry no completion date, no assignee, and no history. Progress is a workflow, not a flag; the current shape cannot answer "who is due for follow-up?" — arguably the primary pastoral question the system exists to serve.
-22. **`has_submitted_membership_form` is written by nothing and read by nothing.** The column exists in `members` and appears in no view, payload builder, or query. Either it anticipates a member-facing self-service form that was never built, or it is dead schema — decide and then either wire it or drop it.
-23. **No central ministry administrator or request workflow** — Ministry definitions are manually maintained in Supabase. A future design may add central-admin authorization and a request table for **new ministry definitions only**. Requests will carry requester/church identity, proposed name, status, reviewer, timestamps, and rejection reason; central approval/rejection will handle case-insensitive duplicate names before creating a global ministry. Rename and delete requests are explicitly excluded, and no broad admin UI, leader model, soft delete, or audit system is part of the current release.
+17. **Visiting contributors cannot be recorded by name.** Members of one church do give at another church's service. There is no way to record that: `collections.from` accepts only a `members.id`, and a visitor is not in the host church's member list. The only workaround today is to record the gift as anonymous, which loses the name and misattributes what is really a known, named gift.
+
+    This is also **why the collections INSERT policy deliberately does not validate the contributor's church.** Adding `("from" IS NULL OR public.is_member_in_my_church("from"))` to `collections_insert_own_church` would look like an obvious hardening — it is the pattern `0004` uses for `group_members` — but it would reject exactly this legitimate case. Do not add it without resolving this item first.
+
+    Design is open. Candidates: a free-text `contributor_name` column used only when `from IS NULL`; a "guest" member record flagged as non-member; or a cross-church contributor reference, which would need its own RLS reasoning since it deliberately reaches outside the caller's church.
+
+18. **No export path.** Reports are `window.print()` only ([ChurchFundsView.vue:543](../src/views/ChurchFundsView.vue#L543)). There is no CSV/XLSX export for the treasurer and no **per-member annual giving statement** — a routine church requirement that members ask for at year end. Blocked on §9.14 (the report must read real `collections` first).
+19. **No bulk import.** The README's stated premise is replacing paper files and spreadsheets, but the only way in is the one-at-a-time Add Member modal. Onboarding an existing congregation currently means manual retyping. A CSV importer with a dry-run preview is the natural companion to §9.1.
+20. **No attendance or service records.** There is no `services` or `attendance` table. The monthly report's "weeks" concept exists only inside the `SAMPLE_COLLECTIVES` fixture and has no persistent counterpart, so attendance cannot be correlated with giving or used for follow-up.
+21. **No household / family grouping.** `Ado Family` appears in the sample fixture as a free-text contributor name. Families are a first-class concept in church records (one address, joint giving, children linked to guardians) and are currently unrepresentable.
+22. **Discipleship progress is three booleans.** `is_one_to_one_completed`, `is_turning_point_completed`, `is_baptized` carry no completion date, no assignee, and no history. Progress is a workflow, not a flag; the current shape cannot answer "who is due for follow-up?" — arguably the primary pastoral question the system exists to serve.
+23. **`has_submitted_membership_form` is written by nothing and read by nothing.** The column exists in `members` and appears in no view, payload builder, or query. Either it anticipates a member-facing self-service form that was never built, or it is dead schema — decide and then either wire it or drop it.
+24. **No central ministry administrator or request workflow** — Ministry definitions are manually maintained in Supabase. A future design may add central-admin authorization and a request table for **new ministry definitions only**. Requests will carry requester/church identity, proposed name, status, reviewer, timestamps, and rejection reason; central approval/rejection will handle case-insensitive duplicate names before creating a global ministry. Rename and delete requests are explicitly excluded, and no broad admin UI, leader model, soft delete, or audit system is part of the current release.
 
 ---
 
@@ -654,21 +662,21 @@ Unlike §9, everything here is **wrong today**, not merely missing. Each row was
 
 | ID | Severity | Where | Defect |
 |---|---|---|---|
-| D1 | **Critical** | [schema.prisma:514](../prisma/schema.prisma#L514) | `collections.amount` is `real` (4-byte float) |
+| D1 | **Critical** | [schema.prisma:517](../prisma/schema.prisma#L517) | `collections.amount` is `real` (4-byte float) |
 | D2 | **High** | migrations | `collections` has no index; `members` has none on `member_of` / `archived_at` |
-| D3 | **High** | [schema.prisma:584](../prisma/schema.prisma#L584) | `members.contact_number` is `numeric` — destroys PH phone numbers |
+| D3 | **High** | [schema.prisma:590](../prisma/schema.prisma#L590) | `members.contact_number` is `numeric` — destroys PH phone numbers |
 | D4 | **High** | [router/index.js:87](../src/router/index.js#L87), [useFinanceMember.js:18](../src/composables/useFinanceMember.js#L18) | Two competing role models; finance authz keyed on a mutable display name |
 | D5 | Medium | [useFinanceMember.js:4](../src/composables/useFinanceMember.js#L4) | Module-level singleton never resets across user switch |
 | D6 | Medium | [router/index.js:69](../src/router/index.js#L69) | No session-expiry handling |
 | D7 | Medium | [router/index.js:103](../src/router/index.js#L103) | 2–4 round trips per navigation — breaches §12.3 |
 | D8 | Medium | [DashboardView.vue:417](../src/views/DashboardView.vue#L417) | `todayIso` computed in UTC, not local time |
 | D9 | Medium | [router/index.js:13](../src/router/index.js#L13) | Six eager view imports; single 413 KB chunk — breaches §12.4 |
-| D10 | Medium | [schema.prisma:586](../prisma/schema.prisma#L586) | `members.member_of` defaults to `auth.uid()`; `onDelete: SetNull` on a `NOT NULL` column |
+| D10 | Medium | [schema.prisma:592](../prisma/schema.prisma#L592) | `members.member_of` defaults to `auth.uid()`; `onDelete: SetNull` on a `NOT NULL` column |
 | D11 | Medium | all views | No keyboard access to rows, no `aria-sort`, no modal focus trap |
 | D12 | Low | [DashboardView.vue:11](../src/views/DashboardView.vue#L11) | Two Sign Out buttons with divergent `localStorage` cleanup |
 | D13 | Low | [router/index.js:13](../src/router/index.js#L13) | No catch-all route — unknown paths render blank |
 | D14 | Low | 3 views | `formatMoney` implemented twice in two different currency formats |
-| D15 | Low | [schema.prisma:589](../prisma/schema.prisma#L589) | Schema typo `wedding_anniversarry` (double `r`) is now load-bearing in 4 files |
+| D15 | Low | [schema.prisma:595](../prisma/schema.prisma#L595) | Schema typo `wedding_anniversarry` (double `r`) is now load-bearing in 4 files |
 | D16 | Medium | all views | No data-access layer — Supabase calls inline in 1,100–1,800-line SFCs |
 
 ### 13.1 D1 — Float money in the collections ledger

@@ -1,0 +1,65 @@
+-- ============================================================================
+-- 0011_collections_anonymous_from — Make anonymous contributions recordable.
+-- ============================================================================
+--
+-- WHY
+-- The Collections form has always offered an "Anonymous" contributor option,
+-- and it has never once succeeded. docs/ARCHITECTURE.md §9.16 tracked it.
+--
+-- THE CAUSE — a column default, not a missing null check.
+-- CollectionsInputView.handleSubmit() omitted `from` from the insert payload
+-- when the contributor was anonymous. Omitting a column does not produce NULL:
+--
+--   "from" UUID NOT NULL DEFAULT gen_random_uuid()
+--
+-- Postgres fires the default instead, minting a random UUID that matches no
+-- member row, so the foreign key rejects the insert and the user is shown the
+-- raw driver message:
+--
+--   23503: insert or update on table "collections" violates foreign key
+--          constraint "collections_from_fkey"
+--
+-- Verified against production inside a rolled-back transaction.
+--
+-- THE FIX AND WHAT NULL NOW MEANS
+-- `from` becomes nullable and loses its default. **NULL means anonymous.**
+-- That is a load-bearing semantic, not merely a relaxed constraint — every read
+-- that joins `members` through `collections.from` must render NULL as
+-- "Anonymous" rather than dropping the row or labelling it "Unknown". The two
+-- states are distinct: NULL is a gift nobody claimed, while a non-NULL `from`
+-- with no joined member is a member the caller cannot see. See
+-- contributorLabel() in src/utils/collectionPayload.js.
+--
+-- The chosen design was one of three candidates in §9.16. It wins because each
+-- anonymous gift stays its own row, so "several anonymous givers at one service"
+-- — the actual request behind this work — needs no further schema support. The
+-- alternatives (a sentinel "Anonymous" member per church; a separate
+-- anonymous_collections table) either pollute the members table or duplicate the
+-- amount/date/church/edit-window logic.
+--
+-- WHAT IS DELIBERATELY NOT CHANGED
+--
+--   RLS. collections_insert_own_church (0008) checks from_church and
+--   is_finance_member(); it never references `from`, so NULL already passes.
+--   No policy edit is needed and none is made.
+--
+--   Cross-church contributor validation. It is tempting to add
+--   `("from" IS NULL OR public.is_member_in_my_church("from"))` to that policy
+--   while we are here. Do not. Members visiting another church do give at its
+--   services, and that predicate would reject those entries. Recording a visitor
+--   by name is open product work — see docs/ARCHITECTURE.md §9.
+--
+--   Grants. 0009_narrow_grants grants table-level INSERT on collections, which
+--   covers every column. Nothing to re-grant.
+--
+--   from_church. It carries the identical `DEFAULT gen_random_uuid()` footgun
+--   and would fail the same way if ever omitted. It is masked today only because
+--   handleSubmit always sets it and disables submit while myChurchId is empty.
+--   Left alone here to keep this migration to one concern.
+--
+-- ROLLBACK: see rollback.sql in this directory. Note that it is not clean once
+-- anonymous rows exist — read the warning there before running it.
+-- ============================================================================
+
+ALTER TABLE public.collections ALTER COLUMN "from" DROP DEFAULT;
+ALTER TABLE public.collections ALTER COLUMN "from" DROP NOT NULL;
