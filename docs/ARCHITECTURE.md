@@ -2,7 +2,9 @@
 
 > **Purpose of this document:** Provide an AI assistant with a concise, structured, and accurate snapshot of the current system so it can reason about, modify, and extend the codebase without re-discovering context.
 >
-> **Last reviewed against source:** Reflects the state of `main` / `user-mgmt` branch as of the current workspace.
+> **Last reviewed against source:** Reflects the state of `main` / `project-hardening` branch as of the current workspace.
+>
+> **Audit 2026-08-03:** A full-codebase architecture review added §13 (confirmed defects — real bugs with reproductions and fixes) and §14 (operational readiness — what the system needs to *run*, as distinct from what users ask for). Neither section is speculative; every item was verified against source, schema, or build output.
 
 ---
 
@@ -452,6 +454,8 @@ For the full vulnerability analysis, threat model, OWASP Top 10 mapping, and pri
 
 These are **not bugs** but explicit non-features in the current build. If asked to add them, treat as new feature work:
 
+> **Where the bugs live:** confirmed defects — things that are wrong, not merely absent — are tracked separately in **§13**. Operational/platform gaps (logging, monitoring, recoverability) are in **§14**. Do not add defects to this list; §9 is deliberately scoped to deferred features so it can be read as a product backlog.
+
 1. **No restore UI for archived members** — archiving is exposed in the dashboard, but un-archiving (`update members set archived_at = null`) is a manual SQL operation. There is also no admin view for browsing archived rows.
 2. **No pagination / virtualization** — entire member list is fetched at once. Fine for small congregations; revisit if a church exceeds a few thousand rows. See §12.4 for the free-tier threshold.
 3. **No client-side search/filter.**
@@ -486,7 +490,13 @@ These are **not bugs** but explicit non-features in the current build. If asked 
 
     A nullable `from` is the most likely fit, but it touches `MEMBER`-joined reads and the report calculator, so it should be planned before implementation rather than added ad hoc.
 
-17. **No central ministry administrator or request workflow** — Ministry definitions are manually maintained in Supabase. A future design may add central-admin authorization and a request table for **new ministry definitions only**. Requests will carry requester/church identity, proposed name, status, reviewer, timestamps, and rejection reason; central approval/rejection will handle case-insensitive duplicate names before creating a global ministry. Rename and delete requests are explicitly excluded, and no broad admin UI, leader model, soft delete, or audit system is part of the current release.
+17. **No export path.** Reports are `window.print()` only ([ChurchFundsView.vue:543](../src/views/ChurchFundsView.vue#L543)). There is no CSV/XLSX export for the treasurer and no **per-member annual giving statement** — a routine church requirement that members ask for at year end. Blocked on §9.14 (the report must read real `collections` first).
+18. **No bulk import.** The README's stated premise is replacing paper files and spreadsheets, but the only way in is the one-at-a-time Add Member modal. Onboarding an existing congregation currently means manual retyping. A CSV importer with a dry-run preview is the natural companion to §9.1.
+19. **No attendance or service records.** There is no `services` or `attendance` table. The monthly report's "weeks" concept exists only inside the `SAMPLE_COLLECTIVES` fixture and has no persistent counterpart, so attendance cannot be correlated with giving or used for follow-up.
+20. **No household / family grouping.** `Ado Family` appears in the sample fixture as a free-text contributor name. Families are a first-class concept in church records (one address, joint giving, children linked to guardians) and are currently unrepresentable.
+21. **Discipleship progress is three booleans.** `is_one_to_one_completed`, `is_turning_point_completed`, `is_baptized` carry no completion date, no assignee, and no history. Progress is a workflow, not a flag; the current shape cannot answer "who is due for follow-up?" — arguably the primary pastoral question the system exists to serve.
+22. **`has_submitted_membership_form` is written by nothing and read by nothing.** The column exists in `members` and appears in no view, payload builder, or query. Either it anticipates a member-facing self-service form that was never built, or it is dead schema — decide and then either wire it or drop it.
+23. **No central ministry administrator or request workflow** — Ministry definitions are manually maintained in Supabase. A future design may add central-admin authorization and a request table for **new ministry definitions only**. Requests will carry requester/church identity, proposed name, status, reviewer, timestamps, and rejection reason; central approval/rejection will handle case-insensitive duplicate names before creating a global ministry. Rename and delete requests are explicitly excluded, and no broad admin UI, leader model, soft delete, or audit system is part of the current release.
 
 ---
 
@@ -635,3 +645,188 @@ The §12.3 rules listed above are now honored by the codebase. Items 1–5 below
 5. **Decide whether to keep church name cached in `localStorage`** so the dashboard can render the title pre-fetch (eliminates one perceptible round-trip on cold open). Low priority. — **Done.** Cached as `udfc.myChurchName`; `handleLogout()` clears the key so a different user signing in on the same browser doesn't see the previous church's title.
 
 None of these were required for the app to function — they were the path to keeping the cost line at $0 as usage grows.
+
+---
+
+## 13. Confirmed Defects — Audit 2026-08-03
+
+Unlike §9, everything here is **wrong today**, not merely missing. Each row was verified against source, `prisma/schema.prisma`, or `dist/` build output. IDs are stable — reference them in commits and PRs.
+
+| ID | Severity | Where | Defect |
+|---|---|---|---|
+| D1 | **Critical** | [schema.prisma:514](../prisma/schema.prisma#L514) | `collections.amount` is `real` (4-byte float) |
+| D2 | **High** | migrations | `collections` has no index; `members` has none on `member_of` / `archived_at` |
+| D3 | **High** | [schema.prisma:584](../prisma/schema.prisma#L584) | `members.contact_number` is `numeric` — destroys PH phone numbers |
+| D4 | **High** | [router/index.js:87](../src/router/index.js#L87), [useFinanceMember.js:18](../src/composables/useFinanceMember.js#L18) | Two competing role models; finance authz keyed on a mutable display name |
+| D5 | Medium | [useFinanceMember.js:4](../src/composables/useFinanceMember.js#L4) | Module-level singleton never resets across user switch |
+| D6 | Medium | [router/index.js:69](../src/router/index.js#L69) | No session-expiry handling |
+| D7 | Medium | [router/index.js:103](../src/router/index.js#L103) | 2–4 round trips per navigation — breaches §12.3 |
+| D8 | Medium | [DashboardView.vue:417](../src/views/DashboardView.vue#L417) | `todayIso` computed in UTC, not local time |
+| D9 | Medium | [router/index.js:13](../src/router/index.js#L13) | Six eager view imports; single 413 KB chunk — breaches §12.4 |
+| D10 | Medium | [schema.prisma:586](../prisma/schema.prisma#L586) | `members.member_of` defaults to `auth.uid()`; `onDelete: SetNull` on a `NOT NULL` column |
+| D11 | Medium | all views | No keyboard access to rows, no `aria-sort`, no modal focus trap |
+| D12 | Low | [DashboardView.vue:11](../src/views/DashboardView.vue#L11) | Two Sign Out buttons with divergent `localStorage` cleanup |
+| D13 | Low | [router/index.js:13](../src/router/index.js#L13) | No catch-all route — unknown paths render blank |
+| D14 | Low | 3 views | `formatMoney` implemented twice in two different currency formats |
+| D15 | Low | [schema.prisma:589](../prisma/schema.prisma#L589) | Schema typo `wedding_anniversarry` (double `r`) is now load-bearing in 4 files |
+| D16 | Medium | all views | No data-access layer — Supabase calls inline in 1,100–1,800-line SFCs |
+
+### 13.1 D1 — Float money in the collections ledger
+
+`expenses.amount` is `numeric(12,2)`; `collections.amount` is `real`. The monthly report sums hundreds of collection rows and is intended to reconcile against a printed sheet, so drift is guaranteed to surface as an unexplainable centavo mismatch that staff cannot diagnose. Fix while the table is small:
+
+```sql
+ALTER TABLE public.collections ALTER COLUMN amount TYPE numeric(12,2);
+```
+
+Migrate before wiring the report to real data (§9.14) — otherwise the first production reconciliation inherits the drift.
+
+### 13.2 D2 — Unindexed range scans on the two hottest queries
+
+`0003_expenses` correctly added `(from_church, spent_on DESC)`. The structurally identical query in [CollectionsInputView.vue:387](../src/views/CollectionsInputView.vue#L387) — `gte`/`lt` on `collectedOn` plus a double `ORDER BY` — has no index at all. `members` is filtered on `member_of` by every RLS policy and on `archived_at` by every list query, with neither indexed.
+
+```sql
+CREATE INDEX collections_church_collected_on_idx
+  ON public.collections (from_church, "collectedOn" DESC);
+CREATE INDEX members_church_active_idx
+  ON public.members (member_of) WHERE archived_at IS NULL;
+```
+
+This is a §12 cost item, not just latency: sequential scans burn the free tier's shared CPU budget on every page load.
+
+### 13.3 D3 — Numeric phone numbers
+
+PH mobile numbers are `09171234567`. A `numeric` column silently discards the leading zero and cannot represent `+63`, separators, or a second contact. [DashboardView.vue:566](../src/views/DashboardView.vue#L566) already compensates with `String(m.contact_number)`, which restores the digits but not the zero. Convert to `varchar` and backfill with left-padding where the value is 10 digits.
+
+### 13.4 D4 — Two role models, neither authoritative
+
+`user_accounts.role` exists with `DEFAULT 'unassigned'` and is **read nowhere in `src/`**. Actual authorization asks whether the member belongs to a group whose `name` is the literal string `'Finance Team'`. Two consequences:
+
+1. Renaming that group through the Ministries UI silently revokes finance access for every user — no error, no audit entry.
+2. Group names are unique per church for small groups and globally for ministries (`0004`), so the blast radius depends on `type` — worth an explicit decision either way.
+
+Resolve by picking one authority. Either promote `user_accounts.role` to the source of truth (and have `is_finance_member()` read it), or add `groups.slug` / `groups.is_system` so the policy keys on an immutable identifier. Whichever is chosen, the loser should be dropped rather than left as a decoy.
+
+### 13.5 D5 / D6 — Identity state outlives the session
+
+`isFinance` and `loaded` in [useFinanceMember.js](../src/composables/useFinanceMember.js) are declared at module scope, outside the exported factory. Sign-out followed by sign-in is SPA navigation with no reload, so the second user inherits the first user's finance flag: `FundsTabs` renders the Collections/Expenses links, and the contributors section appears in the report. **RLS still blocks the data**, so this is a UI-truth defect rather than a data leak — but it produces support tickets and erodes trust in the authorization model.
+
+Relatedly, the single `onAuthStateChange` listener handles only `PASSWORD_RECOVERY`. When the refresh token expires mid-session, staff see a raw `JWT expired` string in an inline error box. Both are fixed by the same change: one session-scoped identity store that subscribes to `onAuthStateChange` and clears on `SIGNED_OUT` / `TOKEN_REFRESHED` failure. That store also resolves D7 by caching `{ churchId, churchName, linked, isFinance }` instead of re-querying on every navigation.
+
+### 13.6 D16 / D14 — No data-access layer
+
+Every Supabase call lives inline in a view. The SFCs are 1,353 / 1,773 / 1,135 / 1,092 / 555 lines, and each one re-implements the same helpers:
+
+| Helper | Copies | Divergence |
+|---|---|---|
+| `formatMoney` | 3 | [ChurchFundsView.vue:522](../src/views/ChurchFundsView.vue#L522) renders `₱1,234.00` via `Intl.NumberFormat`; [CollectionsInputView.vue:573](../src/views/CollectionsInputView.vue#L573) and [ExpensesInputView.vue:302](../src/views/ExpensesInputView.vue#L302) render `PHP 1,234.00` by string concatenation |
+| `fullName` | 2 | [DashboardView.vue:435](../src/views/DashboardView.vue#L435) includes the middle name; [CollectionsInputView.vue:332](../src/views/CollectionsInputView.vue#L332) does not |
+| `formatDate` / `formatDisplayDate` / `formatShortDate` | 4 | three different locale arguments |
+| `showToast` | 2 | identical, duplicated |
+
+The same amount therefore renders in two different currency formats depending on which screen the user is on, and the same person renders under two different names. This is the visible symptom; the structural cost is that no data path can be unit-tested without mounting a view (see §14.6), and every §12.3 egress rule has to be re-enforced by hand at each call site.
+
+**Direction.** Extract `src/api/{members,collections,expenses,groups}.js` for data access and `src/utils/format.js` for presentation. This is a precondition for O-series testing work, not a cosmetic refactor — do it before the §9.14 report rewrite, which will otherwise add a sixth copy of `formatMoney`.
+
+---
+
+## 14. Operational Readiness
+
+§9 is a product backlog and §13 is a defect list. This section is the third category: **what the system needs in order to be operable at all** — to tell you it is broken, to survive its own database being lost, and to be rebuilt by someone who was not present when it was written. None of it is user-visible, and all of it is currently absent.
+
+Every recommendation below has a **$0 path**, per §0 priority 1. Where an item is already tracked in [SECURITY.md](SECURITY.md), it is cross-referenced rather than restated — the point here is that these were filed as *security* concerns when they are equally *operability* concerns, and so have been deferred on a security cost-benefit basis that does not apply to them.
+
+### 14.1 Observability — the system cannot report on itself
+
+| ID | Gap | Detail |
+|---|---|---|
+| O1 | No logging abstraction | Every failure path is `error.value = err.message` and then discarded. There is no `src/lib/logger.js`, no levels, no correlation id. |
+| O2 | No global Vue error handler | `app.config.errorHandler` is unset in [main.js](../src/main.js). Any render-time throw produces a white screen with nothing recorded. |
+| O3 | No `window.onerror` / `unhandledrejection` capture | Async failures outside a `try` vanish silently. |
+| O4 | No error sink | Nobody ever learns that `handleCreate` failed for three users on Sunday. The only channel is a staff member choosing to mention it. |
+| O5 | No domain audit log | Cross-ref [SECURITY.md](SECURITY.md) §3.7 — but note the ledger needs this *more* than `members` does. See below. |
+| O6 | No DB performance visibility | `pg_stat_statements` is available on the Supabase free tier and is reviewed by no one, so D2-class problems are invisible until they become outages. |
+
+**On O4 and the cost framing.** [SECURITY.md](SECURITY.md) §5.1 classifies error monitoring as **Tier 3 — "has a cost, evaluate per need"**. That classification should be revisited, because there are two free paths:
+
+- **Sentry free tier** — 5k errors/month, well under this app's volume, but adds a third-party processor holding fragments of member PII in error payloads. That is a real privacy trade-off, not merely a cost one, and is the reason to prefer the second option.
+- **In-stack, $0, no new processor** — a bounded `public.client_errors` table with `INSERT`-only RLS for `authenticated` and no `SELECT` grant, a row cap enforced by a trigger (e.g. keep the most recent 5,000), and a scrubber that strips message bodies to a whitelist of known error codes before insert. This stays inside the existing Supabase footprint, adds no dependency, respects §12.3, and keeps PII in the one database that already holds it.
+
+The second option also gives O21 (CSP violation reporting) a destination for free.
+
+**On O5 — the ledger, not the member table, is the urgent case.** [SECURITY.md](SECURITY.md) §3.7 scopes the audit-trail gap to `members`. But `collections` enforces a 3-hour edit window, permits in-window `UPDATE` and `DELETE`, and records **no `created_by` at all** (`expenses` does). The system therefore cannot answer "who changed this amount, from what, to what, and when" for the one table where that question is guaranteed to be asked. The planned discrepancy workflow (§9.15) has no substrate to build on until this exists. A trigger-written, append-only `collections_history` table is the conventional answer and costs one migration.
+
+### 14.2 Availability — nothing detects failure
+
+| ID | Gap | Detail |
+|---|---|---|
+| O7 | No uptime monitoring, no health check | Supabase free tier **auto-pauses after 7 days of inactivity** ([README](../README.md) documents the unpause click). A church dashboard is plausibly idle for a week. The first signal that the system is down is currently a phone call on a Sunday morning. |
+| O8 | No degraded-mode UX | When Supabase is unreachable, each view renders its own inline error string. There is no app-level banner, no distinction between "you are offline", "the database is paused", and "your session expired". |
+| O9 | No retry or backoff | `supabase-js` does not retry by default. One dropped request during a Sunday count surfaces as a hard failure to a volunteer mid-entry. |
+| O10 | No offline tolerance | Collections are entered on-site, on church wifi, on a phone. There is not even a `navigator.onLine` check before a submit that is certain to fail. |
+
+O7's $0 fix is an external pinger (UptimeRobot / Better Stack free tiers) against the Netlify URL plus a tiny static route that performs one cheap authenticated-free query, so that a paused database registers as *down* rather than as *a white page that loads fine*.
+
+### 14.3 Durability — the system cannot currently be rebuilt
+
+This is the most serious finding in §14.
+
+| ID | Gap | Detail |
+|---|---|---|
+| O11 | No backup beyond platform defaults | Free-tier Supabase provides daily backups with short retention and **no PITR** (confirm current terms). No `pg_dump` runs anywhere, and no restore has ever been tested. |
+| O12 | **Clean-room rebuild is impossible** | See below. |
+| O13 | No seed / fixture path | A fresh environment cannot be brought to a working state without hand-editing production-shaped data. This is also why §14.4's staging gap is hard to close. |
+| O14 | No retention or erasure policy | Cross-ref [SECURITY.md](SECURITY.md) §3.10. Soft delete is forever; there is no hard-delete path and no documented subject-access or erasure procedure. Under the PH **Data Privacy Act (RA 10173)** the church is a personal information controller for this data, which makes retention an obligation rather than a preference. |
+
+**O12 in detail.** Two facts already documented separately combine into something worse than either:
+
+1. `0006_baseline_rls` is a **record of live state that must not be executed** ([README](../README.md)).
+2. The trigger on `auth.users` calling `handle_new_user()`, and the event trigger calling `rls_auto_enable()`, exist in **no migration** ([SECURITY.md](SECURITY.md) §3.13).
+
+Therefore `prisma/migrations/` cannot reconstruct a working database, and the one migration that describes the missing security state is explicitly non-runnable. If the Supabase project were lost tomorrow, recovery would depend on a backup that has never been restore-tested (O11) plus institutional memory of manual dashboard steps. **The repository is not currently a sufficient disaster-recovery artifact.** Closing this requires (a) an idempotent `scripts/sql/bootstrap-triggers.sql` covering the two out-of-schema triggers, (b) a scheduled `pg_dump` to a GitHub Actions artifact, and (c) one documented, dated restore drill.
+
+### 14.4 Environments & release safety
+
+| ID | Gap | Detail |
+|---|---|---|
+| O15 | No staging | [README](../README.md) states this outright. RLS changes — the highest-blast-radius change type in this architecture — go straight to production with `rollback.sql` open in another tab. A second free Supabase project costs $0. |
+| O16 | Deploy ordering is human memory | The README requires DB migrations to land before the matching SPA release. Nothing enforces it; the failure mode is a live column-not-found error. |
+| O17 | Netlify builds are not gated on CI | [ci.yml](../.github/workflows/ci.yml) runs `test` + `build`, but Netlify builds on push independently unless configured otherwise — verify the dashboard setting. A red build can currently ship. |
+| O18 | No version tag, changelog, or rollback runbook | Netlify supports instant rollback to a prior deploy; nobody has written down that this is the procedure, so it will not be found under pressure. |
+| O19 | No secret rotation runbook | No documented procedure or trigger condition for rotating `VITE_SUPABASE_ANON_KEY`, `DATABASE_URL`, or `DIRECT_URL`, and no statement of who holds a service-role key (if anyone). |
+
+### 14.5 Supply chain & runtime abuse
+
+| ID | Gap | Detail |
+|---|---|---|
+| O20 | No dependency scanning | Cross-ref [SECURITY.md](SECURITY.md) §3.8. Dependabot and `npm audit --audit-level=high` in CI are both free and are a one-file change each. |
+| O21 | CSP violations are silent | [netlify.toml](../netlify.toml) sets a genuinely strict CSP but no `report-uri` / `report-to`, so a blocked injection attempt produces no signal anywhere. Point it at the O4 sink. |
+| O22 | No mutation throttling | RLS authorizes but does not rate-limit. A single compromised staff credential can enumerate the congregation or write unbounded ledger rows at API speed. Supabase Auth rate limits are dashboard configuration and are unreviewed (cross-ref [SECURITY.md](SECURITY.md) §3.6). |
+
+### 14.6 Engineering hygiene — the guardrails that catch regressions
+
+| ID | Gap | Detail |
+|---|---|---|
+| O23 | No linter or formatter | No ESLint, no Prettier, no `lint` script. §3 notes the absence as a stack fact; the consequence is that `eslint-plugin-vue` catches an entire class of template bugs — unused refs, missing `:key`, unresolved component names, typo'd bindings — that Vitest structurally cannot, because those files are never mounted. |
+| O24 | Component tests are impossible today | [vitest.config.js](../vitest.config.js) sets `environment: 'node'` and `@vue/test-utils` is not installed. Coverage is therefore inverted against risk: pure date helpers are well tested, while the archive flow, the modal state machine, the 3-hour lock path, and finance gating — every RLS-dependent path — have none. |
+| O25 | No type checking | Cross-ref §9.7. Not proposed as a migration; noted because O23/O24 partially compensate and should be weighed first. |
+
+O24's fix is `npm i -D jsdom @vue/test-utils` plus `environment: 'jsdom'`. The first three tests worth writing, in order: archive removes the row and closes the modal; an out-of-window edit surfaces `EDIT_WINDOW_CLOSED_MESSAGE` rather than a silent success (this is the [mutationResult.js](../src/utils/mutationResult.js) contract, currently only unit-tested in isolation); a non-finance user does not see `FundsTabs` links.
+
+### 14.7 Minimum viable operational baseline
+
+If only a subset is done, do these — ordered by consequence-if-skipped, all $0:
+
+1. **O12 + O11** — bootstrap script for the out-of-schema triggers, scheduled `pg_dump`, one dated restore drill. Without this, every other item is moot, because a bad day ends the project.
+2. **O5 (ledger audit)** — `collections_history`, trigger-written. Cheapest now, impossible to backfill later.
+3. **O7** — external uptime check. Turns "a volunteer noticed on Sunday" into "we knew on Thursday".
+4. **O4 + O2/O3** — the in-stack error sink plus global handlers. Ends the current state of learning about failures socially.
+5. **O15** — a second free Supabase project as staging, which also gives O13 somewhere to matter.
+6. **O20 + O17** — Dependabot, `npm audit` in CI, and gate the Netlify deploy on a green build.
+7. **O23 + O24** — ESLint and a jsdom test environment, so the fixes above stay fixed.
+
+**Security cross-reference.** The items with a security dimension are filed in [SECURITY.md](SECURITY.md) §3.14–§3.20 with threat-model context and verification steps: D4 → §3.14, D5/D6 → §3.15, O5 → §3.16, O21 → §3.17, O22 → §3.18, O12 → §3.19, O17/O19 → §3.20. §5.1 there records the reclassification of error monitoring from Tier 3 to Tier 1 on the strength of the free in-stack option described in §14.1 above.
+
+### 14.8 Relationship to §0 priorities
+
+None of §14 conflicts with priority 1 — every item above has a free path, and O2/O6/O22 actively *protect* the cost line by making budget-breaching regressions visible before they arrive as a bill. Where a paid option exists (Sentry, PITR, Cloudflare per [SECURITY.md](SECURITY.md) §5.3), the free in-stack alternative is named so that the decision stays an owner's choice rather than a default.

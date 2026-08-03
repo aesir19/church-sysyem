@@ -5,6 +5,8 @@
 > **Scope.** Public-internet deployment of an internal-organization tool: Vue 3 SPA on Netlify + Supabase (Postgres + Auth + RLS). No custom backend, no Edge/Netlify Functions.
 >
 > **Audience.** The repository owner and any AI/human contributor proposing changes. Every mitigation below is annotated with cost and effort so trade-offs are explicit.
+>
+> **Audit 2026-08-03.** A full-codebase architecture review added findings **§3.14–§3.20** and reclassified **§5.1** (error monitoring) from Tier 3 to Tier 1 after identifying a $0 in-stack implementation. The non-security findings from the same review are in [ARCHITECTURE.md](ARCHITECTURE.md) §13 (confirmed defects) and §14 (operational readiness); the two documents cross-reference by ID.
 
 ---
 
@@ -31,6 +33,14 @@ The findings below are sorted by impact × likelihood within the current threat 
 | 8 | No dependency-update automation; `npm audit` not in CI | Medium | Repo settings — §3.8 |
 | 9 | Placeholder Supabase URL fallback in [supabase.js](../src/lib/supabase.js) silently runs the app against a domain we don't own | Medium | §3.9 |
 | 10 | No data-retention policy; soft-deleted PII is kept forever | Medium | Supabase — §3.10 |
+| 10a | Finance authorization binds to a **mutable group display name**; `user_accounts.role` is a decoy | **High** — open | [router/index.js](../src/router/index.js), [useFinanceMember.js](../src/composables/useFinanceMember.js) — §3.14 |
+| 10b | Client identity state survives sign-out — next user inherits the previous user's finance flag | Medium — open | [useFinanceMember.js](../src/composables/useFinanceMember.js) — §3.15 |
+| 10c | **No audit trail on the financial ledger** — `collections` has no `created_by` at all | **High** — open | Supabase schema — §3.16 |
+| 10d | CSP violations are unreported — a blocked injection attempt produces no signal | Low — open | [netlify.toml](../netlify.toml) — §3.17 |
+| 10e | No throttling on authenticated mutation paths | Medium — open | Supabase — §3.18 |
+| 10f | **The repository cannot rebuild the system** — DR depends on undocumented manual steps | **High** — open | §3.19 (extends §3.13) |
+| 10g | Deploys are not gated on CI; no secret-rotation runbook | Medium — open | Netlify / repo settings — §3.20 |
+| 10h | No error monitoring — **reclassified from Tier 3**, a $0 in-stack path exists | Medium — open | §5.1 |
 
 ### Tier 2 — Free but add minor friction
 
@@ -86,15 +96,15 @@ Mapped to the [OWASP Top 10 (2021)](https://owasp.org/www-project-top-ten/).
 
 | OWASP | Status today | Notes |
 |---|---|---|
-| A01 — Broken Access Control | **Partial** | RLS is the only line of defense; `churches` is too permissive and `user_accounts` still needs remote verification. Group definitions and memberships now have source-controlled tenant policies. |
+| A01 — Broken Access Control | **Partial** | RLS is the only line of defense; `churches` is too permissive and `user_accounts` still needs remote verification. Group definitions and memberships now have source-controlled tenant policies. **Added 2026-08-03:** finance authorization keys on a user-editable group name (§3.14), and client-side entitlement state survives sign-out (§3.15). |
 | A02 — Cryptographic Failures | **OK** | HTTPS everywhere; bcrypt by Supabase; no plaintext secrets in repo. JWT-in-localStorage is a transport-layer concern, covered under A07. |
 | A03 — Injection | **OK** | PostgREST parameterizes queries; Vue auto-escapes interpolation; no `v-html` or `innerHTML` usage. (See §4.1 for a future-risk note.) |
-| A04 — Insecure Design | **Partial** | No MFA; no rate-limit/CAPTCHA on sign-in; no audit trail; soft-delete only (no purge). |
+| A04 — Insecure Design | **Partial** | No MFA; no rate-limit/CAPTCHA on sign-in; no audit trail; soft-delete only (no purge). **Added 2026-08-03:** the financial ledger permits in-window edit and delete while recording no actor (§3.16), and no mutation path is throttled (§3.18). |
 | A05 — Security Misconfiguration | **Weak** | No HTTP security headers; default Supabase Auth settings; placeholder URL fallback in client code. |
 | A06 — Vulnerable Components | **Partial** | Dependencies are current as of writing, but no automated scanning, no CI, no Dependabot. |
 | A07 — Identification & Auth Failures | **Weak** | No MFA, no CAPTCHA, no leaked-password protection, JWT in `localStorage` (XSS-exfiltratable). |
-| A08 — Software & Data Integrity | **OK** | Vite-bundled SDK, content-hashed assets, immutable cache. No external runtime scripts. |
-| A09 — Logging & Monitoring | **Weak** | No app-level logging or alerting; Supabase logs are not aggregated. |
+| A08 — Software & Data Integrity | **Partial** (was OK) | Vite-bundled SDK, content-hashed assets, immutable cache, no external runtime scripts. **Revised 2026-08-03:** CI is advisory rather than gating, so an untested commit can reach production (§3.20), and the repository cannot reconstruct the database it deploys against (§3.19). |
+| A09 — Logging & Monitoring | **Weak** | No app-level logging or alerting; Supabase logs are not aggregated. **Added 2026-08-03:** no global error handler in [main.js](../src/main.js), so client-side failures are unobservable by any channel (§5.1); CSP violations are unreported (§3.17); no uptime monitoring, so free-tier auto-pause is detected by a user phoning in ([ARCHITECTURE.md](ARCHITECTURE.md) §14.2). |
 | A10 — SSRF | **N/A** | No server-side fetch surface. |
 
 ---
@@ -547,6 +557,162 @@ Recreating a trigger on `auth.users` requires elevated privileges and may not su
 
 ---
 
+### 3.14 Finance authorization binds to a mutable display name — High
+
+**Finding.** There are two role models in the schema and the wrong one is authoritative.
+
+`user_accounts.role` exists with `DEFAULT 'unassigned'` and is **read by no code in `src/`**. Actual finance authorization — in the router guard ([router/index.js:87](../src/router/index.js#L87)), in the UI composable ([useFinanceMember.js:18](../src/composables/useFinanceMember.js#L18)), and in the `is_finance_member()` policy helper added by `0008` — asks whether the caller's member row belongs to a group whose `name` equals the literal string `'Finance Team'`.
+
+Group names are user-editable through the Ministries & Small Groups screen. The consequences:
+
+1. **Renaming that group silently revokes finance access for every user of that church.** No error, no audit entry, no obvious cause. Under §3.16 (no ledger audit trail) there is also no record of who renamed it.
+2. **Authorization state is mutable by a lower-privileged action than the one it gates.** A user who may edit group names thereby controls who may write the financial ledger. That is a privilege-escalation-adjacent shape even if no current user can exploit it usefully.
+3. `0004` makes ministry names globally unique but small-group names unique only per church, so the blast radius depends on `groups.type` — an implementation detail no reader of the policy would expect to matter.
+
+**Threat model.** T2 (authenticated low-privilege user). Not remotely exploitable, and RLS still confines every read to the caller's church — but it makes the authorization boundary depend on a display string, which is the wrong kind of thing to depend on.
+
+**Mitigation (free).** Pick one authority and delete the other. Either:
+
+- **Promote `user_accounts.role`** — rewrite `is_finance_member()` to read it, and drop the group-name lookup from both the guard and the composable; or
+- **Add an immutable key to `groups`** — a `slug` or `is_system boolean` column, keyed on by the policy, with an `UPDATE` policy that forbids changing it.
+
+The second is closer to the current data model and preserves "finance team is a group you belong to" as the mental model. Whichever is chosen, the loser must be dropped rather than left in place — a column that looks authoritative and is not is a trap for the next contributor.
+
+**Cost.** $0. One migration + one policy rewrite.
+
+---
+
+### 3.15 Client identity state outlives the session — Medium
+
+**Finding.** `isFinance` and `loaded` in [useFinanceMember.js:4](../src/composables/useFinanceMember.js#L4) are declared at **module scope**, outside the exported factory, so they are process-global for the life of the page. Sign-out (`supabase.auth.signOut()` followed by `router.push('/login')`) is SPA navigation with no reload, so the module is never re-evaluated.
+
+A second user signing in on the same browser tab therefore inherits the first user's finance flag: `FundsTabs` renders the Collections and Expenses links, and the contributors section renders in the funds report.
+
+**What this is not.** This is **not a data leak**. `0008` and `0009` enforce finance authorization server-side, and the router guard re-queries `hasFinanceRole()` on every navigation, so the second user cannot actually read or write anything they shouldn't. The damage is that the UI asserts an entitlement the server will refuse — which erodes trust in the authorization model and generates support noise indistinguishable from a real breach.
+
+**Related.** The single `onAuthStateChange` listener ([router/index.js:69](../src/router/index.js#L69)) handles only `PASSWORD_RECOVERY`. On refresh-token expiry the user sees a raw `JWT expired` string in an inline error box rather than being returned to sign-in — a §3.5-class information disclosure with a worse UX.
+
+**Mitigation (free).** One session-scoped identity store subscribed to `onAuthStateChange`, cleared on `SIGNED_OUT` and on refresh failure, holding `{ churchId, churchName, linked, isFinance }`. This also closes [ARCHITECTURE.md](ARCHITECTURE.md) §13 D7 (2–4 auth round trips per navigation, a §12.3 budget item), so the security fix and the cost fix are the same change.
+
+**Cost.** $0, and net-negative egress.
+
+---
+
+### 3.16 No audit trail on the financial ledger — High
+
+**Finding.** §3.7 scopes the audit-trail gap to `members`. The more serious case is `collections`:
+
+| | `expenses` | `collections` |
+|---|---|---|
+| `created_by` | present | **absent** |
+| `created_at` | present | present |
+| `updated_by` / `updated_at` | absent | absent |
+| In-window `UPDATE` allowed | — | **yes** (3 h, per `0008`) |
+| In-window `DELETE` allowed | — | **yes** (3 h, per `0008`) |
+
+So the one table that permits destructive edits by design records nothing about who performed them. The system cannot answer *"who changed this amount, from what, to what, and when"* — the first question anyone asks about a financial discrepancy, and the entire premise of the planned Report Discrepancy workflow ([ARCHITECTURE.md](ARCHITECTURE.md) §9.15), which has no substrate to build on until this exists.
+
+The 3-hour window is a *containment* control, not an accountability one: it bounds how long a row stays mutable, but within that window an edit is invisible after the fact.
+
+**Threat model.** T2 and T4 — a compromised or misused staff credential can alter recorded giving within the window and leave no trace. Given one-user-per-church (§9.8), the person best positioned to do this is also the only person who would notice.
+
+**Mitigation (free).** Append-only history, trigger-written, so the frontend needs no changes and cannot forge entries:
+
+```sql
+alter table public.collections
+  add column if not exists created_by uuid default auth.uid();
+
+create table if not exists public.collections_history (
+  id           bigserial primary key,
+  collection_id bigint not null,
+  op           text    not null check (op in ('UPDATE','DELETE')),
+  old_amount   numeric(12,2),
+  new_amount   numeric(12,2),
+  changed_by   uuid    not null,
+  changed_at   timestamptz not null default now()
+);
+alter table public.collections_history enable row level security;
+-- no INSERT/UPDATE/DELETE policy for `authenticated`: the trigger writes as definer,
+-- application roles can never write or rewrite history.
+```
+
+Pair with a `SECURITY DEFINER` trigger on `collections` for `UPDATE` and `DELETE`. Grant `SELECT` only to whichever role §3.14 settles on as the finance authority.
+
+**Note on ordering.** `collections.amount` is currently `real` (4-byte float) — [ARCHITECTURE.md](ARCHITECTURE.md) §13 D1. Fix that to `numeric(12,2)` **before** adding history, or the history table faithfully records drifting values.
+
+**Cost.** ~40 bytes per mutation. Negligible against the 500 MB ceiling; mutations are rare by design.
+
+---
+
+### 3.17 CSP violations are silent — Low
+
+**Finding.** [netlify.toml](../netlify.toml) sets a genuinely strict policy — `default-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`, no `unsafe-eval`. But it carries no `report-uri` or `report-to` directive, so when the policy blocks something, nothing is recorded anywhere.
+
+The CSP is the primary compensating control for §3.4 (JWT in `localStorage`). Today it is doing that job blind: a blocked injection attempt — the exact event that would tell you §3.4's residual risk had become real — is indistinguishable from a quiet afternoon.
+
+**Mitigation (free).** Add `report-uri` pointing at the §5.1 in-stack sink once it exists. `report-to` requires a companion `Reporting-Endpoints` header; `report-uri` alone is deprecated but still the most widely honoured, so emit both.
+
+**Cost.** $0 — same table as §5.1.
+
+---
+
+### 3.18 No throttling on authenticated mutation paths — Medium
+
+**Finding.** RLS answers *may this principal touch this row* but says nothing about *how often*. Once authenticated, a client may issue reads and writes at API speed. There is no application-level throttle, no Supabase-side quota beyond platform defaults, and no WAF (§5.3 remains unadopted).
+
+Concretely, a single stolen credential (T4) can enumerate the entire congregation's PII at line rate, or write unbounded rows into `collections` and `expenses` — the latter being both a data-integrity attack and a §12 cost attack, since the free-tier egress and storage budgets are what stand between this project and a bill.
+
+Supabase Auth's own sign-in rate limits are dashboard configuration and are listed as unreviewed under §3.6.
+
+**Mitigation (free, partial).**
+1. Review and tighten Supabase Auth rate limits alongside the §3.6 hardening — same dashboard visit.
+2. For the ledger tables, a `BEFORE INSERT` trigger enforcing a per-user ceiling (e.g. 100 rows/minute) costs one function and converts an unbounded write into a bounded one. Choose the ceiling well above realistic Sunday entry rates.
+3. Add egress and row-count anomalies to the §6 monthly checklist so a slow-burn abuse shows up.
+
+Full edge rate limiting requires §5.3 (Cloudflare) and remains a Tier 3 decision.
+
+**Cost.** $0 for all three steps above.
+
+---
+
+### 3.19 The repository cannot rebuild the system — High
+
+**Finding.** This extends §3.13. Two separately-documented facts combine into something worse than either:
+
+1. `0006_baseline_rls` is a **record of live state that must not be executed** — it was registered with `prisma migrate resolve --applied` and never run ([README.md](../README.md)).
+2. The trigger on `auth.users` calling `handle_new_user()` and the event trigger calling `rls_auto_enable()` exist in **no migration** (§3.13).
+
+Therefore: `prisma/migrations/` cannot reconstruct a working database, and the one migration that describes the missing security state is by design non-runnable. Add that no `pg_dump` runs anywhere and no restore has ever been tested ([ARCHITECTURE.md](ARCHITECTURE.md) §14.3 O11), and recovery from a lost Supabase project depends on institutional memory of manual dashboard steps.
+
+**Why this is a security finding and not merely an operational one.** Availability and integrity are security properties. §3.13 already notes that a missing `rls_auto_enable()` event trigger means new tables are created *without RLS* — so a hand-rebuilt database is not just incomplete, it is **insecure in a way that produces no error**. The rebuild would appear to work. That failure mode is the reason this is filed High rather than Medium.
+
+**Mitigation (free).**
+1. `scripts/sql/bootstrap-triggers.sql` — idempotent, covering both out-of-schema triggers, captured via the queries already given in §3.13.
+2. A scheduled `pg_dump` to a GitHub Actions artifact (private repo, restricted retention — the dump contains the full congregation's PII, so treat the artifact as production data and do not widen repo visibility while this exists).
+3. **One dated restore drill**, recorded in [README.md](../README.md). An untested backup is not a backup.
+4. Extend `scripts/sql/capture-security-state.sql` to assert the two triggers exist, so drift is detected by the existing tooling rather than by an incident.
+
+**Cost.** $0. Artifact storage is within the GitHub free allowance at this data size.
+
+---
+
+### 3.20 Release integrity — deploys are not gated, secrets have no rotation path — Medium
+
+**Finding.** Three gaps in the path from commit to production:
+
+1. **CI is advisory.** [ci.yml](../.github/workflows/ci.yml) runs `npm test` and `npm run build` on PRs and pushes to `main`, but Netlify builds from the repository independently. Unless the Netlify dashboard is configured otherwise — **verify this** — a commit whose tests fail still deploys. The guard exists and is not wired to anything.
+2. **Migration ordering is enforced by human memory.** [README.md](../README.md) requires database migrations to land before the matching SPA release. Nothing checks it. The failure mode is a live `column does not exist` error for every user, and it is most likely during exactly the §13 D1/D2 schema work this audit recommends.
+3. **No secret-rotation runbook.** There is no documented procedure or trigger condition for rotating `VITE_SUPABASE_ANON_KEY`, `DATABASE_URL`, or `DIRECT_URL`, and no written statement of whether a service-role key exists or who holds it. §1 asserts the frontend never references one; that is a code fact, not an inventory.
+
+**Mitigation (free).**
+1. Gate the Netlify build on the GitHub check, or move deployment into the existing workflow so a red build cannot ship.
+2. Add `npm run prisma:migrate:status` to CI and fail the job when the working tree expects a migration that is not deployed.
+3. Write a short rotation runbook in [README.md](../README.md): what to rotate, in what order, what breaks during the window, and the trigger conditions (staff departure, suspected exposure, annual). Include an explicit line recording whether a service-role key exists.
+
+**Cost.** $0.
+
+---
+
 ## 4. Tier 2 findings (free, lower-impact)
 
 ### 4.1 Unvalidated `facebook_link` URL scheme — Low (latent)
@@ -615,14 +781,40 @@ Vite copies `public/` verbatim to the build output. Update the `Expires` date ye
 
 ## 5. Tier 3 findings (cost trade-offs)
 
-### 5.1 No security/error monitoring
+### 5.1 No security/error monitoring — **reclassified to Tier 1 (2026-08-03)**
 
-**Decision needed.** Sentry / Logflare / Bugsnag have free tiers but each adds:
-- ~50–100 KB to the JS bundle (every uncached visit re-downloads it).
-- A third-party `connect-src` entry in CSP.
-- A privacy footprint (errors include URL paths, user agent, sometimes user IDs).
+**Original position (retained for the record).** Sentry / Logflare / Bugsnag have free tiers but each adds ~50–100 KB to the JS bundle, a third-party `connect-src` entry in CSP, and a privacy footprint (errors include URL paths, user agent, sometimes user IDs). The recommendation was to defer until a real incident would have been caught by it, leaning on the Supabase Logs and Netlify deploy panels in the meantime.
 
-**Recommendation.** Defer until there is a real incident this would have caught. In the meantime, the Supabase Logs panel + Netlify deploy logs cover the vast majority of "what went wrong" questions for a single-tenant tool. If adopted later, prefer a self-hosted [Logflare](https://logflare.app) Postgres sink that lives in the same Supabase project — keeps everything inside the existing account.
+**Why this was reconsidered.** The original analysis evaluated *vendor* monitoring and correctly rejected it on cost and privacy. It did not consider an in-stack option, and so a Tier 3 "costs money" verdict was recorded for a capability that is available for $0. Two further facts sharpen this:
+
+1. **The premise that Supabase Logs cover it does not hold for client-side failures.** Supabase sees requests that arrive. It cannot see a render-time throw, an `unhandledrejection`, a CSP violation (§3.17), or any failure that prevents the request from being made. [main.js](../src/main.js) sets no `app.config.errorHandler`, so a render error is a white screen recorded nowhere. The current detection channel for these is a staff member choosing to mention it.
+2. **Several controls in this document are unobservable without a sink.** §3.17 CSP reports, §3.18 abuse signals, and §3.6's credential-stuffing detection all need somewhere to land. Deferring the sink defers the evidence for those too.
+
+**Mitigation (free, in-stack, no new processor).** A bounded table in the existing Supabase project:
+
+```sql
+create table if not exists public.client_errors (
+  id         bigserial primary key,
+  occurred_at timestamptz not null default now(),
+  kind       text not null check (kind in ('render','unhandled','csp','network')),
+  code       text,                    -- whitelisted code, never a raw message
+  route      text,
+  user_id    uuid default auth.uid()
+);
+alter table public.client_errors enable row level security;
+-- INSERT only for `authenticated`; no SELECT grant to application roles.
+-- Reading is an operator action via the SQL editor.
+```
+
+Three constraints make this safe and free:
+
+- **Scrub before insert.** Send a whitelisted `code`, never `error.message`. Raw Supabase messages are §3.5's information-disclosure finding; writing them to a table the client can insert into would relocate that problem rather than solve it, and could persist member PII from constraint-violation text.
+- **Cap the rows.** A trigger keeping the most recent ~5,000 bounds both storage (§12 budget) and the value of the table to an attacker who obtains a credential (§3.18 — an insert-only endpoint is a log-flooding target).
+- **No `SELECT` for `authenticated`.** Insert-only from the browser; operators read via the SQL editor.
+
+**Cost.** $0, no new dependency, no bundle growth beyond a few hundred bytes of handler code, and no data leaving the account that already holds the PII.
+
+**Remaining Tier 3 decision.** Whether to *additionally* adopt Sentry for stack traces and release tracking. The trade-offs in the original position above are unchanged and still argue against it; the in-stack sink covers detection, which was the part that mattered.
 
 ---
 
@@ -670,6 +862,20 @@ A monthly 10-minute review keeps the posture from drifting:
 - [ ] Open Dependabot PRs reviewed and merged.
 - [ ] [README.md](../README.md) free-tier health checklist (egress, bandwidth, DB size) — see [ARCHITECTURE.md](ARCHITECTURE.md) §12.4 thresholds.
 
+Added by the 2026-08-03 audit:
+
+- [ ] **Finance group name unchanged.** `select name from public.groups where name = 'Finance Team'` still returns a row per church that needs finance access — until §3.14 removes the name dependency, a rename is a silent outage.
+- [ ] **`client_errors` reviewed** (once §5.1 lands): scan for repeated `csp` rows (injection attempts) and `network` spikes (§3.18 abuse signal). Confirm the row cap is holding.
+- [ ] **Backup exists and is recent.** Confirm the scheduled `pg_dump` artifact from §3.19 ran; check its age against the retention window.
+- [ ] **Uptime monitor is green** and actually alerting — confirm it detects a paused project, not just a served `index.html`.
+- [ ] **CI is gating, not advisory.** Netlify's deploy settings still require the GitHub check to pass (§3.20).
+- [ ] **Triggers still present.** `scripts/sql/capture-security-state.sql` reports both §3.13 triggers; investigate immediately if either is missing after a Supabase platform upgrade.
+
+Annually:
+
+- [ ] **Secret rotation** per the §3.20 runbook, plus a re-read of who holds a service-role key.
+- [ ] **Restore drill** — restore the §3.19 dump into a throwaway project and confirm the app boots against it. Record the date.
+
 ---
 
 ## 7. Verification matrix
@@ -686,6 +892,14 @@ A monthly 10-minute review keeps the posture from drifting:
 | §3.8 Deps | Dependabot PR opened on a deliberately out-of-date dep; CI `npm audit` job runs on PR. |
 | §3.9 Placeholder | Build with env vars unset → app refuses to start with a clear error. |
 | §3.10 Retention | Erasure SQL playbook present in [README.md](../README.md); test a hard-delete on a throwaway record removes it from all four tables. |
+| §3.14 Finance authz | Rename the finance group in the UI → confirm finance access is **unaffected**. Under the current build it is revoked, which is the defect. Then confirm `user_accounts.role` is either authoritative or dropped. |
+| §3.15 Identity state | Sign in as a finance user, sign out, sign in as a non-finance user **in the same tab without reloading** → `FundsTabs` must not render Collections/Expenses links. Separately, expire the JWT and confirm redirect to `/login` rather than a raw `JWT expired` string. |
+| §3.16 Ledger audit | Record a collection, edit it in-window, delete another in-window → `collections_history` holds one `UPDATE` row with both old and new amounts and one `DELETE` row, each with the correct `changed_by`. Then confirm `authenticated` cannot `INSERT`, `UPDATE`, or `DELETE` that table directly. |
+| §3.17 CSP reports | Temporarily add an inline `<script>` to a built page → a `csp` row appears in the sink. Remove it. |
+| §3.18 Throttling | Script >100 `collections` inserts in a minute as one user → the trigger rejects the excess. Confirm a realistic Sunday entry rate stays well under the ceiling. |
+| §3.19 Recovery | Restore the latest dump into a throwaway Supabase project, run `bootstrap-triggers.sql`, sign in → the dashboard shows data (proves `handle_new_user()`), and `create table t(...)` lands with `relrowsecurity = true` (proves `rls_auto_enable()`). Record the drill date. |
+| §3.20 Release | Push a commit with a deliberately failing test → Netlify must **not** publish. Deploy a schema-dependent build without its migration → CI `prisma:migrate:status` must fail the job. |
+| §5.1 Monitoring | Throw inside a view's `setup()` → a `render` row appears in `client_errors` with a whitelisted code and **no raw message or PII**. Insert >5,000 rows → the cap trigger holds. Confirm `authenticated` has no `SELECT` grant. |
 
 ---
 
