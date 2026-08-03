@@ -69,3 +69,19 @@ JOIN pg_namespace n ON n.oid = c.relnamespace
 LEFT JOIN information_schema.role_usage_grants r ON r.object_name = c.relname
 WHERE n.nspname = 'public' AND c.relkind = 'S'
 ORDER BY c.relname, r.grantee;
+
+-- 9. Views and their security_invoker setting. Query 2 cannot show these — it
+-- filters relkind = 'r' (ordinary tables) and a view is 'v'.
+--
+-- READ THIS COLUMN. A view over an RLS-protected table runs as its OWNER unless
+-- security_invoker is on, which silently returns rows the caller's policies would
+-- have filtered. Nothing warns, and the view looks correct until a second church
+-- has data. Every row here must show security_invoker=on. See docs/SECURITY.md
+-- §3.21 and 0012_collectives_service_totals.
+SELECT c.relname,
+       c.reloptions,
+       pg_get_viewdef(c.oid, true) AS definition
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm')
+ORDER BY c.relname;

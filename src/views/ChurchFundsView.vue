@@ -8,7 +8,7 @@
           <p class="page-subtitle">Monthly collectives report</p>
         </div>
         <div class="page-header-actions">
-          <span class="stat-badge">{{ report.weeks.length }} services</span>
+          <span class="stat-badge">{{ report.weeks.length }} service dates</span>
           <button class="btn-secondary" @click="handlePrint" title="Print / Save as PDF">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="6 9 6 2 18 2 18 9"/>
@@ -22,20 +22,7 @@
 
       <FundsTabs />
 
-      <!-- Preview banner -->
-      <div class="preview-banner" role="note">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="12" y1="16" x2="12" y2="12"/>
-          <line x1="12" y1="8" x2="12.01" y2="8"/>
-        </svg>
-        <span>
-          <strong>Preview mode.</strong>
-          Showing sample contribution data mirrored from the DFC summary workbook.
-          Monthly expenses are loaded from live records when available.
-        </span>
-      </div>
-      <p v-if="expensesLoadError" class="load-warning">{{ expensesLoadError }}</p>
+      <p v-if="loadError" class="load-warning">{{ loadError }}</p>
 
       <!-- Month navigator -->
       <div class="report-toolbar card">
@@ -55,8 +42,15 @@
         </button>
       </div>
 
-      <!-- Empty state -->
-      <div v-if="report.weeks.length === 0" class="card">
+      <!-- Loading / empty state. The empty state is gated on loading or it
+           flashes "no collectives" on every month navigation. -->
+      <div v-if="loading" class="card">
+        <div class="state-message">
+          <p>Loading {{ monthLabel }}…</p>
+        </div>
+      </div>
+
+      <div v-else-if="report.weeks.length === 0" class="card">
         <div class="state-message">
           <p>No collectives recorded for {{ monthLabel }}.</p>
         </div>
@@ -155,7 +149,9 @@
                   <td v-for="w in report.weeks" :key="w.date" class="col-num">{{ formatMoney(w.offering) }}</td>
                   <td class="col-num col-total">{{ formatMoney(report.totals.offering) }}</td>
                 </tr>
-                <tr>
+                <!-- `collections` stores only is_tithes, so Others has no live
+                     source and stays hidden until a category column exists. -->
+                <tr v-if="hasOthers">
                   <td class="col-label">Others</td>
                   <td v-for="w in report.weeks" :key="w.date" class="col-num">{{ formatMoney(w.others) }}</td>
                   <td class="col-num col-total">{{ formatMoney(report.totals.others) }}</td>
@@ -213,26 +209,29 @@
               <li class="alloc-row">
                 <span>
                   <span class="alloc-dot dot-orange"></span>
-                  Tithes of Tithes <span class="alloc-pct">10%</span>
+                  Tithes of Tithes <span class="alloc-pct">{{ ratePct.tithesOfTithes }}</span>
                 </span>
                 <span class="alloc-amount neg">− {{ formatMoney(report.totals.tithesOfTithes) }}</span>
               </li>
               <li class="alloc-row">
                 <span>
                   <span class="alloc-dot dot-purple"></span>
-                  Project Fund <span class="alloc-pct">5%</span>
+                  Project Fund <span class="alloc-pct">{{ ratePct.project }}</span>
                 </span>
                 <span class="alloc-amount neg">− {{ formatMoney(report.totals.project) }}</span>
               </li>
               <li class="alloc-row">
                 <span>
                   <span class="alloc-dot dot-teal"></span>
-                  Student Program <span class="alloc-pct">5%</span>
+                  Student Program <span class="alloc-pct">{{ ratePct.studentProgram }}</span>
                 </span>
                 <span class="alloc-amount neg">− {{ formatMoney(report.totals.studentProgramGross) }}</span>
               </li>
+              <!-- No column stores a per-service personal draw, so this stays
+                   hidden with live data. Kept because the calculator supports
+                   it and the paper report has the line. -->
               <li v-if="report.totals.studentProgramDeduction > 0" class="alloc-row alloc-nested">
-                <span class="alloc-nested-label">Less: Personal draw (Ricky)</span>
+                <span class="alloc-nested-label">Less: Personal draw</span>
                 <span class="alloc-amount">+ {{ formatMoney(report.totals.studentProgramDeduction) }}</span>
               </li>
               <li class="alloc-row alloc-subtotal">
@@ -242,14 +241,14 @@
               <li class="alloc-row">
                 <span>
                   <span class="alloc-dot dot-blue"></span>
-                  Pastor's Allowance <span class="alloc-pct">50%</span>
+                  Pastor's Allowance <span class="alloc-pct">{{ ratePct.pastor }}</span>
                 </span>
                 <span class="alloc-amount">{{ formatMoney(report.totals.pastorAllowance) }}</span>
               </li>
               <li class="alloc-row">
                 <span>
                   <span class="alloc-dot dot-green"></span>
-                  Church Allocation <span class="alloc-pct">50%</span>
+                  Church Allocation <span class="alloc-pct">{{ ratePct.church }}</span>
                 </span>
                 <span class="alloc-amount">{{ formatMoney(report.totals.churchAllocation) }}</span>
               </li>
@@ -311,8 +310,8 @@
             <div>
               <h3>Contributors</h3>
               <span class="section-hint">
-                {{ report.contributors.length }} contributors ·
-                anonymous entries are grouped under "Unknown"
+                {{ report.contributors.length }} rows ·
+                each anonymous gift is listed separately
               </span>
             </div>
             <button
@@ -354,16 +353,18 @@
                   <th class="col-label">Name</th>
                   <th class="col-num">Tithes</th>
                   <th class="col-num">Offering</th>
-                  <th class="col-num">Others</th>
+                  <th v-if="hasOthers" class="col-num">Others</th>
                   <th class="col-num col-total">Total</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="c in report.contributors" :key="c.name">
+                <!-- Keyed on `key`, not `name`: several rows legitimately read
+                     "Anonymous", one per gift. -->
+                <tr v-for="c in report.contributors" :key="c.key">
                   <td class="col-label">{{ c.name }}</td>
                   <td class="col-num">{{ formatMoney(c.tithes) }}</td>
                   <td class="col-num">{{ formatMoney(c.offering) }}</td>
-                  <td class="col-num">{{ formatMoney(c.others) }}</td>
+                  <td v-if="hasOthers" class="col-num">{{ formatMoney(c.others) }}</td>
                   <td class="col-num col-total">{{ formatMoney(c.total) }}</td>
                 </tr>
               </tbody>
@@ -372,7 +373,7 @@
                   <td class="col-label">Total</td>
                   <td class="col-num">{{ formatMoney(report.totals.tithes) }}</td>
                   <td class="col-num">{{ formatMoney(report.totals.offering) }}</td>
-                  <td class="col-num">{{ formatMoney(report.totals.others) }}</td>
+                  <td v-if="hasOthers" class="col-num">{{ formatMoney(report.totals.others) }}</td>
                   <td class="col-num col-total">{{ formatMoney(report.totals.totalFunds) }}</td>
                 </tr>
               </tfoot>
@@ -418,29 +419,51 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
-import { computeMonthlyReport } from '../utils/collectivesReport'
-import { SAMPLE_COLLECTIVES } from '../utils/sampleCollectives'
+import { computed, onMounted, ref, watch } from 'vue'
+import { SHARE_OF_TOTAL_FUNDS, computeMonthlyReport } from '../utils/collectivesReport'
 import FundsTabs from '../components/FundsTabs.vue'
 import { supabase } from '../lib/supabase'
-import { getMonthRange } from '../utils/expensesMonth'
+import { defaultMonthKey, getMonthRange, parseMonthKey } from '../utils/expensesMonth'
 import { mergeMonthSourceWithLiveExpenses } from '../utils/reportExpenseMerge'
+import { buildMonthSourceFromCollections, openingBalanceForMonth } from '../utils/collectivesSource'
 import { useFinanceMember } from '../composables/useFinanceMember'
 
 const { isFinance } = useFinanceMember()
 
-// Currently only the sample month is available; other months render as empty.
-// A future PR will replace this with a Supabase-backed lookup keyed by
-// (church_id, year, month).
-const availableMonths = new Map([
-  [`${SAMPLE_COLLECTIVES.year}-${SAMPLE_COLLECTIVES.month}`, SAMPLE_COLLECTIVES],
-])
+// Narrower than COLLECTION_SELECT in CollectionsInputView: the report has no
+// edit window to enforce, so it needs neither created_at nor middle_name.
+// No from_church filter on any query here — RLS scopes every read to the
+// caller's church, as it does in every other view.
+const REPORT_COLLECTION_SELECT =
+  'id, from, amount, is_tithes, collectedOn, members!collections_from_fkey(first_name, last_name)'
 
-const cursor = ref({ year: SAMPLE_COLLECTIVES.year, month: SAMPLE_COLLECTIVES.month })
+const cursor = ref(parseMonthKey(defaultMonthKey()))
 const weeklyExpanded = ref(true)
 const contributorsExpanded = ref(true)
+
+// The whole ledger, one row per service date (see 0012_collectives_service_totals).
+// Fetched once: it is month-independent and small, and re-fetching it on every
+// navigation would trade a few KB for a round trip per click.
+const serviceTotals = ref([])
+const monthCollections = ref([])
 const liveExpenses = ref([])
-const expensesLoadError = ref('')
+
+const loadingLedger = ref(true)
+const loadingMonth = ref(true)
+const loading = computed(() => loadingLedger.value || loadingMonth.value)
+
+// Kept apart so a month that loads cleanly does not clear a standing ledger
+// failure — the two fetches fail independently and mean different things.
+const ledgerError = ref('')
+const monthError = ref('')
+const loadError = computed(() => monthError.value || ledgerError.value)
+
+// Guards against out-of-order responses: clicking prev/next quickly can land an
+// older month's rows after a newer one's, which would render figures under the
+// wrong heading. Declared here rather than beside loadMonth() because the
+// immediate watch below calls that function during setup, before a later `let`
+// would have left its temporal dead zone.
+let monthRequestId = 0
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -450,46 +473,103 @@ const MONTH_NAMES = [
 const monthLabel = computed(() => `${MONTH_NAMES[cursor.value.month - 1]} ${cursor.value.year}`)
 const cursorMonthKey = computed(() => `${cursor.value.year}-${String(cursor.value.month).padStart(2, '0')}`)
 
-watch(cursorMonthKey, async () => {
-  await loadLiveExpenses()
-}, { immediate: true })
+onMounted(loadServiceTotals)
+
+watch(cursorMonthKey, loadMonth, { immediate: true })
 
 const report = computed(() => {
-  const key = `${cursor.value.year}-${cursor.value.month}`
-  const source = availableMonths.get(key) || {
+  const source = buildMonthSourceFromCollections(monthCollections.value, {
     year: cursor.value.year,
     month: cursor.value.month,
-    openingBalance: 0,
-    weeks: [],
-  }
+    // Derived from the ledger rather than stored, so a correction to an older
+    // entry re-derives every balance after it with no month-close step.
+    openingBalance: openingBalanceForMonth(serviceTotals.value, cursorMonthKey.value),
+  })
 
-  const merged = mergeMonthSourceWithLiveExpenses(source, liveExpenses.value)
-  return computeMonthlyReport(merged)
+  return computeMonthlyReport(mergeMonthSourceWithLiveExpenses(source, liveExpenses.value))
 })
 
-async function loadLiveExpenses() {
-  expensesLoadError.value = ''
-  const range = getMonthRange(cursorMonthKey.value)
-  if (!range) {
-    liveExpenses.value = []
-    return
-  }
+async function loadServiceTotals() {
+  loadingLedger.value = true
+  ledgerError.value = ''
 
   const { data, error } = await supabase
-    .from('expenses')
-    .select('spent_on, description, amount')
-    .gte('spent_on', range.start)
-    .lt('spent_on', range.endExclusive)
-    .order('spent_on', { ascending: true })
+    .from('collectives_service_totals')
+    .select('service_date, tithes, offering, expenses')
+    .order('service_date', { ascending: true })
 
   if (error) {
+    serviceTotals.value = []
+    ledgerError.value = 'Unable to load the running balance. Opening balance is shown as zero, so Current Church Funds covers this month only.'
+  } else {
+    serviceTotals.value = data || []
+  }
+
+  loadingLedger.value = false
+}
+
+async function loadMonth() {
+  const requestId = ++monthRequestId
+  loadingMonth.value = true
+  monthError.value = ''
+
+  const range = getMonthRange(cursorMonthKey.value)
+  if (!range) {
+    monthCollections.value = []
     liveExpenses.value = []
-    expensesLoadError.value = `Unable to load live expenses for ${monthLabel.value}. Showing sample expenses only.`
+    loadingMonth.value = false
     return
   }
 
-  liveExpenses.value = data || []
+  const [collectionsResult, expensesResult] = await Promise.all([
+    supabase
+      .from('collections')
+      .select(REPORT_COLLECTION_SELECT)
+      .gte('collectedOn', range.start)
+      .lt('collectedOn', range.endExclusive)
+      .order('collectedOn', { ascending: true }),
+    supabase
+      .from('expenses')
+      .select('spent_on, description, amount')
+      .gte('spent_on', range.start)
+      .lt('spent_on', range.endExclusive)
+      .order('spent_on', { ascending: true }),
+  ])
+
+  if (requestId !== monthRequestId) return
+
+  monthCollections.value = collectionsResult.error ? [] : (collectionsResult.data || [])
+  liveExpenses.value = expensesResult.error ? [] : (expensesResult.data || [])
+
+  if (collectionsResult.error || expensesResult.error) {
+    monthError.value = `Unable to load all records for ${monthLabel.value}. The figures below are incomplete.`
+  }
+
+  loadingMonth.value = false
 }
+
+// Rendered from the rate table rather than typed into the template. The two
+// bottom lines used to read a hardcoded "50%" — true of the remainder, but
+// alongside "10%" and "5%" of total funds it read as half the collection. Derive
+// them and the column adds to 100% by construction.
+const ratePct = Object.fromEntries(
+  Object.entries(SHARE_OF_TOTAL_FUNDS).map(([key, rate]) => [key, formatRate(rate)]),
+)
+
+// Whole numbers for the rates in use; a decimal only if one ever needs it.
+// Rounds before testing for a whole number: the derived shares carry binary
+// float residue (1 − 0.10 − 0.05 − 0.05 is 0.7999999999999999), and the current
+// rates only render cleanly because that residue happens to cancel. Do not rely
+// on the luck — 40% must not become "39.999999999999996%" if a rate changes.
+function formatRate(rate) {
+  const pct = Math.round(rate * 1000) / 10
+  return `${Number.isInteger(pct) ? pct : pct.toFixed(1)}%`
+}
+
+// Nothing in `collections` can populate Others today, so the row and column are
+// hidden rather than shown as a permanent ₱0.00. The calculator still sums the
+// field, so adding a category column later needs no change here.
+const hasOthers = computed(() => report.value.totals.others > 0)
 
 const allocationSegments = computed(() => {
   const t = report.value.totals
@@ -718,24 +798,6 @@ function afterCollapse(el) {
   color: #64748b;
 }
 .state-message.small { padding: 20px 12px; }
-
-/* Preview banner */
-.preview-banner {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  background: #fefce8;
-  border: 1px solid #fde68a;
-  color: #713f12;
-  border-radius: 10px;
-  padding: 12px 14px;
-  font-size: 13px;
-  line-height: 1.5;
-}
-.preview-banner svg {
-  flex-shrink: 0;
-  margin-top: 2px;
-}
 
 .load-warning {
   margin-top: -8px;
@@ -1077,7 +1139,6 @@ function afterCollapse(el) {
 /* Print */
 @media print {
   .page-container { background: #ffffff; padding: 0; }
-  .preview-banner,
   .report-toolbar .nav-btn,
   .page-header-actions { display: none !important; }
   .card { box-shadow: none; border-color: #cbd5e1; page-break-inside: avoid; }

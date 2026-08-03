@@ -96,16 +96,19 @@ dashboard-project/
 ├── README.md                   # Human-facing setup & deployment guide
 ├── prisma/
 │   ├── schema.prisma           # Prisma data model mapped to Supabase Postgres
-│   └── migrations/             # SQL migrations managed by Prisma
+│   └── migrations/             # SQL migrations managed by Prisma (each may carry a rollback.sql)
 ├── prisma.config.js            # Prisma CLI configuration
 ├── scripts/
-│   └── prisma/
-│       ├── check-env.js        # Prisma env preflight checks
-│       └── env-utils.js        # Shared env validation helpers
+│   ├── prisma/
+│   │   ├── check-env.js        # Prisma env preflight checks
+│   │   └── env-utils.js        # Shared env validation helpers
+│   └── sql/
+│       └── capture-security-state.sql  # Read-only audit of policies, grants, functions, views
 ├── public/
 │   └── vite.svg                # Favicon (default Vite asset)
 ├── tests/                      # Unit tests (router guards + security/util logic)
-│   └── prisma/                 # Prisma env validation tests
+│   ├── prisma/                 # Prisma env validation tests
+│   └── views/                  # SSR smoke tests — that a view's setup runs and queries what it should
 └── src/
     ├── main.js                 # createApp(App).use(router).mount('#app')
     ├── App.vue                 # Root component — renders <router-view /> only
@@ -115,10 +118,12 @@ dashboard-project/
     ├── router/
     │   └── index.js            # Routes + global beforeEach auth guard
     ├── utils/
-    │   └── collectivesReport.js # Pure calculator for the monthly collectives report
-    │   └── collectionsDate.js   # Service-date auto-selection + 3-hour edit window check
-    │   └── collectionPayload.js # Collections insert payload + contributor label (Anonymous/Unknown)
-   │   └── expensesMonth.js     # Month parsing and date-range helpers for expenses queries
+    │   ├── collectivesReport.js # Pure calculator for the monthly collectives report
+    │   ├── collectivesSource.js # Live Supabase rows → calculator shapes; opening-balance replay
+    │   ├── reportExpenseMerge.js # Folds live expenses into the report's per-service weeks
+    │   ├── collectionsDate.js   # Service-date auto-selection + 3-hour edit window check
+    │   ├── collectionPayload.js # Collections insert payload + contributor label (Anonymous/Unknown)
+    │   └── expensesMonth.js     # Month parsing and date-range helpers for month-scoped queries
     └── views/
         ├── LoginView.vue       # Email/password sign-in form
         ├── DashboardView.vue   # Members table + sortable columns + details modal
@@ -219,22 +224,25 @@ Renders a **monthly collectives report** modeled after the paper "DFC Summary Re
 
 **Composition:**
 - Funds tab navigation (Reports / Collections / Expenses) shared with the other Church Funds views.
-- Header + preview banner (data source is a sample fixture; Supabase persistence is a follow-up).
-- Month navigator (prev/next).
+- Month navigator (prev/next), opening on the current month via `defaultMonthKey()`.
 - KPI cards: Total Funds, Tithes, Offering, Expenses, Closing Balance.
-- Weekly Breakdown table: one column per service Sunday + a Month total column.
+- Weekly Breakdown table: one column per service date + a Month total column.
 - Allocations panel with a proportional distribution bar.
 - Expenses table (aggregated by description).
-- Contributors table (aggregated by name; anonymous entries grouped as "Unknown"). Note this is fixture behaviour — real anonymous rows carry `from IS NULL` and render as "Anonymous" in Collections. Reconcile the two when this report is wired to live data (§9.14).
+- Contributors table, finance-only. Named givers aggregate into one line each; **anonymous gifts do not — each is its own row**, so the count of anonymous givers and the spread of their amounts both survive into the report. That is the behaviour `0011`'s nullable `from` exists to protect.
 - Rolling balance card: Church Allocation − Expenses + Opening Balance = Current Church Funds.
 - Print stylesheet so the page saves cleanly to PDF via the browser.
 
-**Data flow:**
-- `SAMPLE_COLLECTIVES` fixture in [src/utils/sampleCollectives.js](src/utils/sampleCollectives.js) feeds a `Map` of `"<year>-<month>" → month data`.
-- Live rows from `public.expenses` are loaded month-by-month and merged into the report source via [src/utils/reportExpenseMerge.js](src/utils/reportExpenseMerge.js), replacing fixture expenses for that month when live expenses exist.
+**Data flow — three live reads, no fixture:**
+- **Once on mount:** `public.collectives_service_totals` (§6.6), the whole ledger at one row per service date. [openingBalanceForMonth()](src/utils/collectivesSource.js) replays it through the calculator to derive the selected month's opening balance. Not re-fetched on navigation — it is month-independent and small.
+- **Per month:** `collections` (with the `members` embed) and `expenses`, both range-scoped by [getMonthRange()](src/utils/expensesMonth.js). A request-id guard discards out-of-order responses from fast prev/next clicking. Neither query filters `from_church`; RLS scopes them.
+- `buildMonthSourceFromCollections()` in [src/utils/collectivesSource.js](src/utils/collectivesSource.js) groups collection rows into per-service weeks, labelling each contributor with `contributorLabel()` so "Anonymous" and "Unknown" stay distinct. Expenses are merged in by [src/utils/reportExpenseMerge.js](src/utils/reportExpenseMerge.js); a date with expenses but no service becomes its own week, which is why the header counts **service dates** rather than services.
 - The month cursor drives a `computed` that calls `computeMonthlyReport(...)` from [src/utils/collectivesReport.js](src/utils/collectivesReport.js).
-- All allocation math (10 % tithes-of-tithes, 5 % project, 5 % student program with an optional personal draw, 50/50 pastor/church split of the remainder, expenses off church allocation, opening balance carry) lives in the calculator so the view stays presentational.
-- Contribution lines remain sample-backed for now; expense persistence is live.
+- All allocation math (10 % tithes-of-tithes, 5 % project, 5 % student program with an optional personal draw, 50/50 pastor/church split of the remainder, expenses off church allocation, opening balance carry) lives in the calculator so the view stays presentational **and so there is exactly one source of truth** — this is why the SQL view aggregates but deliberately does not allocate.
+
+**Two denominators, and the panel must show only one.** `ALLOCATION_RATES.pastorShare` / `churchShare` are shares of the **remainder**; the other three rates are shares of **total funds**. 50 % of the 80 % remainder is 40 % of the collection, so the two families describe the same pesos on different bases. The allocation panel used to print the raw `50%` beside `10%` and `5%` of total, which read as half the collection going to each of the last two lines. `SHARE_OF_TOTAL_FUNDS` restates all five against total funds — 10 + 5 + 5 + 40 + 40 = 100 — and the view renders its labels from that rather than from literals, so a rate change cannot silently desynchronise them again. The percentages are **nominal**: a personal draw enlarges the remainder, so realised shares drift above 40 %, and the label describes the rule rather than one month's rounding.
+
+**Two rows are hidden because nothing can populate them.** `collections` stores a single `is_tithes` boolean, so **Others** has no live source; and no column holds a per-service **personal draw**. Both are hidden while zero rather than shown as a permanent ₱0.00. The calculator still computes them, so adding a category column later needs no change in the view. See §9.25.
 
 #### `CollectionsInputView.vue` — [src/views/CollectionsInputView.vue](src/views/CollectionsInputView.vue)
 Data-entry view nested under Church Funds (`/dashboard/funds/collections`). Allows staff to record individual tithes and offerings.
@@ -403,6 +411,25 @@ Prisma is now the source-controlled schema/migration workflow for the existing S
   - `npm run prisma:migrate:deploy` — apply pending migrations to the target database.
   - `npm run prisma:migrate:status` — check migration state.
 
+### 6.6 Views — `public.collectives_service_totals`
+
+The only database view. Added by `0012_collectives_service_totals` to give the monthly report a running balance without downloading the whole ledger.
+
+**What it is.** `collections` and `expenses`, each aggregated to one row per `(from_church, service_date)` and `FULL OUTER JOIN`ed — so a date carrying only collections or only expenses still appears. Roughly 52 rows per church per year. Columns: `from_church, service_date, tithes, offering, expenses`.
+
+**Why a view and not a stored balance.** The report's opening balance is the accumulated net of every prior service. A stored `opening_balance` column would need a "close the month" step and would drift the instant a correction landed behind the close. A view is re-derived on every read, so correcting a three-month-old entry immediately re-derives every balance after it. There is no close step and nothing is ever frozen.
+
+**`security_invoker = on` is load-bearing.** Postgres views run as their *owner* by default, which would bypass `collections_select_own_church` and `expenses_select_own_church` and expose every church's per-date ledger summary to every authenticated user. With invoker semantics the base-table RLS is evaluated as the caller, so the view inherits church scoping and needs no predicate of its own. **Any future view over an RLS-protected table must declare this.** Verify with:
+
+```sql
+SELECT relname, reloptions FROM pg_class WHERE relname = 'collectives_service_totals';
+-- reloptions must contain security_invoker=on
+```
+
+**It aggregates; it does not allocate.** No allocation percentage appears in the SQL. The 10/5/5/50-50 rules live only in [src/utils/collectivesReport.js](src/utils/collectivesReport.js). Duplicating them here would create a second source of truth that disagrees only in the totals, and only sometimes. Keep it that way when extending the view.
+
+**Grants:** `REVOKE ALL ... FROM anon, authenticated` **first**, then `GRANT SELECT TO authenticated`. The revoke is required, not tidy-up: Supabase's default privileges fire on every new object in `public`, so the view is created with full privileges already held by `anon`, and `GRANT` is additive. This is `0009_narrow_grants`' pattern applied to a view — see [SECURITY.md](SECURITY.md) §3.21. The view exposes only per-date sums, never `from`, so it carries no contributor identity.
+
 ---
 
 ## 7. Build, Run, Deploy
@@ -465,7 +492,7 @@ These are **not bugs** but explicit non-features in the current build. If asked 
 3. **No client-side search/filter.**
 4. **No realtime subscriptions** — the table is a static snapshot until page reload. **Intentional** under the free-tier plan (§12.3).
 5. **No global state store** — state lives in component `ref`s; if multiple views need shared data, introduce Pinia rather than prop-drilling.
-6. **No integration/E2E tests yet** — Vitest unit coverage exists for router auth guards plus payload/search/password validation and Supabase bootstrap checks, and GitHub Actions now enforces `npm test` + `npm run build` on pull requests and pushes to `main`. There is still no Playwright/Cypress suite.
+6. **No integration/E2E tests yet** — Vitest unit coverage exists for router auth guards plus payload/search/password validation and Supabase bootstrap checks, and GitHub Actions now enforces `npm test` + `npm run build` on pull requests and pushes to `main`. `ChurchFundsView` additionally has an SSR smoke test with a mocked Supabase client (§14.6 O24). There is still no Playwright/Cypress suite and nothing exercises user interaction.
 7. **No TypeScript** — adding types would require migrating `.vue`/`.js` files and updating `vite.config.js`.
 8. **No multi-church admin role** — RLS assumes exactly one church per user. Cross-church access requires schema and policy changes.
 9. **No error reporting** — errors are surfaced inline; no Sentry/logging integration.
@@ -473,7 +500,13 @@ These are **not bugs** but explicit non-features in the current build. If asked 
 11. **Egress-wasteful list query** — ~~`select('*, churches(name)')` in [DashboardView.vue](src/views/DashboardView.vue) pulls all member columns plus a redundant per-row church name.~~ **Resolved**: `fetchMembers`, `handleCreate`, `handleUpdate` now share an explicit `MEMBER_COLUMNS` list and no longer join `churches(name)`. See §12.5.
 12. **Two serial round-trips on mount** — ~~`fetchMyChurch()` does `rpc('get_my_church_id')` then a follow-up `churches` lookup.~~ **Resolved**: a new `public.get_my_church()` RPC returns `(id, name)` in a single call. The original `get_my_church_id()` is retained because the `members` RLS policies depend on it. See §12.5.
 13. **No long-cache headers in [netlify.toml](netlify.toml)** — ~~Vite emits content-hashed assets that are safe to cache `immutable`.~~ **Resolved**: `netlify.toml` now serves `/assets/*` as `public, max-age=31536000, immutable` and `/index.html` as `no-cache`. See §12.5.
-14. **Church Funds report is partially sample-backed** — [ChurchFundsView.vue](src/views/ChurchFundsView.vue) still uses `SAMPLE_COLLECTIVES` for contribution lines, but monthly expenses now come from `public.expenses` when available (merged in [src/utils/reportExpenseMerge.js](src/utils/reportExpenseMerge.js)). Full production parity still requires contributions/services persistence wired into `computeMonthlyReport`.
+14. ~~**Church Funds report is partially sample-backed.**~~ **Resolved** by `0012_collectives_service_totals`.
+
+    Contribution lines came from `SAMPLE_COLLECTIVES`, a hardcoded Feb 2026 fixture. The report opened on February 2026 showing invented names and amounts, and every other month — including the current one — rendered empty. Only expenses were live.
+
+    The report now reads `collections` directly (§5.4). The one part that needed the database was the opening balance, which is the accumulated net of every prior service: `public.collectives_service_totals` (§6.6) supplies it as one row per service date, computed on read with no month-close step. The fixture is deleted.
+
+    **Two rows are hidden rather than shown as a permanent ₱0.00**, because `collections` cannot populate them — see §9.25.
 15. **Report Discrepancy workflow (future)** — When a `collections` entry passes the 3-hour edit window and is locked, there is currently no way for a user to request corrections. A planned feature will add a "Report Discrepancy" button in the detail modal that creates a request row (candidate table: `collection_discrepancies`) for an admin/treasurer to approve or reject the edit/delete. This enables an audit trail for post-lock corrections without weakening the time-lock policy.
 16. ~~**Anonymous contributions cannot be recorded at all, and multiple anonymous givers per service are a requested feature.**~~ **Resolved** by `0011_collections_anonymous_from`.
 
@@ -490,7 +523,7 @@ These are **not bugs** but explicit non-features in the current build. If asked 
     **Consequences to respect in new code:**
     - Any read joining `members` through `collections.from` must handle null. Use `contributorLabel()` from [src/utils/collectionPayload.js](src/utils/collectionPayload.js) rather than re-deriving the label; it keeps "Anonymous" (`from IS NULL`) distinct from "Unknown" (a set `from` whose member could not be read).
     - `onDelete` on the `from` relation stays `Cascade`. `SetNull` would silently reclassify a deleted member's gifts as anonymous.
-    - Report-side aggregation is **not** done — §9.14 still applies, and the "grouped as Unknown" behaviour in §5.4 remains fixture-only. When the report is wired to live `collections`, null contributors must be bucketed as Anonymous rather than dropped.
+    - ~~Report-side aggregation is **not** done.~~ **Done** in `0012` (§9.14). The Contributors table aggregates named givers into one line each but deliberately keeps **each anonymous gift as its own row**, keyed on the collection row id — collapsing them by their shared "Anonymous" label would discard exactly the giver count and amount spread this design exists to preserve. See `aggregateContributors()` in [src/utils/collectivesReport.js](src/utils/collectivesReport.js).
 
 17. **Visiting contributors cannot be recorded by name.** Members of one church do give at another church's service. There is no way to record that: `collections.from` accepts only a `members.id`, and a visitor is not in the host church's member list. The only workaround today is to record the gift as anonymous, which loses the name and misattributes what is really a known, named gift.
 
@@ -498,13 +531,19 @@ These are **not bugs** but explicit non-features in the current build. If asked 
 
     Design is open. Candidates: a free-text `contributor_name` column used only when `from IS NULL`; a "guest" member record flagged as non-member; or a cross-church contributor reference, which would need its own RLS reasoning since it deliberately reaches outside the caller's church.
 
-18. **No export path.** Reports are `window.print()` only ([ChurchFundsView.vue:543](../src/views/ChurchFundsView.vue#L543)). There is no CSV/XLSX export for the treasurer and no **per-member annual giving statement** — a routine church requirement that members ask for at year end. Blocked on §9.14 (the report must read real `collections` first).
+18. **No export path.** Reports are `window.print()` only ([ChurchFundsView.vue](src/views/ChurchFundsView.vue)). There is no CSV/XLSX export for the treasurer and no **per-member annual giving statement** — a routine church requirement that members ask for at year end. ~~Blocked on §9.14.~~ **Unblocked** — the report reads real `collections` as of `0012`, so both are now buildable on the data the report already loads.
 19. **No bulk import.** The README's stated premise is replacing paper files and spreadsheets, but the only way in is the one-at-a-time Add Member modal. Onboarding an existing congregation currently means manual retyping. A CSV importer with a dry-run preview is the natural companion to §9.1.
-20. **No attendance or service records.** There is no `services` or `attendance` table. The monthly report's "weeks" concept exists only inside the `SAMPLE_COLLECTIVES` fixture and has no persistent counterpart, so attendance cannot be correlated with giving or used for follow-up.
-21. **No household / family grouping.** `Ado Family` appears in the sample fixture as a free-text contributor name. Families are a first-class concept in church records (one address, joint giving, children linked to guardians) and are currently unrepresentable.
+20. **No attendance or service records.** There is no `services` or `attendance` table. The monthly report's "weeks" are inferred from distinct `collectedOn` / `spent_on` values, not from a service that exists in its own right — which is why the header counts *service dates*, and why a midweek bill with no service behind it still produces a column. Attendance cannot be correlated with giving or used for follow-up.
+21. **No household / family grouping.** Families are a first-class concept in church records (one address, joint giving, children linked to guardians) and are currently unrepresentable — a household gift can only be recorded against one member or anonymously.
 22. **Discipleship progress is three booleans.** `is_one_to_one_completed`, `is_turning_point_completed`, `is_baptized` carry no completion date, no assignee, and no history. Progress is a workflow, not a flag; the current shape cannot answer "who is due for follow-up?" — arguably the primary pastoral question the system exists to serve.
 23. **`has_submitted_membership_form` is written by nothing and read by nothing.** The column exists in `members` and appears in no view, payload builder, or query. Either it anticipates a member-facing self-service form that was never built, or it is dead schema — decide and then either wire it or drop it.
 24. **No central ministry administrator or request workflow** — Ministry definitions are manually maintained in Supabase. A future design may add central-admin authorization and a request table for **new ministry definitions only**. Requests will carry requester/church identity, proposed name, status, reviewer, timestamps, and rejection reason; central approval/rejection will handle case-insensitive duplicate names before creating a global ministry. Rename and delete requests are explicitly excluded, and no broad admin UI, leader model, soft delete, or audit system is part of the current release.
+25. **The paper report has two lines the schema cannot fill.** Both are hidden while zero rather than shown as a permanent ₱0.00 (owner decision, 2026-08-03), so the on-screen report no longer matches the DFC workbook line-for-line:
+
+    - **Others / designated giving.** `collections` records a single `is_tithes` boolean, so a gift is either tithes or offering. The workbook has an *Others* column with a free-text *particular* ("Building Fund"), and the calculator still sums an `others` field — nothing can write to it. Needs a category column plus a designation label, and a corresponding control in the Collections form.
+    - **Per-service personal draw.** The workbook deducts a personal draw from the 5 % Student Program allocation. No column holds it, so the deduction is always zero and the nested allocation line never renders.
+
+    Both are recorded in `computeWeeklyReport` already, so filling them is a schema-and-form change, not a report change.
 
 ---
 
@@ -687,11 +726,11 @@ Unlike §9, everything here is **wrong today**, not merely missing. Each row was
 ALTER TABLE public.collections ALTER COLUMN amount TYPE numeric(12,2);
 ```
 
-Migrate before wiring the report to real data (§9.14) — otherwise the first production reconciliation inherits the drift.
+**This is now live, not hypothetical.** §9.14 shipped and the report reconciles against real rows. `0012_collectives_service_totals` casts `amount::numeric` before summing, which removes the *accumulation* error from adding hundreds of float4 values — but it cannot recover precision already lost at write time, because each row was stored as `real`. The `ALTER` above is still the actual fix and is still cheap while the table is small. Do it before the ledger grows enough that a rewrite needs a maintenance window.
 
 ### 13.2 D2 — Unindexed range scans on the two hottest queries
 
-`0003_expenses` correctly added `(from_church, spent_on DESC)`. The structurally identical query in [CollectionsInputView.vue:387](../src/views/CollectionsInputView.vue#L387) — `gte`/`lt` on `collectedOn` plus a double `ORDER BY` — has no index at all. `members` is filtered on `member_of` by every RLS policy and on `archived_at` by every list query, with neither indexed.
+`0003_expenses` correctly added `(from_church, spent_on DESC)`. The structurally identical query in [CollectionsInputView.vue](../src/views/CollectionsInputView.vue) — `gte`/`lt` on `collectedOn` plus a double `ORDER BY` — has no index at all. **As of `0012` there are now two such queries**: the report issues the same range scan on every month navigation, and `collectives_service_totals` groups the whole `collections` table on `(from_church, "collectedOn")` on every page load. `members` is filtered on `member_of` by every RLS policy and on `archived_at` by every list query, with neither indexed.
 
 ```sql
 CREATE INDEX collections_church_collected_on_idx
@@ -734,7 +773,9 @@ Every Supabase call lives inline in a view. The SFCs are 1,353 / 1,773 / 1,135 /
 
 The same amount therefore renders in two different currency formats depending on which screen the user is on, and the same person renders under two different names. This is the visible symptom; the structural cost is that no data path can be unit-tested without mounting a view (see §14.6), and every §12.3 egress rule has to be re-enforced by hand at each call site.
 
-**Direction.** Extract `src/api/{members,collections,expenses,groups}.js` for data access and `src/utils/format.js` for presentation. This is a precondition for O-series testing work, not a cosmetic refactor — do it before the §9.14 report rewrite, which will otherwise add a sixth copy of `formatMoney`.
+**Direction.** Extract `src/api/{members,collections,expenses,groups}.js` for data access and `src/utils/format.js` for presentation. This is a precondition for O-series testing work, not a cosmetic refactor.
+
+The §9.14 report rewrite (`0012`) landed **before** this refactor. It added no new copy of `formatMoney` — the counts above still hold — and it kept its data reshaping in a pure module ([collectivesSource.js](../src/utils/collectivesSource.js)) so the pipeline is unit-testable without a view. But its three Supabase calls are still inline in the SFC, so it is now the fourth view this refactor has to unpick. The cost of deferring it keeps going up.
 
 ---
 
@@ -816,7 +857,7 @@ Therefore `prisma/migrations/` cannot reconstruct a working database, and the on
 | ID | Gap | Detail |
 |---|---|---|
 | O23 | No linter or formatter | No ESLint, no Prettier, no `lint` script. §3 notes the absence as a stack fact; the consequence is that `eslint-plugin-vue` catches an entire class of template bugs — unused refs, missing `:key`, unresolved component names, typo'd bindings — that Vitest structurally cannot, because those files are never mounted. |
-| O24 | Component tests are impossible today | [vitest.config.js](../vitest.config.js) sets `environment: 'node'` and `@vue/test-utils` is not installed. Coverage is therefore inverted against risk: pure date helpers are well tested, while the archive flow, the modal state machine, the 3-hour lock path, and finance gating — every RLS-dependent path — have none. |
+| O24 | **Interaction** tests are impossible today | [vitest.config.js](../vitest.config.js) sets `environment: 'node'` and `@vue/test-utils` is not installed, so nothing can click, type, or open a modal. Coverage is therefore inverted against risk: pure date helpers are well tested, while the archive flow, the modal state machine, the 3-hour lock path, and finance gating — every RLS-dependent path — have none. **Partially narrowed:** `vue/server-renderer` needs no new dependency, and [tests/views/churchFundsView.test.js](../tests/views/churchFundsView.test.js) uses it to assert a view's `setup()` runs, queries the tables it should, and renders the right initial state. That is worth copying to the other views — it caught a real crash that `npm run build` passed. Two traps: SSR skips `onMounted`, and Vue routes watcher failures to `app.config.errorHandler` instead of rejecting the render, so a test that does not collect from that handler will pass over a thrown exception. |
 | O25 | No type checking | Cross-ref §9.7. Not proposed as a migration; noted because O23/O24 partially compensate and should be weighed first. |
 
 O24's fix is `npm i -D jsdom @vue/test-utils` plus `environment: 'jsdom'`. The first three tests worth writing, in order: archive removes the row and closes the modal; an out-of-window edit surfaces `EDIT_WINDOW_CLOSED_MESSAGE` rather than a silent success (this is the [mutationResult.js](../src/utils/mutationResult.js) contract, currently only unit-tested in isolation); a non-finance user does not see `FundsTabs` links.
