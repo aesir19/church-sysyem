@@ -30,8 +30,10 @@ export function mergeMonthSourceWithLiveExpenses(monthSource, expenseRows) {
     return base
   }
 
-  // Once live expenses exist for the month, use them as the monthly source
-  // of truth while keeping existing contribution rows intact.
+  // Live expenses are the source of truth for the month; contribution rows on
+  // the incoming weeks are kept intact. A date that has expenses but no service
+  // gets its own week, which is why the report counts service *dates* rather
+  // than services.
   const weeksByDate = new Map()
   for (const week of base.weeks) {
     weeksByDate.set(week.date, {

@@ -1,0 +1,49 @@
+-- ROLLBACK for 0011_collections_anonymous_from.
+--
+-- Prisma has no down-migrations. This file is operational only — it is never
+-- executed by `prisma migrate deploy`. Paste it into the Supabase SQL editor.
+--
+-- WARNING: THIS ROLLBACK IS NOT CLEAN.
+-- Restoring NOT NULL fails outright while any anonymous row exists, and those
+-- rows cannot be backfilled — an anonymous gift has no member to point at, which
+-- is the entire reason the column was made nullable. Rolling back therefore
+-- means destroying or falsifying ledger data. It is an operator decision, not a
+-- mechanical one.
+--
+-- Step 1 — find out what is at stake:
+--
+--   SELECT count(*) AS anonymous_rows,
+--          sum(amount) AS anonymous_total,
+--          min("collectedOn") AS earliest,
+--          max("collectedOn") AS latest
+--   FROM public.collections
+--   WHERE "from" IS NULL;
+--
+-- Step 2 — if that count is zero, skip ahead and run the ALTERs below.
+--
+--   If it is not zero, choose explicitly and record the choice:
+--
+--     (a) Reassign each row to a real member. Only honest if the giver was
+--         actually known and recorded anonymously by mistake.
+--
+--     (b) Delete them. This permanently removes recorded income from the books.
+--         Export first:
+--           SELECT * FROM public.collections WHERE "from" IS NULL;
+--         then:
+--           DELETE FROM public.collections WHERE "from" IS NULL;
+--
+--   Do not "fix" this by restoring the DEFAULT gen_random_uuid() and letting it
+--   fill the nulls. That is what caused the original 23503 failure, and here it
+--   would silently attach real money to member ids that do not exist.
+--
+-- Step 3 — also revert the application, or the UI will start failing again the
+-- moment someone picks Anonymous:
+--   src/utils/collectionPayload.js       (buildCollectionPayload sets from: null)
+--   src/views/CollectionsInputView.vue   (payload + contributor label)
+--   prisma/schema.prisma                 (`from String?` / `members members?`)
+--
+-- After running this:
+--   npx prisma migrate resolve --rolled-back 0011_collections_anonymous_from
+
+ALTER TABLE public.collections ALTER COLUMN "from" SET NOT NULL;
+ALTER TABLE public.collections ALTER COLUMN "from" SET DEFAULT gen_random_uuid();

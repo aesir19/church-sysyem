@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   ALLOCATION_RATES,
+  SHARE_OF_TOTAL_FUNDS,
   computeMonthlyReport,
   computeWeeklyReport,
 } from '../../src/utils/collectivesReport.js'
@@ -40,6 +41,43 @@ describe('ALLOCATION_RATES', () => {
     expect(ALLOCATION_RATES.project).toBe(0.05)
     expect(ALLOCATION_RATES.studentProgram).toBe(0.05)
     expect(ALLOCATION_RATES.pastorShare + ALLOCATION_RATES.churchShare).toBe(1)
+  })
+})
+
+describe('SHARE_OF_TOTAL_FUNDS', () => {
+  it('restates every allocation against total funds', () => {
+    expect(Object.isFrozen(SHARE_OF_TOTAL_FUNDS)).toBe(true)
+    expect(SHARE_OF_TOTAL_FUNDS.tithesOfTithes).toBeCloseTo(0.10, 10)
+    expect(SHARE_OF_TOTAL_FUNDS.project).toBeCloseTo(0.05, 10)
+    expect(SHARE_OF_TOTAL_FUNDS.studentProgram).toBeCloseTo(0.05, 10)
+    // 50% of the 80% remainder. This is the figure that belongs on screen; the
+    // report displayed the underlying 50% and read as half the collection.
+    expect(SHARE_OF_TOTAL_FUNDS.pastor).toBeCloseTo(0.40, 10)
+    expect(SHARE_OF_TOTAL_FUNDS.church).toBeCloseTo(0.40, 10)
+  })
+
+  it('accounts for exactly 100% of the collection', () => {
+    // 10 + 5 + 5 + 40 + 40. Nothing is unallocated, and nothing is counted
+    // twice — the invariant the allocation panel claims by adding a percentage
+    // to every line.
+    const total = Object.values(SHARE_OF_TOTAL_FUNDS).reduce((s, r) => s + r, 0)
+    expect(total).toBeCloseTo(1, 10)
+  })
+
+  it('agrees with the pesos the calculator actually produces', () => {
+    // Guards the derivation against the rates drifting apart from the maths:
+    // a label is only useful if it describes the amount printed beside it.
+    const r = computeWeeklyReport({
+      date: '2026-05-03',
+      contributions: [{ name: 'A', tithes: 5514 }],
+    })
+
+    expect(r.pastorAllowance).toBeCloseTo(5514 * SHARE_OF_TOTAL_FUNDS.pastor, 2)
+    expect(r.churchAllocation).toBeCloseTo(5514 * SHARE_OF_TOTAL_FUNDS.church, 2)
+    expect(r.tithesOfTithes).toBeCloseTo(5514 * SHARE_OF_TOTAL_FUNDS.tithesOfTithes, 2)
+    // Both shares land on 2,205.60 — 40% of 5,514.
+    expect(r.pastorAllowance).toBe(2205.6)
+    expect(r.churchAllocation).toBe(2205.6)
   })
 })
 
@@ -182,6 +220,82 @@ describe('computeMonthlyReport', () => {
       total: 310,
     })
     expect(r.contributors[2]).toMatchObject({ name: 'Unknown', total: 40 })
+  })
+
+  it('keeps each anonymous gift its own row while still aggregating named givers', () => {
+    const r = computeMonthlyReport({
+      month: 5,
+      year: 2026,
+      openingBalance: 0,
+      weeks: [
+        {
+          date: '2026-05-03',
+          contributions: [
+            { name: 'Alice', tithes: 100, anonymous: false },
+            { name: 'Anonymous', tithes: 300, anonymous: true, sourceId: '1' },
+            { name: 'Anonymous', tithes: 20, anonymous: true, sourceId: '2' },
+          ],
+        },
+        {
+          date: '2026-05-10',
+          contributions: [
+            { name: 'Alice', tithes: 100, anonymous: false },
+            { name: 'Anonymous', tithes: 50, anonymous: true, sourceId: '3' },
+          ],
+        },
+      ],
+    })
+
+    // Alice's two gifts merge into one line; the three anonymous gifts do not.
+    expect(r.contributors.map((c) => c.name)).toEqual([
+      'Anonymous', 'Alice', 'Anonymous', 'Anonymous',
+    ])
+    expect(r.contributors.map((c) => c.total)).toEqual([300, 200, 50, 20])
+    expect(r.contributors.map((c) => c.key)).toEqual([
+      'anon:1', 'Alice', 'anon:3', 'anon:2',
+    ])
+  })
+
+  it('does not merge anonymous gifts that share an amount and carry no source id', () => {
+    const r = computeMonthlyReport({
+      month: 5,
+      year: 2026,
+      openingBalance: 0,
+      weeks: [
+        {
+          date: '2026-05-03',
+          contributions: [
+            { name: 'Anonymous', tithes: 50, anonymous: true },
+            { name: 'Anonymous', tithes: 50, anonymous: true },
+          ],
+        },
+      ],
+    })
+
+    expect(r.contributors).toHaveLength(2)
+    expect(new Set(r.contributors.map((c) => c.key)).size).toBe(2)
+    expect(r.totals.tithes).toBe(100)
+  })
+
+  it('still buckets by name when no contribution is flagged anonymous', () => {
+    const r = computeMonthlyReport({
+      month: 5,
+      year: 2026,
+      openingBalance: 0,
+      weeks: [
+        {
+          date: '2026-05-03',
+          contributions: [
+            { name: 'Unknown', tithes: 50 },
+            { name: 'Unknown', tithes: 20 },
+          ],
+        },
+      ],
+    })
+
+    expect(r.contributors).toEqual([
+      { key: 'Unknown', name: 'Unknown', tithes: 70, offering: 0, others: 0, total: 70 },
+    ])
   })
 
   it('aggregates expenses by description and sorts by amount desc', () => {

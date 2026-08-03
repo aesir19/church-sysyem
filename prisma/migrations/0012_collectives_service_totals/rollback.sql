@@ -1,0 +1,31 @@
+-- ROLLBACK for 0012_collectives_service_totals.
+--
+-- Prisma has no down-migrations. This file is operational only — it is never
+-- executed by `prisma migrate deploy`. Paste it into the Supabase SQL editor.
+--
+-- THIS ROLLBACK IS CLEAN. The view stores nothing; it is a saved query over
+-- `collections` and `expenses`. Dropping it destroys no ledger data and no
+-- entry becomes unrecoverable.
+--
+-- WHAT BREAKS INSTEAD — the report, immediately.
+-- src/views/ChurchFundsView.vue reads this view on mount to derive each month's
+-- opening balance. With the view gone the query 404s, the report shows its load
+-- error, and the balance card reads from a zero opening balance — so
+-- "Current Church Funds" understates by the entire accumulated history. The
+-- per-month figures (tithes, offering, expenses, allocations) still render
+-- correctly; only the carry-forward is lost.
+--
+-- So also revert the application, or leave the report in that degraded state
+-- knowingly:
+--   src/views/ChurchFundsView.vue     (the collectives_service_totals fetch)
+--   src/utils/collectivesSource.js    (openingBalanceForMonth / buildLedgerWeeks)
+--
+-- Nothing else depends on the view. It has no dependent views, functions, or
+-- policies, which is why a plain DROP suffices — no CASCADE needed, and do not
+-- add one: if DROP ever fails for dependency reasons, find out what attached
+-- itself rather than dropping that too.
+--
+-- After running this:
+--   npx prisma migrate resolve --rolled-back 0012_collectives_service_totals
+
+DROP VIEW IF EXISTS public.collectives_service_totals;

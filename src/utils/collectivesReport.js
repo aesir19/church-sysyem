@@ -7,18 +7,49 @@
 //   - Tithes of Tithes: 10%
 //   - Project Fund:      5%
 //   - Student Program:   5%  (a per-week personal draw may be deducted from this)
+//   - Pastor's Allowance: 40%
+//   - Church Allocation:  40%
+//                        ----
+//                        100%
 //
-// The remainder after those three deductions is split 50/50 between the
-// Pastor's Allowance and the Church Allocation. Weekly expenses are then
-// subtracted from the Church Allocation to produce the week's net church
-// funds, which accumulate onto the previous week's closing balance.
+// The last two are computed as a 50/50 split of the 80% remainder, which is the
+// same thing — see SHARE_OF_TOTAL_FUNDS below for why both forms exist and which
+// one belongs on screen. Weekly expenses are then subtracted from the Church
+// Allocation to produce the week's net church funds, which accumulate onto the
+// previous week's closing balance.
 
+// NOTE ON DENOMINATORS — the two families below are not interchangeable.
+// `pastorShare` / `churchShare` are shares of the REMAINDER; the other three are
+// shares of TOTAL FUNDS. Multiplying total funds by pastorShare, or displaying
+// pastorShare as a percentage next to the other three, is wrong by a factor of
+// the remainder. Use SHARE_OF_TOTAL_FUNDS for anything user-facing.
 export const ALLOCATION_RATES = Object.freeze({
   tithesOfTithes: 0.10,
   project: 0.05,
   studentProgram: 0.05,
   pastorShare: 0.5,
   churchShare: 0.5,
+})
+
+const AFTER_DEDUCTIONS =
+  1 - ALLOCATION_RATES.tithesOfTithes - ALLOCATION_RATES.project - ALLOCATION_RATES.studentProgram
+
+// Every allocation restated against one denominator — total funds collected —
+// so the five figures can be read down the column and add to 100%. This is the
+// only form fit to put on screen: the report showed "50%" beside the pastor and
+// church lines, which is true of the remainder but reads as half the collection
+// next to "10%" and "5%" of the total. Same pesos, wrong story.
+//
+// These are NOMINAL rates from the table above, deliberately not measured off a
+// month's actual figures: a per-service personal draw shrinks the student
+// program and enlarges the remainder, so the realised shares drift above 40%.
+// The label should keep describing the rule, not one month's rounding.
+export const SHARE_OF_TOTAL_FUNDS = Object.freeze({
+  tithesOfTithes: ALLOCATION_RATES.tithesOfTithes,
+  project: ALLOCATION_RATES.project,
+  studentProgram: ALLOCATION_RATES.studentProgram,
+  pastor: ALLOCATION_RATES.pastorShare * AFTER_DEDUCTIONS,
+  church: ALLOCATION_RATES.churchShare * AFTER_DEDUCTIONS,
 })
 
 function round2(n) {
@@ -35,7 +66,8 @@ function num(v) {
  *
  * @param {{
  *   date: string,
- *   contributions?: Array<{ name?: string, tithes?: number, offering?: number, others?: number, particular?: string }>,
+ *   contributions?: Array<{ name?: string, tithes?: number, offering?: number, others?: number,
+ *                           particular?: string, anonymous?: boolean, sourceId?: string }>,
  *   expenses?: Array<{ description?: string, amount?: number }>,
  *   studentProgramDeduction?: number,
  *   openingBalance?: number,
@@ -144,27 +176,47 @@ export function computeMonthlyReport(month) {
   }
 }
 
+// Named contributors aggregate across the month — one line per person, summed.
+// Anonymous gifts deliberately do not: each stays its own line, so the count of
+// anonymous givers and the spread of their amounts both survive into the report.
+// That is the behaviour the nullable-`from` design exists to protect; bucketing
+// them by their shared "Anonymous" label would throw it away.
 function aggregateContributors(weeklyReports) {
-  const byName = new Map()
+  const byKey = new Map()
+  let anonymousSeen = 0
+
   for (const w of weeklyReports) {
     for (const c of w.contributions) {
-      const key = normalizeName(c?.name)
-      const existing = byName.get(key) || { name: key, tithes: 0, offering: 0, others: 0 }
+      const name = normalizeName(c?.name)
+      // sourceId is the collection row id. The counter is only a fallback for
+      // callers that build contributions by hand (tests, fixtures) — without it
+      // those would all collapse onto the same empty key.
+      const key = c?.anonymous
+        ? `anon:${c.sourceId || `#${anonymousSeen}`}`
+        : name
+      if (c?.anonymous) anonymousSeen += 1
+
+      const existing = byKey.get(key) || { key, name, tithes: 0, offering: 0, others: 0 }
       existing.tithes += num(c.tithes)
       existing.offering += num(c.offering)
       existing.others += num(c.others)
-      byName.set(key, existing)
+      byKey.set(key, existing)
     }
   }
-  return Array.from(byName.values())
+
+  return Array.from(byKey.values())
     .map((c) => ({
+      key: c.key,
       name: c.name,
       tithes: round2(c.tithes),
       offering: round2(c.offering),
       others: round2(c.others),
       total: round2(c.tithes + c.offering + c.others),
     }))
-    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name))
+    // `key` is the final tie-break because `name` no longer identifies a row —
+    // several rows read "Anonymous" — and an unstable sort would reorder them
+    // between renders.
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name) || a.key.localeCompare(b.key))
 }
 
 function aggregateExpenses(weeklyReports) {

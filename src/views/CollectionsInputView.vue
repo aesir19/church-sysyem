@@ -239,6 +239,7 @@ import { getDefaultServiceDate, isWithinEditWindow } from '../utils/collectionsD
 import FundsTabs from '../components/FundsTabs.vue'
 import { defaultMonthKey, getMonthRange, monthKeyFromDate } from '../utils/expensesMonth'
 import { interpretMutation } from '../utils/mutationResult'
+import { buildCollectionPayload, contributorLabel, isAnonymousRow } from '../utils/collectionPayload'
 
 const COLLECTION_SELECT = 'id, from, amount, is_tithes, collectedOn, created_at, members!collections_from_fkey(first_name, middle_name, last_name)'
 
@@ -338,7 +339,10 @@ function normalizeEntry(row) {
   return {
     id: row.id,
     memberId: row.from,
-    name: fullName(row.members),
+    // `from` is null for anonymous gifts since 0011_collections_anonymous_from.
+    // contributorLabel keeps that distinct from a member the caller can't read.
+    anonymous: isAnonymousRow(row),
+    name: contributorLabel(row),
     amount: row.amount,
     date: row.collectedOn,
     createdAt: row.created_at,
@@ -456,18 +460,9 @@ async function handleSubmit() {
   }
 
   saving.value = true
-  const payload = {
-    amount: form.value.amount,
-    is_tithes: form.value.type === 'tithes',
-    collectedOn: form.value.date,
-    from_church: myChurchId.value
-  }
-  if (form.value.memberId) {
-    payload.from = form.value.memberId
-  }
   const { data, error } = await supabase
     .from('collections')
-    .insert(payload)
+    .insert(buildCollectionPayload(form.value, myChurchId.value))
     .select(COLLECTION_SELECT)
     .single()
 
@@ -483,7 +478,10 @@ async function handleSubmit() {
   if (insertedMonth === selectedMonth.value) {
     entries.value.unshift(insertedEntry)
   }
-  formSuccess.value = `Added ${insertedEntry.name}'s ${insertedEntry.typeLabel.toLowerCase()}.`
+  const contributionLabel = insertedEntry.typeLabel.toLowerCase()
+  formSuccess.value = insertedEntry.anonymous
+    ? `Added an anonymous ${contributionLabel}.`
+    : `Added ${insertedEntry.name}'s ${contributionLabel}.`
   form.value.memberId = ''
   form.value.memberQuery = ''
   form.value.amount = null

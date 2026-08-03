@@ -713,6 +713,55 @@ Therefore: `prisma/migrations/` cannot reconstruct a working database, and the o
 
 ---
 
+### 3.21 Database views bypass RLS by default — Mitigated at introduction (`0012`)
+
+**Finding.** `0012_collectives_service_totals` introduces the project's **first database view**, over the two most sensitive tables in the system (`collections`, `expenses`). Views are a documented RLS blind spot and the default is the unsafe one:
+
+> A Postgres view executes with the privileges of its **owner**, not its caller. Row-level security on the underlying tables is therefore evaluated as the owner — who typically bypasses it — so an ordinary `CREATE VIEW` over an RLS-protected table hands every caller the *unfiltered* contents.
+
+Had this view shipped with the default, any authenticated user could have read a per-service-date financial summary of **every church in the database** — the exact cross-church leak `0009` closed for `churches` (§3.3), reintroduced through a different mechanism. Table grants would not have caught it: `SELECT` on the view is precisely what the report legitimately needs.
+
+**Mitigation (applied in the same migration).** The view is declared `WITH (security_invoker = on)`, so base-table RLS is evaluated as the caller and `collections_select_own_church` / `expenses_select_own_church` scope it automatically. No predicate is duplicated into the view, which matters: a hand-written `from_church = get_my_church_id()` would be a second copy of the isolation rule, free to drift from the policy it mirrors.
+
+**Second trap, hit during implementation: §3.12 applies to views too.** The first version of `0012` granted `SELECT` to `authenticated` and stopped there. That was not enough. Supabase's `DEFAULT PRIVILEGES` fire on **every new object in `public`**, so the view was created with `SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER` already held by `anon` *and* `authenticated`, and `GRANT` is additive — adding one does not displace the rest. Confirmed against the live database before correcting it:
+
+```
+grantee=anon  privilege_type=SELECT      ← should not exist
+grantee=anon  privilege_type=INSERT, UPDATE, DELETE, TRUNCATE, ...
+```
+
+`security_invoker` contained the blast radius — under invoker semantics the *caller* also needs privileges on the underlying tables, and `0009` left `anon` with none on `collections`/`expenses`, so the read failed there instead. The two mitigations covered for each other. Neither should be relied on alone. The migration now does what `0009` does: `REVOKE ALL ... FROM anon, authenticated` **first**, then grant back only `SELECT` to `authenticated`.
+
+The generalisable rule: **`0009`'s revoke-then-grant order is not a table-only pattern.** It applies to any new object in `public` — views, and materialised views equally.
+
+Supporting decisions:
+- `SELECT` to `authenticated` only. `anon` ends with no privileges at all, consistent with `0009_narrow_grants`. `postgres` and `service_role` keep their defaults; they bypass RLS by design and the frontend never uses them.
+- The view exposes only per-date sums — never `from` — so it carries no contributor identity and cannot be used to infer who gave anonymously.
+
+**Verification — performed 2026-08-03, against production.** A leaking view is invisible in the SPA; it looks identical to a working one until a second church has data. The database is the only place to check.
+
+```sql
+SELECT relname, reloptions FROM pg_class WHERE relname = 'collectives_service_totals';
+-- reloptions must contain security_invoker=on
+```
+
+Results, with each read run as `authenticated` under a `SET LOCAL request.jwt.claims` inside a rolled-back transaction:
+
+| Caller | Result |
+|---|---|
+| User in **Graceville** (the church holding the data) | 1 row — its own service date |
+| User in **Tala** (a different church) | **0 rows** |
+| Unknown `sub` uid | 0 rows |
+| `anon` | `42501: permission denied for view collectives_service_totals` |
+
+Two real churches, one with data and one without, is the assertion that matters — `reloptions` alone proves the flag is set, not that filtering works.
+
+**Standing rule.** *Every* future view over an RLS-protected table must declare `security_invoker = on`, and any review that adds a `CREATE VIEW` must confirm it. Postgres will not warn, and the failure is silent. The same trap applies to `SECURITY DEFINER` functions — see §3.12's note on the helper predicates.
+
+**Cost.** $0.
+
+---
+
 ## 4. Tier 2 findings (free, lower-impact)
 
 ### 4.1 Unvalidated `facebook_link` URL scheme — Low (latent)
@@ -870,6 +919,7 @@ Added by the 2026-08-03 audit:
 - [ ] **Uptime monitor is green** and actually alerting — confirm it detects a paused project, not just a served `index.html`.
 - [ ] **CI is gating, not advisory.** Netlify's deploy settings still require the GitHub check to pass (§3.20).
 - [ ] **Triggers still present.** `scripts/sql/capture-security-state.sql` reports both §3.13 triggers; investigate immediately if either is missing after a Supabase platform upgrade.
+- [ ] **Every view is invoker-rights.** Same script, query 9 — any `public` view without `security_invoker=on` is a cross-church leak (§3.21). Check after any migration that adds a view.
 
 Annually:
 
@@ -899,6 +949,7 @@ Annually:
 | §3.18 Throttling | Script >100 `collections` inserts in a minute as one user → the trigger rejects the excess. Confirm a realistic Sunday entry rate stays well under the ceiling. |
 | §3.19 Recovery | Restore the latest dump into a throwaway Supabase project, run `bootstrap-triggers.sql`, sign in → the dashboard shows data (proves `handle_new_user()`), and `create table t(...)` lands with `relrowsecurity = true` (proves `rls_auto_enable()`). Record the drill date. |
 | §3.20 Release | Push a commit with a deliberately failing test → Netlify must **not** publish. Deploy a schema-dependent build without its migration → CI `prisma:migrate:status` must fail the job. |
+| §3.21 View isolation | `capture-security-state.sql` query 9 shows `security_invoker=on` for every `public` view. Then, as a church-A user, `supabase.from('collectives_service_totals').select('*')` must return **only** church-A dates — cross-check the row count against `select count(distinct "collectedOn") from collections where from_church = <A>` run as superuser. A leaking view is invisible in the UI, so the two-church check is the only real proof. |
 | §5.1 Monitoring | Throw inside a view's `setup()` → a `render` row appears in `client_errors` with a whitelisted code and **no raw message or PII**. Insert >5,000 rows → the cap trigger holds. Confirm `authenticated` has no `SELECT` grant. |
 
 ---
