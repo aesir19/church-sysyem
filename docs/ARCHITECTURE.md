@@ -251,6 +251,7 @@ Data-entry view nested under Church Funds (`/dashboard/funds/collections`). Allo
 
 **Future plan:**
 - A "Report Discrepancy" button will allow a user to request editing or deletion of a locked entry under the `collections` table. This will involve a `collection_discrepancies` table (or similar) where requests are queued for an admin to approve.
+- **Multiple anonymous contributors per service (requested).** Tithes from people who are not named must be recordable as *several individual entries* — one per giver, each with its own amount — rather than a single collective total. The intent is that the count of anonymous givers and the distribution of their amounts both survive into the report, instead of collapsing into one lump sum. See §9.16 for the blocker and the design options.
 
 #### `ExpensesInputView.vue` — [src/views/ExpensesInputView.vue](src/views/ExpensesInputView.vue)
 Data-entry view nested under Church Funds (`/dashboard/funds/expenses`). Allows staff to record month-scoped operating expenses.
@@ -322,12 +323,23 @@ as $$
 $$;
 ```
 
-Policies (summarized from [README.md](README.md)):
-- `members SELECT` → `using (member_of = public.get_my_church_id() AND archived_at IS NULL)` — same church, active only.
-- `members INSERT` → `with check (member_of = public.get_my_church_id() AND archived_at IS NULL)` — must belong to caller's church and start un-archived.
-- `members UPDATE` → `using/with check (member_of = public.get_my_church_id())` — allows edits and archiving (`archived_at` flip), but `with check` blocks reassigning `member_of` to another church.
-- **No DELETE policy.** Archiving is the only deletion path; hard deletes are not permitted from the dashboard.
-- `churches SELECT` → `using (true)` for `authenticated` (so joined `churches(name)` resolves).
+**Source of truth: `prisma/migrations/`.** Every policy is now source-controlled — `expenses` in `0003`, `groups` / `group_members` in `0004`, and `members` / `churches` / `user_accounts` / `collections` in `0006_baseline_rls`. `0006` is a verbatim capture of state that had previously only ever existed in the Supabase dashboard; re-capture with `scripts/sql/capture-security-state.sql` to verify the database still matches. The summary below is a convenience view and the migrations win on any disagreement.
+
+- `members SELECT` → `using (member_of = get_my_church_id())` — same church, **including archived rows**.
+
+  > `archived_at IS NULL` cannot live in this policy. Postgres evaluates the SELECT policy against the *new* row during an `UPDATE`, so the condition made archiving impossible — it had never once succeeded in production. `0010_members_select_allow_archived` removed it. **Filtering archived members is now the application's job:** every read of `members` must add `.is('archived_at', null)`, as `DashboardView`, `CollectionsInputView` and both `MinistrySmallGroupView` queries do. A new read that forgets it will show archived people in lists and pickers.
+- `members INSERT` → `with check (member_of = get_my_church_id() AND archived_at IS NULL)` — must belong to the caller's church and start un-archived.
+- `members UPDATE` → `using/with check (member_of = get_my_church_id())`. The `with check` deliberately omits `archived_at IS NULL` so archiving is permitted, while still blocking reassignment to another church.
+- **No `members` DELETE policy.** That omission is the control that makes archiving the only deletion path.
+
+  > `0006` captured a single `FOR ALL ... TO public` policy here, which both permitted hard deletes and — having no `with check` — blocked the archive UPDATE it was meant to allow. `0007_members_policy_split` replaced it with the four-policy model above. [SECURITY.md](SECURITY.md) §3.11.
+
+- `churches SELECT` → `using (id = get_my_church_id())`, and `authenticated` holds **no grant on the table at all**, so the policy is unreachable from the SPA — `churches` is read only through the `SECURITY DEFINER` `get_my_church()` RPC. `0009_narrow_grants` closed the previous `using (true)` cross-tenant leak ([SECURITY.md](SECURITY.md) §3.3) this way; the scoped policy is defence in depth should the grant ever be restored.
+- `collections SELECT` → church-scoped. `INSERT` → church-scoped **and** finance-gated. `UPDATE` / `DELETE` → church-scoped, finance-gated, and limited to rows with `created_at > now() - interval '3 hours'`.
+- `expenses SELECT` → church-scoped only. `INSERT` → church-scoped **and** finance-gated.
+
+  > **Funds rule: reads are church-scoped, writes are finance-gated.** `ChurchFundsView.vue` builds the monthly report from `expenses` and is not a finance-only route, so finance-gating `SELECT` would break reports for non-finance staff. `collections SELECT` stays church-scoped for the same reason — §9.14 plans to feed contributions into that report. Installed by `0008_funds_write_policies`; before it, finance-role authorization existed only in the browser.
+- `user_accounts SELECT` → `using (id = auth.uid())`, self-read only. No write policies, so writes are denied; rows are created by the `SECURITY DEFINER` `handle_new_user()` trigger, which bypasses RLS. This closes the verification item previously open in [SECURITY.md](SECURITY.md) §3.2.
 - `groups SELECT` → linked users see global ministries plus small groups where `church_id = get_my_church_id()`; unlinked authenticated users see no groups.
 - `groups INSERT / UPDATE / DELETE` → only `type = 'Small Group'` rows owned by `get_my_church_id()`. There is no app policy permitting ministry catalog mutations.
 - `group_members SELECT / INSERT / DELETE` → the referenced member must be active and in the caller's church, and the referenced group must be either a valid global ministry or the caller's own small group. There is no UPDATE policy.
@@ -335,6 +347,24 @@ Policies (summarized from [README.md](README.md)):
 Group membership policies call narrow `SECURITY DEFINER` predicates (`is_member_in_my_church` and `is_group_available_to_my_church`) rather than traversing policy-protected tables directly. This avoids RLS recursion and keeps nested PostgREST reads—including the `Finance Team` authorization check—available only for the current church's membership rows. On `groups`, authenticated users receive `SELECT` and `DELETE`, column-level `INSERT (name, type, church_id)`, and column-level `UPDATE (name)`; therefore app users cannot submit or modify `color_slot`, while RLS still denies ministry mutations. `group_members` grants remain `SELECT/INSERT/DELETE` only.
 
 **Why `SECURITY DEFINER`?** The helper function reads `members` itself; without `SECURITY DEFINER` the policy on `members` would recurse, producing `stack depth limit exceeded`.
+
+**Grants are the first gate; RLS is the second.** `0009_narrow_grants` replaced Supabase's default `GRANT ALL` on the five original tables with the minimum set the SPA actually uses, derived by enumerating every `supabase.from(...)` call:
+
+| Table | `authenticated` | `anon` |
+|---|---|---|
+| `churches` | — (read via `get_my_church()` only) | — |
+| `members` | `SELECT, INSERT, UPDATE` | — |
+| `collections` | `SELECT, INSERT, DELETE`, `UPDATE (amount)` | — |
+| `expenses` | `SELECT, INSERT` | — |
+| `user_accounts` | `SELECT` | — |
+| `groups` | `SELECT, DELETE`, `INSERT (name, type, church_id)`, `UPDATE (name)` | — |
+| `group_members` | `SELECT, INSERT, DELETE` | — |
+
+`anon` holds no table privileges: the pre-auth views use only `supabase.auth.*`, which talks to GoTrue rather than PostgREST. `service_role` is untouched — it bypasses RLS by design and the frontend never uses it.
+
+The column scope on `collections.UPDATE (amount)` is load-bearing, not tidiness: a table-wide `UPDATE` would let a caller set `created_at = now()` and extend their own 3-hour edit window indefinitely. Any new write path must extend the grant deliberately — adding a column to a form is not enough.
+
+**Helper functions are source-controlled.** `get_my_church_id`, `is_member_in_my_church`, `is_group_available_to_my_church` in `0004`; `assign_group_color_slot` in `0005`; `get_my_church`, `handle_new_user`, `rls_auto_enable` in `0006`; `is_finance_member` in `0008`. Two triggers remain uncaptured because they sit outside the `public` schema — the `auth.users` trigger calling `handle_new_user()` and the event trigger calling `rls_auto_enable()`. Both are load-bearing and must be recreated by hand in a rebuild; see [SECURITY.md](SECURITY.md) §3.13.
 
 ### 6.2.1 Archiving Model (soft delete)
 
@@ -400,9 +430,12 @@ For the full vulnerability analysis, threat model, OWASP Top 10 mapping, and pri
 |---|---|---|
 | Secrets in repo | None | Anon key is intentionally public; service-role key is **never** used in the frontend. |
 | Authorization | Enforced server-side by Postgres RLS | Frontend cannot bypass it. `groups` and `group_members` have explicit church-scoped policies; `user_accounts` remains tracked separately in [SECURITY.md](SECURITY.md) §3.2. |
-| Cross-tenant `churches` exposure | **Known gap** | Current `churches` SELECT policy is `using (true)`. Tighten per [SECURITY.md](SECURITY.md) §3.3. |
+| Cross-tenant `churches` exposure | Resolved | `0009_narrow_grants` revoked the table grant and scoped the policy to `id = get_my_church_id()`. [SECURITY.md](SECURITY.md) §3.3. |
+| Hard delete of member PII | Resolved | `0007_members_policy_split` removed the `FOR ALL` policy that permitted `DELETE`. [SECURITY.md](SECURITY.md) §3.11. |
+| Finance-role authorization | Enforced server-side | `0008_funds_write_policies` added `is_finance_member()` to every funds write policy. Previously browser-only. |
+| Table privileges | Narrowed to the SPA's actual usage | `0009_narrow_grants`; `anon` holds none. See §6.2. |
 | Transport | HTTPS only | Supabase + Netlify. HSTS not yet emitted — [SECURITY.md](SECURITY.md) §3.1. |
-| HTTP security headers | **Known gap** | No CSP / X-Frame-Options / Referrer-Policy / Permissions-Policy in [netlify.toml](../netlify.toml). [SECURITY.md](SECURITY.md) §3.1. |
+| HTTP security headers | Implemented | CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy and COOP are all set in [netlify.toml](../netlify.toml). One caveat: `connect-src` uses `https://*.supabase.co` rather than the specific project ref, which weakens it — [SECURITY.md](SECURITY.md) §3.1. |
 | XSS | Low risk today | Vue auto-escapes interpolation; no `v-html`; no `:href` to user-supplied URLs. Latent risk if `facebook_link` becomes a clickable link — [SECURITY.md](SECURITY.md) §4.1. |
 | CSRF | N/A | Supabase uses Bearer JWTs in `Authorization` headers, not cookies. |
 | Password storage | Handled by Supabase (bcrypt) | App never touches password material after submission. |
@@ -434,7 +467,26 @@ These are **not bugs** but explicit non-features in the current build. If asked 
 13. **No long-cache headers in [netlify.toml](netlify.toml)** — ~~Vite emits content-hashed assets that are safe to cache `immutable`.~~ **Resolved**: `netlify.toml` now serves `/assets/*` as `public, max-age=31536000, immutable` and `/index.html` as `no-cache`. See §12.5.
 14. **Church Funds report is partially sample-backed** — [ChurchFundsView.vue](src/views/ChurchFundsView.vue) still uses `SAMPLE_COLLECTIVES` for contribution lines, but monthly expenses now come from `public.expenses` when available (merged in [src/utils/reportExpenseMerge.js](src/utils/reportExpenseMerge.js)). Full production parity still requires contributions/services persistence wired into `computeMonthlyReport`.
 15. **Report Discrepancy workflow (future)** — When a `collections` entry passes the 3-hour edit window and is locked, there is currently no way for a user to request corrections. A planned feature will add a "Report Discrepancy" button in the detail modal that creates a request row (candidate table: `collection_discrepancies`) for an admin/treasurer to approve or reject the edit/delete. This enables an audit trail for post-lock corrections without weakening the time-lock policy.
-16. **No central ministry administrator or request workflow** — Ministry definitions are manually maintained in Supabase. A future design may add central-admin authorization and a request table for **new ministry definitions only**. Requests will carry requester/church identity, proposed name, status, reviewer, timestamps, and rejection reason; central approval/rejection will handle case-insensitive duplicate names before creating a global ministry. Rename and delete requests are explicitly excluded, and no broad admin UI, leader model, soft delete, or audit system is part of the current release.
+16. **Anonymous contributions cannot be recorded at all, and multiple anonymous givers per service are a requested feature.**
+
+    **Requested behaviour.** When several unnamed people give tithes at one service, each should be recordable as its own entry with its own amount — not merged into a single collective total. Both the number of anonymous givers and the spread of amounts should reach the monthly report.
+
+    **Blocker — anonymous entry is currently broken.** `CollectionsInputView.handleSubmit()` has an "Anonymous" path that omits `from` from the insert payload. That does not produce a null contributor: `collections.from` is `NOT NULL` with `DEFAULT gen_random_uuid()`, so a random UUID is generated and the `collections_from_fkey` foreign key to `members` rejects it. Verified against production inside a rolled-back transaction:
+
+    ```
+    23503: insert or update on table "collections" violates foreign key constraint "collections_from_fkey"
+    ```
+
+    So the UI offers anonymous entry, but any attempt fails. The "anonymous entries grouped as Unknown" behaviour described for the report in §5.4 exists only in the `SAMPLE_COLLECTIVES` fixture — no real anonymous row can exist today.
+
+    **Design options** (none chosen — needs an owner decision):
+    - *Nullable `from`.* Drop `NOT NULL` and the `gen_random_uuid()` default, letting `from IS NULL` mean anonymous. Smallest schema change; each anonymous gift is naturally its own row, so "multiple anonymous givers" falls out for free. Requires auditing every read that joins `members` through `collections.from` to handle nulls, and the report's contributor aggregation must bucket nulls rather than dropping them.
+    - *Sentinel "Anonymous" member row per church.* No schema change, but it pollutes the members table with non-people, would be caught by member counts and pickers, and interacts badly with the archived-member filters added in `0010`.
+    - *Separate `anonymous_collections` table.* Cleanest separation, but duplicates the amount/date/church/window logic and doubles the read path in the report.
+
+    A nullable `from` is the most likely fit, but it touches `MEMBER`-joined reads and the report calculator, so it should be planned before implementation rather than added ad hoc.
+
+17. **No central ministry administrator or request workflow** — Ministry definitions are manually maintained in Supabase. A future design may add central-admin authorization and a request table for **new ministry definitions only**. Requests will carry requester/church identity, proposed name, status, reviewer, timestamps, and rejection reason; central approval/rejection will handle case-insensitive duplicate names before creating a global ministry. Rename and delete requests are explicitly excluded, and no broad admin UI, leader model, soft delete, or audit system is part of the current release.
 
 ---
 
@@ -488,7 +540,7 @@ When modifying this codebase, prefer the following:
 1. From `view` mode, user clicks **Archive member** → modal body swaps to an in-modal confirmation panel with an optional reason textarea.
 2. Confirm → `handleArchive()` → `update({ archived_at: now, archived_reason }).eq('id', id)`.
 3. The UPDATE policy permits the change (same church); the row remains in the database.
-4. On success, the row is filtered out of `members` and the modal closes. Badge decrements. Subsequent reloads will not return the row because the SELECT policy excludes `archived_at IS NOT NULL`.
+4. On success, the row is filtered out of `members` and the modal closes. Badge decrements. Subsequent reloads exclude it because `fetchMembers` applies `.is('archived_at', null)` — **not** because RLS hides it. Since `0010_members_select_allow_archived` the SELECT policy deliberately returns archived rows, so that archiving is possible at all; see §6.2.
 
 ---
 

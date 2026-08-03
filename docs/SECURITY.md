@@ -16,9 +16,14 @@ The findings below are sorted by impact × likelihood within the current threat 
 
 | # | Finding | Severity | Where |
 |---|---|---|---|
-| 1 | No HTTP security headers (CSP, HSTS, X-Frame-Options, etc.) | **High** | [netlify.toml](../netlify.toml) — §3.1 |
-| 2 | `user_accounts` RLS still requires remote verification; `groups` / `group_members` are now explicitly protected | **High / mitigated in part** | Supabase — §3.2 |
-| 3 | `churches` RLS is `using (true)` — leaks every church's name + address to every authenticated user | **High** | Supabase — §3.3 |
+| 1 | HTTP security headers | **Implemented**, with one caveat on `connect-src` | [netlify.toml](../netlify.toml) — §3.1 |
+| 2 | `user_accounts` RLS verified self-read-only; `groups` / `group_members` explicitly protected | **Resolved** | Supabase — §3.2 |
+| 2a | `members` `FOR ALL` policy permitted hard DELETE, and blocked the archive UPDATE | **Resolved** — `0007` | §3.11 |
+| 2b | `collections` had no UPDATE/DELETE policy — the in-window edit/delete UI could not work | **Resolved** — `0008` | §3.11 |
+| 2c | Finance-role authorization was browser-only; no policy checked it | **Resolved** — `0008` | §3.11 |
+| 2d | Default `GRANT ALL` to `anon`/`authenticated` never revoked on five tables | **Resolved** — `0009` | §3.12 |
+| 2e | Two load-bearing triggers outside `public` are not in any migration | Medium — **open** | Supabase — §3.13 |
+| 3 | `churches` RLS was `using (true)` — leaked every church's name + address | **Resolved** — `0009` | §3.3 |
 | 4 | JWT stored in `localStorage` is exfiltratable by any XSS — must be paired with strict CSP | **High** | Supabase SDK default — §3.4 |
 | 5 | Raw Supabase `error.message` rendered verbatim in UI (info disclosure) | Medium | [LoginView.vue](../src/views/LoginView.vue), [DashboardView.vue](../src/views/DashboardView.vue) — §3.5 |
 | 6 | Auth hardening: MFA off, no CAPTCHA, no leaked-password check, weak default min length | **High** | Supabase dashboard — §3.6 |
@@ -96,9 +101,13 @@ Mapped to the [OWASP Top 10 (2021)](https://owasp.org/www-project-top-ten/).
 
 ## 3. Tier 1 findings (free, high-impact)
 
-### 3.1 No HTTP security headers — High
+### 3.1 HTTP security headers — Implemented, one caveat outstanding
 
-**Finding.** [netlify.toml](../netlify.toml) sets cache headers but no security headers. The browser receives no Content-Security-Policy, no `Strict-Transport-Security`, no `X-Frame-Options` / frame-ancestors, no `X-Content-Type-Options`, no `Referrer-Policy`, and no `Permissions-Policy`.
+**Status.** All seven headers below are present in [netlify.toml](../netlify.toml). The original finding — that none were set — no longer applies.
+
+**Outstanding caveat.** The deployed `connect-src` is `https://*.supabase.co wss://*.supabase.co`, not the specific project ref this section prescribes. The wildcard makes *every* Supabase project on the internet a valid destination, which materially weakens the control that §3.4 relies on as the compensation for JWT-in-`localStorage`: an injected script could exfiltrate the token to an attacker's own Supabase project without violating the policy. Replace both wildcards with the real project ref — a one-line edit, no behaviour change.
+
+**Original finding, retained for context.** [netlify.toml](../netlify.toml) set cache headers but no security headers. The browser received no Content-Security-Policy, no `Strict-Transport-Security`, no `X-Frame-Options` / frame-ancestors, no `X-Content-Type-Options`, no `Referrer-Policy`, and no `Permissions-Policy`.
 
 **Why it matters.**
 - Without CSP, **any** JavaScript that lands on the page (XSS, malicious browser extension impersonating the page, supply-chain compromise of a build dep) can call `localStorage.getItem('sb-…-auth-token')` and exfiltrate the Supabase JWT. CSP is the single most cost-effective compensating control for the localStorage-token model.
@@ -134,7 +143,7 @@ Notes:
 
 ### 3.2 Tenant RLS on `user_accounts`, `groups`, and `group_members` — High / partially mitigated
 
-**Current status.** Migration `0004_church_scoped_groups` enables RLS, removes every legacy policy, resets grants, and installs the complete policy set for `groups` and `group_members`. The migration does not alter `user_accounts`; its self-only SELECT policy must still be verified remotely because account linking is part of the existing auth flow.
+**Current status — resolved.** Migration `0004_church_scoped_groups` enables RLS, removes every legacy policy, resets grants, and installs the complete policy set for `groups` and `group_members`. The `user_accounts` verification item is now closed: the live capture (`scripts/sql/capture-security-state.sql`) confirms exactly one policy, `Users can read their own account`, `FOR SELECT TO authenticated USING (id = auth.uid())`, with no write policies — so writes are denied and rows are created only by the `SECURITY DEFINER` `handle_new_user()` trigger. That policy is now source-controlled in `0006_baseline_rls`.
 
 **Exact group policy contract.**
 
@@ -172,15 +181,19 @@ The membership predicates are `SECURITY DEFINER`, `STABLE`, fixed-`search_path` 
 | Linked Finance Team member runs nested auth query | Own membership and global Ministry join resolve; an unassigned user gets no row. |
 | Anonymous caller accesses either table | Denied (grants revoked and no anonymous policy). |
 | Authenticated but unlinked caller lists groups | Zero rows, including for global ministries. |
-| Authenticated user reads `user_accounts` | Exactly its own row; this must be confirmed against the remote policy. |
+| Authenticated user reads `user_accounts` | Exactly its own row. **Confirmed** against the live policy; captured in `0006_baseline_rls`. |
 
 **Cost.** $0. No service, function host, realtime subscription, or runtime dependency was added.
 
 ---
 
-### 3.3 `churches` RLS leaks every church's data to every user — High
+### 3.3 `churches` RLS leaked every church's data to every user — Resolved (`0009_narrow_grants`)
 
-**Finding.** Per [README.md](../README.md) the policy is:
+**Resolution.** Fixed more decisively than the mitigation below proposes. Enumerating every `supabase.from(...)` call showed the SPA **never queries `churches` directly** — it reads the table only through the `SECURITY DEFINER` `get_my_church()` RPC. So `0009` revokes the table grant from `anon` and `authenticated` entirely, which makes the permissive policy unreachable rather than merely narrower. The policy is *also* scoped to `id = get_my_church_id()`, as defence in depth should the grant ever be restored.
+
+**Verify:** as an authenticated user, `supabase.from('churches').select('*')` returns a permission error rather than rows; the dashboard title still renders on cold load, because it comes from the RPC.
+
+**Original finding, retained for context.** Per [README.md](../README.md) the policy was:
 
 ```sql
 create policy "Authenticated users can view churches"
@@ -203,7 +216,7 @@ create policy "churches_select_own_only"
   using (id = public.get_my_church_id());
 ```
 
-The `get_my_church()` RPC runs as `SECURITY DEFINER` and reads `churches` with the definer's privileges, so it continues to return the caller's church name even after this tightening.
+The `get_my_church()` RPC runs as `SECURITY DEFINER` and reads `churches` with the definer's privileges, so it continues to return the caller's church name even after this tightening. Both the RPC and the permissive policy are now captured in `0006_baseline_rls`, so this fix can finally land as a reviewable migration against a known baseline rather than as an untracked dashboard edit.
 
 **Verification.**
 - As any authenticated user, `supabase.from('churches').select('*')` returns exactly one row (their own).
@@ -416,6 +429,119 @@ For an organization in the Philippines, the **Data Privacy Act of 2012 (RA 10173
 
    Because no `DELETE` policy exists on `members` (per [ARCHITECTURE.md](ARCHITECTURE.md) §6.2), this works only from the SQL editor where RLS is bypassed by default for the project owner. That is the desired posture: erasure is privileged.
 3. **Optional later:** automate via a Supabase scheduled job that hard-deletes rows where `archived_at < now() - interval '5 years'`. Defer until volume justifies it.
+
+**Cost.** $0.
+
+---
+
+### 3.11 `members` and `collections` policies did not match their documented intent — Resolved (`0007`, `0008`)
+
+**Resolution.** `0007_members_policy_split` replaced the `members` `FOR ALL` policy with per-command policies and no `DELETE` policy, fixing finding A. `0010_members_select_allow_archived` fixed finding B — see the correction below, because the cause was **not** what this section originally claimed. `0008_funds_write_policies` added the missing `collections` UPDATE/DELETE policies and the `is_finance_member()` predicate, fixing finding C and closing the separate gap that finance-role authorization was enforced only in the browser.
+
+Two design decisions worth recording, because they are not obvious from the SQL:
+
+- **Reads are church-scoped; writes are finance-gated.** `SELECT` policies on `collections` and `expenses` are deliberately *not* finance-gated. `ChurchFundsView.vue` builds the monthly report from `expenses` and is not a finance-only route, so gating `SELECT` would break reports for every non-finance user. The same reasoning keeps `collections SELECT` open, since [ARCHITECTURE.md](ARCHITECTURE.md) §9.14 plans to feed contributions into that report.
+- **The 3-hour edit window moved into RLS** and is no longer advisory. This required a column-scoped `UPDATE (amount)` grant: with table-wide `UPDATE`, a caller could set `created_at = now()` and extend their own window indefinitely, making the policy predicate useless.
+
+**How this surfaced.** Baselining the previously untracked policies into `0006_baseline_rls` required capturing what was actually deployed. Three of the captured policies differed from what [ARCHITECTURE.md](ARCHITECTURE.md) §6.2 described. They are transcribed unchanged in `0006` — that migration is a record, not a fix. The findings below are retained for context.
+
+**Finding A — `members` permits hard DELETE (High).** The deployed policy is a single `FOR ALL` policy, not the four separate policies previously documented:
+
+```sql
+CREATE POLICY "Only same church members can CRUD data"
+ON public.members FOR ALL TO public
+USING (member_of = public.get_my_church_id() AND archived_at IS NULL);
+```
+
+`FOR ALL` covers `DELETE`, and `authenticated` holds the `DELETE` grant (§3.12). Any signed-in staff member can therefore permanently delete an active member record of their own church directly through PostgREST. The soft-delete-only guarantee that §3.10's retention model and §6.2.1's audit rationale both rest on **does not exist in the database**.
+
+**Finding B — the archive flow is blocked (High, correctness).** `DashboardView.handleArchive()` fails with `42501: new row violates row-level security policy for table "members"`. Production data confirms this has never worked: 27 members across three churches, **zero archived rows**.
+
+> **Correction.** This finding originally attributed the failure to the missing `WITH CHECK` on the `FOR ALL` policy, reasoning that Postgres reuses `USING` as the write check. That was wrong, and `0007_members_policy_split` consequently did not fix it.
+>
+> The real cause is the **SELECT** policy. Postgres evaluates it against the **new** row during an `UPDATE`; setting `archived_at` makes the updated row invisible under `archived_at IS NULL`, so the statement is rejected. Verified empirically against production inside rolled-back transactions: holding the UPDATE policy at `WITH CHECK (true)` still failed, while removing `archived_at IS NULL` from the SELECT policy alone succeeded. The pre-`0007` `FOR ALL` policy carried the same condition in its `USING` clause and failed identically, which is why this is long-standing rather than a regression.
+>
+> Fixed by `0010_members_select_allow_archived`. The condition moved out of the policy and into the application, so **archived rows are now readable over PostgREST by staff of the owning church** and hiding them is a UI responsibility — four member reads carry an explicit `.is('archived_at', null)`. Tenant isolation is unaffected. The alternative, a `SECURITY DEFINER` `archive_member()` RPC preserving the invisible-once-archived model, was considered and not taken.
+
+Findings A and B compounded: before `0007`, the only deletion path that worked was the destructive one.
+
+**Finding C — `collections` cannot be edited or deleted (Medium).** Only `SELECT` and `INSERT` policies exist. With RLS enabled and no `UPDATE` or `DELETE` policy, both operations are denied for every caller. `CollectionsInputView.vue` calls `.update()` and `.delete()` inside its 3-hour edit window; those calls are rejected.
+
+**Mitigation (free).** Replace the `members` `FOR ALL` policy with explicit per-command policies, and add the two missing `collections` policies gated on the existing 3-hour window. Sketch — **not yet reviewed or applied**, and it must land as its own migration:
+
+```sql
+DROP POLICY "Only same church members can CRUD data" ON public.members;
+
+CREATE POLICY members_select_own_church ON public.members
+  FOR SELECT TO authenticated
+  USING (member_of = public.get_my_church_id() AND archived_at IS NULL);
+
+CREATE POLICY members_insert_own_church ON public.members
+  FOR INSERT TO authenticated
+  WITH CHECK (member_of = public.get_my_church_id() AND archived_at IS NULL);
+
+-- WITH CHECK omits `archived_at IS NULL` so archiving is permitted;
+-- it still pins member_of, so cross-church reassignment stays blocked.
+CREATE POLICY members_update_own_church ON public.members
+  FOR UPDATE TO authenticated
+  USING (member_of = public.get_my_church_id())
+  WITH CHECK (member_of = public.get_my_church_id());
+
+-- No DELETE policy: this is what makes archiving the only deletion path.
+```
+
+**Verification.** As an authenticated user: `delete from members` via PostgREST returns zero affected rows; archiving a member succeeds and the row leaves the list; editing a collection inside the 3-hour window succeeds and outside it is refused by the UI.
+
+**Cost.** $0.
+
+---
+
+### 3.12 Supabase default `GRANT ALL` never revoked on five tables — Resolved (`0009_narrow_grants`)
+
+**Resolution.** `0009` revokes all privileges on `churches`, `collections`, `expenses`, `members` and `user_accounts` from both `anon` and `authenticated`, then re-grants only what the SPA demonstrably uses — a set derived by enumerating every `supabase.from(...)` call rather than estimated. `anon` ends with **no table privileges at all**, which is correct: the pre-auth views use only `supabase.auth.*`, which talks to GoTrue rather than PostgREST. The `TRUNCATE`-bypasses-RLS concern below is closed as a side effect. `service_role` is untouched — it bypasses RLS by design and the frontend never uses it.
+
+`0009` also revokes `anon`'s `EXECUTE` on the helper functions. `0004` had attempted this with `REVOKE ALL ... FROM PUBLIC`, which does not work: `anon`'s grant comes from Supabase's default privileges, granted to the role directly rather than via `PUBLIC`.
+
+The full resulting grant table is in [ARCHITECTURE.md](ARCHITECTURE.md) §6.2.
+
+**Original finding, retained for context.** Table privileges are the gate *in front of* RLS. `0004_church_scoped_groups` revokes Supabase's defaults before re-granting narrowly, so `groups` and `group_members` really are limited to their intended operations. No such revoke exists for `churches`, `collections`, `expenses`, `members` or `user_accounts` — all five still carry the default `GRANT ALL` (`SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER`) to **both `anon` and `authenticated`**.
+
+Note that `0003_expenses`' `GRANT SELECT, INSERT, UPDATE ... TO authenticated` reads as though it scopes access, but `GRANT` is additive and `0003` never revokes — so it changed nothing about the effective privilege set.
+
+**Why it matters.** These tables are protected by RLS alone, with no defence in depth. Two specifics:
+- `TRUNCATE` is **not subject to RLS**. It is not reachable through PostgREST, so this is not exploitable with the anon key today, but it means a single future misconfiguration — one table with RLS accidentally disabled — escalates from "readable" to "erasable".
+- `anon` holding write privileges on the PII table is unnecessary under any current flow.
+
+`anon` likewise holds `EXECUTE` on every `public` function including the `SECURITY DEFINER` predicates. `0004`'s `REVOKE ALL ... FROM PUBLIC` did not strip this, because `anon`'s grant comes from Supabase's default privileges rather than via `PUBLIC`. Harmless in itself — `auth.uid()` is `NULL` without a JWT, so the helpers return nothing — but it is not what `0004` intended.
+
+**Mitigation (free).** Follow the `0004` pattern per table: `REVOKE ALL ... FROM anon, authenticated;` then grant only what the app uses. Revoke `EXECUTE` from `anon` explicitly rather than from `PUBLIC`. Apply per table and verify the app after each — an over-tight grant here breaks the SPA at runtime, and there is no staging project to catch it.
+
+**Cost.** $0.
+
+---
+
+### 3.13 Two load-bearing triggers exist in no migration — Medium
+
+**Finding.** `0006_baseline_rls` captures every function in `public`, but two triggers that invoke them sit outside the `public` schema and are therefore still untracked:
+
+| Trigger | Location | What breaks without it |
+|---|---|---|
+| calls `public.handle_new_user()` | `auth.users` | New auth users get no `user_accounts` row, so `get_my_church_id()` returns `NULL` and **every** RLS policy denies **every** row. Sign-in succeeds; the app is empty. |
+| calls `public.rls_auto_enable()` | database-level event trigger | New tables are created without RLS. Given §3.12's blanket grants, a new table would be fully world-accessible to any anon caller. |
+
+This is a **disaster-recovery gap**, and the second one is a latent security gap for any table added later.
+
+**Mitigation (free).** Capture both definitions and add them to a follow-up migration:
+
+```sql
+SELECT tgname, pg_get_triggerdef(oid) FROM pg_trigger
+WHERE NOT tgisinternal AND tgrelid = 'auth.users'::regclass;
+
+SELECT evtname, pg_get_userbyid(evtowner), evtevent, evtenabled
+FROM pg_event_trigger;
+```
+
+Recreating a trigger on `auth.users` requires elevated privileges and may not survive a Supabase platform upgrade — document it as a manual rebuild step regardless.
 
 **Cost.** $0.
 

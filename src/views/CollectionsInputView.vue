@@ -238,8 +238,15 @@ import { supabase } from '../lib/supabase'
 import { getDefaultServiceDate, isWithinEditWindow } from '../utils/collectionsDate'
 import FundsTabs from '../components/FundsTabs.vue'
 import { defaultMonthKey, getMonthRange, monthKeyFromDate } from '../utils/expensesMonth'
+import { interpretMutation } from '../utils/mutationResult'
 
 const COLLECTION_SELECT = 'id, from, amount, is_tithes, collectedOn, created_at, members!collections_from_fkey(first_name, middle_name, last_name)'
+
+// The 3-hour window is enforced by RLS (0008_funds_write_policies), which filters
+// the row out rather than raising an error, so this is what the user sees when a
+// locked entry is edited or deleted — including from a stale open tab.
+const EDIT_WINDOW_CLOSED_MESSAGE =
+  'This entry is locked. Entries can only be changed within 3 hours of being recorded.'
 
 const form = ref({
   memberQuery: '',
@@ -351,6 +358,9 @@ async function loadMembers() {
   const { data, error } = await supabase
     .from('members')
     .select('id, first_name, middle_name, last_name')
+    // Required since 0010_members_select_allow_archived — RLS no longer filters
+    // archived members, so archived people would otherwise appear in this picker.
+    .is('archived_at', null)
     .order('first_name', { ascending: true })
 
   if (error) {
@@ -517,15 +527,19 @@ async function saveEdit() {
   }
 
   editSaving.value = true
-  const { error } = await supabase
+  // `.select()` is required: RLS enforces the 3-hour window by filtering the row
+  // out, which PostgREST reports as success with zero rows. See mutationResult.js.
+  const result = await supabase
     .from('collections')
     .update({ amount: editAmount.value })
     .eq('id', selectedEntry.value.id)
+    .select()
 
   editSaving.value = false
 
-  if (error) {
-    editError.value = error.message
+  const outcome = interpretMutation(result, EDIT_WINDOW_CLOSED_MESSAGE)
+  if (!outcome.ok) {
+    editError.value = outcome.message
     return
   }
 
@@ -540,13 +554,15 @@ async function saveEdit() {
 async function handleDelete() {
   if (!window.confirm('Are you sure you want to delete this entry?')) return
 
-  const { error } = await supabase
+  const result = await supabase
     .from('collections')
     .delete()
     .eq('id', selectedEntry.value.id)
+    .select()
 
-  if (error) {
-    editError.value = error.message
+  const outcome = interpretMutation(result, EDIT_WINDOW_CLOSED_MESSAGE)
+  if (!outcome.ok) {
+    editError.value = outcome.message
     return
   }
 
