@@ -1,15 +1,12 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { supabase } from '../lib/supabase'
-import LoginView from '../views/LoginView.vue'
-import SetPasswordView from '../views/SetPasswordView.vue'
-import AccountPendingView from '../views/AccountPendingView.vue'
-import DashboardLayout from '../layouts/DashboardLayout.vue'
-import DashboardView from '../views/DashboardView.vue'
-import MinistrySmallGroupView from '../views/MinistrySmallGroupView.vue'
-import ChurchFundsView from '../views/ChurchFundsView.vue'
-import CollectionsInputView from '../views/CollectionsInputView.vue'
-import ExpensesInputView from '../views/ExpensesInputView.vue'
 
+// Every route is lazy-loaded. This closes docs/DEFECTS.md D9 — previously every
+// view was imported eagerly into one 404 KB chunk — but it is load-bearing for
+// more than bundle hygiene now: /checkin is opened by attendees on their phones,
+// on church wifi, with a cold cache, every service. Shipping them the staff
+// dashboard would be the single largest use of the Netlify bandwidth budget in
+// the app. Keep these as () => import(...) when adding routes.
 const routes = [
   {
     path: '/',
@@ -18,33 +15,53 @@ const routes = [
   {
     path: '/login',
     name: 'Login',
-    component: LoginView
+    component: () => import('../views/LoginView.vue')
+  },
+  {
+    // PUBLIC AND UNAUTHENTICATED, deliberately. No `meta` at all, and the guard
+    // short-circuits on it below. The check-in token travels in the URL fragment
+    // (/checkin#t=...), which browsers never send to the server, so it stays out
+    // of Netlify access logs and any Referer header. See
+    // docs/decisions/0007-public-checkin-endpoint.md.
+    path: '/checkin',
+    name: 'Checkin',
+    component: () => import('../views/CheckinView.vue')
   },
   {
     path: '/set-password',
     name: 'SetPassword',
-    component: SetPasswordView,
+    component: () => import('../views/SetPasswordView.vue'),
     meta: { requiresAuth: true }
   },
   {
     path: '/account-pending',
     name: 'AccountPending',
-    component: AccountPendingView,
+    component: () => import('../views/AccountPendingView.vue'),
     meta: { requiresAuth: true }
   },
   {
     path: '/dashboard',
-    component: DashboardLayout,
+    component: () => import('../layouts/DashboardLayout.vue'),
     meta: { requiresAuth: true },
     children: [
       { path: '', redirect: '/dashboard/members' },
-      { path: 'members', name: 'Members', component: DashboardView },
-      { path: 'ministry', name: 'Ministry', component: MinistrySmallGroupView },
+      { path: 'members', name: 'Members', component: () => import('../views/DashboardView.vue') },
+      { path: 'ministry', name: 'Ministry', component: () => import('../views/MinistrySmallGroupView.vue') },
+      { path: 'attendance', name: 'Attendance', component: () => import('../views/AttendanceView.vue') },
       { path: 'funds', redirect: '/dashboard/funds/reports' },
-      { path: 'funds/reports', name: 'ChurchFunds', component: ChurchFundsView },
-      { path: 'funds/collections', name: 'Collections', component: CollectionsInputView, meta: { requiresFinance: true } },
-      { path: 'funds/expenses', name: 'Expenses', component: ExpensesInputView, meta: { requiresFinance: true } }
+      { path: 'funds/reports', name: 'ChurchFunds', component: () => import('../views/ChurchFundsView.vue') },
+      { path: 'funds/collections', name: 'Collections', component: () => import('../views/CollectionsInputView.vue'), meta: { requiresFinance: true } },
+      { path: 'funds/expenses', name: 'Expenses', component: () => import('../views/ExpensesInputView.vue'), meta: { requiresFinance: true } }
     ]
+  },
+  {
+    // Catch-all. Closes docs/DEFECTS.md D13: an unmatched path used to render a
+    // blank white page. That stopped being cosmetic the moment check-in URLs
+    // started being printed on posters, where a mistyped or retired link is the
+    // most likely way anyone reaches an unknown path.
+    path: '/:pathMatch(.*)*',
+    name: 'NotFound',
+    component: () => import('../views/NotFoundView.vue')
   }
 ]
 
@@ -101,6 +118,15 @@ async function hasFinanceRole(userId) {
 }
 
 router.beforeEach(async (to, from, next) => {
+  // /checkin is reached by people who have no account at all. Short-circuit
+  // before getSession() so the public page never costs an auth round-trip, and
+  // so a staff member who scans the QR on their own phone is not bounced to the
+  // dashboard by the signed-in redirect below.
+  if (to.path === '/checkin') {
+    next()
+    return
+  }
+
   const { data: { session } } = await supabase.auth.getSession()
 
   if (to.meta.requiresAuth && !session) {

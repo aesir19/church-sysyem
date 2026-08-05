@@ -494,15 +494,64 @@ model webauthn_credentials {
   @@schema("auth")
 }
 
+/// One person, one service. `member_id` set means a registered member; `guest_name`
+/// set means a visitor — exactly one of the two, enforced by a check constraint.
+///
+/// `source` is the trust marker: 'self' rows came from the public QR page and are
+/// UNVERIFIED self-assertions, 'staff' rows were recorded by a signed-in member.
+/// The column is deliberately absent from the INSERT grant so no client can forge
+/// either value; see 0013 and docs/decisions/0007-public-checkin-endpoint.md.
+///
+/// Two partial unique indexes make check-in idempotent — one on (service_id,
+/// member_id), one on (service_id, guest_name_norm) restricted to source = 'self'.
+/// Prisma cannot model partial indexes, so neither appears below.
+/// This table contains check constraints and requires additional setup for migrations.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model attendance {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  service_id      String   @db.Uuid
+  church_id       String   @db.Uuid
+  member_id       String?  @db.Uuid
+  guest_name      String?
+  guest_contact   String?
+  /// GENERATED ALWAYS ... STORED. Materialized rather than left as an expression
+  /// index so ON CONFLICT can infer it by plain column name. Never written directly.
+  guest_name_norm String?
+  source          String   @default("staff")
+  recorded_by     String?  @db.Uuid
+  created_at      DateTime @default(now()) @db.Timestamptz(6)
+  churches        churches @relation(fields: [church_id], references: [id], onDelete: Cascade)
+  members         members? @relation(fields: [member_id], references: [id], onDelete: Cascade)
+  /// Composite FK, not a plain reference to services.id. Carrying church_id into
+  /// the key is what stops one church attaching attendance to another church's
+  /// service — the RLS policy cannot see the service's church cheaply, so the
+  /// constraint does that half of the work.
+  services        services @relation(fields: [service_id, church_id], references: [id, church_id], onDelete: Cascade)
+
+  @@index([member_id, created_at(sort: Desc)], map: "attendance_member_idx")
+  @@index([service_id, created_at], map: "attendance_service_idx")
+  @@schema("public")
+}
+
+/// This table contains check constraints and requires additional setup for migrations.
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model churches {
-  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name        String        @db.VarChar
-  address     String?       @db.VarChar
-  collections collections[]
-  expenses    expenses[]
-  groups      groups[]
-  members     members[]
+  id                       String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                     String              @db.VarChar
+  address                  String?             @db.VarChar
+  /// The static per-church QR secret (0013). Shape-checked to 32 hex chars in the
+  /// database. Never selected by the SPA — it is reachable only through the
+  /// get_my_checkin_link() RPC, because `churches` has held zero table grants for
+  /// both roles since 0009_narrow_grants.
+  checkin_token            String              @unique(map: "churches_checkin_token_key")
+  checkin_token_rotated_at DateTime?           @db.Timestamptz(6)
+  attendance               attendance[]
+  collections              collections[]
+  expenses                 expenses[]
+  groups                   groups[]
+  members                  members[]
+  service_schedules        service_schedules[]
+  services                 services[]
 
   @@schema("public")
 }
@@ -599,11 +648,74 @@ model members {
   is_baptized                   Boolean         @default(false)
   marital_status                String          @default("Single") @db.VarChar
   has_submitted_membership_form Boolean         @default(false)
+  attendance                    attendance[]
   collections                   collections[]
   group_members                 group_members[]
   churches                      churches        @relation(fields: [member_of], references: [id], onDelete: SetNull)
   user_accounts                 user_accounts[]
 
+  /// Added by 0013 for the anonymous check-in name match, which runs on the public
+  /// hot path. The expression — lower(regexp_replace(btrim(first_name || ' ' ||
+  /// last_name), '\s+', ' ', 'g')) — and the archived_at IS NULL predicate cannot be
+  /// modelled by Prisma, so the index is invisible here. It exists; see 0013.
+  @@schema("public")
+}
+
+/// A recurring weekly slot. `weekday` is 0 = Sunday, matching extract(dow ...) —
+/// NOT isodow. `timezone` is check-pinned to 'Asia/Manila' because a CHECK cannot
+/// validate against pg_timezone_names and a typo would raise at runtime inside the
+/// anonymous RPC. Overnight slots are rejected by CHECK (ends_at > starts_at);
+/// those are recorded as ad-hoc `services` rows instead.
+/// This table contains check constraints and requires additional setup for migrations.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model service_schedules {
+  id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  church_id  String     @db.Uuid
+  label      String
+  weekday    Int        @db.SmallInt
+  starts_at  DateTime   @db.Time(6)
+  ends_at    DateTime   @db.Time(6)
+  timezone   String     @default("Asia/Manila")
+  is_active  Boolean    @default(true)
+  created_at DateTime   @default(now()) @db.Timestamptz(6)
+  created_by String?    @db.Uuid
+  churches   churches   @relation(fields: [church_id], references: [id], onDelete: Cascade)
+  services   services[]
+
+  @@unique([id, church_id], map: "service_schedules_id_church_key")
+  @@schema("public")
+}
+
+/// One concrete occurrence. Materialized lazily — by staff opening the roster or by
+/// the first check-in, whichever comes first — so no cron is needed and the feature
+/// survives Supabase's 7-day auto-pause.
+///
+/// A row here is AUTHORITATIVE over its schedule and wins entirely, never partially:
+/// closing early must not be undone by the schedule fallback, and an extended
+/// closes_at must hold. `closes_at` moves only through close_service_now(), which is
+/// why there is no UPDATE grant on this table.
+/// This table contains check constraints and requires additional setup for migrations.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model services {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  church_id         String             @db.Uuid
+  schedule_id       String?            @db.Uuid
+  label             String
+  opens_at          DateTime           @db.Timestamptz(6)
+  closes_at         DateTime           @db.Timestamptz(6)
+  /// GENERATED ALWAYS AS ((opens_at AT TIME ZONE 'Asia/Manila')::date) STORED.
+  /// Derived in the database so no client can compute it — that is defect D8, and
+  /// current_date in SQL is the same bug because PostgREST's session TimeZone is UTC.
+  service_date      DateTime           @db.Date
+  created_at        DateTime           @default(now()) @db.Timestamptz(6)
+  created_by        String?            @db.Uuid
+  attendance        attendance[]
+  churches          churches           @relation(fields: [church_id], references: [id], onDelete: Cascade)
+  service_schedules service_schedules? @relation(fields: [schedule_id, church_id], references: [id, church_id], onDelete: Restrict)
+
+  @@unique([id, church_id], map: "services_id_church_key")
+  @@index([church_id, opens_at], map: "services_church_open_idx")
+  @@index([church_id, service_date(sort: Desc)], map: "services_church_date_idx")
   @@schema("public")
 }
 

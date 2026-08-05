@@ -595,6 +595,66 @@ a way that produces no error**. The rebuild would appear to work. That is why th
 
 ---
 
+### 3.21 The public check-in endpoint is unauthenticated and cannot be throttled — Medium (accepted residual risk)
+
+**Finding.** `0013_attendance_and_checkin` grants `anon` `EXECUTE` on two `SECURITY DEFINER`
+functions — `checkin_session_status(text)` and `submit_checkin(text,text,text)` — so an attendee
+can self-register from a QR code with no account. These are the **only two privileges `anon` holds
+anywhere in the system**; it still has no table, view, or sequence grant, and no RLS policy names
+it. See [ADR-0007](decisions/0007-public-checkin-endpoint.md) for the full reasoning.
+
+This is a sibling of §3.18 and the harder half of it. **Postgres cannot rate-limit an
+unauthenticated PostgREST endpoint**: by the time the function body runs, the connection, parse
+and planning are already paid for. §3.18's proposed mitigation is a per-*user* insert ceiling, and
+an anonymous caller has no user to key on, so it does not transfer. Cloudflare, the control that
+would supply edge rate limiting, is not adopted (ADR-0005).
+
+**What bounds it (all $0, all shipped).**
+
+1. **The window.** The endpoint is inert roughly 166 hours out of every 168. Outside a configured
+   service window a call costs two index probes and writes nothing. The order of operations inside
+   `submit_checkin` is what preserves this and is commented at the site; reordering it for
+   readability removes the control.
+2. **A 500-row per-service ceiling** on self check-ins. This is an *integrity* guard, not a cost
+   one — rows are ~100 bytes and 500 MB holds ~5M. When it trips, self check-in returns `'closed'`
+   and **staff recording is unaffected**, so the failure degrades rather than denies.
+3. **Idempotence.** Partial unique indexes on `(service_id, member_id)` and on
+   `(service_id, guest_name_norm) WHERE source = 'self'` mean repeat submissions write no new
+   rows, so the obvious flood does not grow storage.
+4. **Bounded input.** Shape checks run before any table is touched; name is capped at 80
+   characters and contact at 32, both by CHECK constraints.
+5. **`closes_at <= opens_at + interval '24 hours'`.** A stuck-open window is the one drift that
+   would quietly turn this into an unbounded write endpoint, so the database refuses to store one.
+
+**What is not mitigated.** A determined attacker who holds a token and calls during a live window
+can consume request capacity. The response is operational, not preventive: revoke the two `anon`
+grants, which stops self check-in within seconds and leaves staff recording working —
+
+```sql
+REVOKE EXECUTE ON FUNCTION public.checkin_session_status(text)     FROM anon;
+REVOKE EXECUTE ON FUNCTION public.submit_checkin(text, text, text) FROM anon;
+```
+
+— or rotate the church's token via `rotate_my_checkin_token()` if the link itself has leaked.
+
+**Related exposure, deliberately accepted.** Self-registered attendance is **self-asserted, not
+verified**: anyone holding the token can claim any member was present. `attendance.source` records
+the distinction and every roster surfaces it. The column is withheld from the `INSERT` grant so no
+client can forge it. Do not treat this data as evidence.
+
+**New PII.** Guest names and optional contact numbers are now collected from people who are not
+users, which enlarges §3.10 — the check-in page carries a collection notice, and `attendance`
+cascades from `members` so erasing a member erases their attendance, but no retention policy
+exists for guests who never become members.
+
+**Monitoring.** [security/VERIFICATION.md](security/VERIFICATION.md) now checks monthly that
+`anon`'s `EXECUTE` grants are *exactly* these two functions, and that no `services` row has a
+window longer than 24 hours.
+
+**Cost.** $0.
+
+---
+
 ## 4. Tier 2 findings
 
 ### 4.1 Unvalidated `facebook_link` URL scheme — Low (latent)
