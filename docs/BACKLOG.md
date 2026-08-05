@@ -77,11 +77,20 @@ would need its own RLS reasoning since it deliberately reaches outside the calle
 treasurer and no **per-member annual giving statement** — a routine church requirement members
 ask for at year end. Both are buildable client-side on data the report already loads.
 
-**B20 — No attendance or service records.** There is no `services` or `attendance` table. The
-monthly report's "weeks" are inferred from distinct `collectedOn` / `spent_on` values rather
-than from a service that exists in its own right — which is why the header counts *service
-dates*, and why a midweek bill with no service behind it still produces its own column.
-Attendance cannot be correlated with giving or used for follow-up.
+**B20 — No attendance or service records.** ~~There is no `services` or `attendance` table.~~
+**Largely shipped in `0013_attendance_and_checkin`.** `service_schedules`, `services` and
+`attendance` now exist, with a staff roster and a public QR self check-in page — see
+[ADR-0007](decisions/0007-public-checkin-endpoint.md).
+
+**What remains open is the second half: attendance is not correlated with giving.** The monthly
+report's "weeks" are still inferred from distinct `collectedOn` / `spent_on` values rather than
+from the `services` rows that now exist, so the header still counts *service dates* and a midweek
+bill with no service behind it still produces its own column. Joining the report to `services`
+is a follow-up, and a behaviour-changing one: it would alter which columns appear in a report
+people reconcile against paper, so it needs its own decision rather than being folded in.
+
+Follow-up work is also unblocked rather than done: **B22**'s "who is due for follow-up?" now has
+a data source, but nothing consumes it yet.
 
 **B25 — The paper report has two lines the schema cannot fill.** Both are hidden while zero
 rather than shown as a permanent ₱0.00 (owner decision, 2026-08-03), so the on-screen report no

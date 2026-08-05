@@ -20,6 +20,7 @@ supersede the record explicitly.
 | [0004](0004-view-aggregates-but-does-not-allocate.md) | The SQL view aggregates; only the JS calculator allocates | Accepted |
 | [0005](0005-jwt-in-localstorage-accepted.md) | The JWT stays in `localStorage`; `HttpOnly` cookies rejected | Accepted (residual risk) |
 | [0006](0006-error-sink-in-stack.md) | Error monitoring is an in-stack table, not a third-party processor | Accepted |
+| [0007](0007-public-checkin-endpoint.md) | The public check-in endpoint — `anon` reaches two definer functions and no table | Accepted (residual risk) |
 
 ## Format
 
