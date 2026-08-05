@@ -9,6 +9,7 @@ import {
   validateCheckinContact,
   validateCheckinName,
 } from '../utils/checkinPayload'
+import { readCheckedInNames, rememberCheckinName } from '../utils/checkinMemory'
 import { formatTimeRemaining } from '../utils/attendanceWindow'
 
 /**
@@ -30,6 +31,10 @@ import { formatTimeRemaining } from '../utils/attendanceWindow'
  *      'closed' and nothing else — never whether a member matched, never whether
  *      this person had already checked in. See interpretCheckin().
  *
+ * The "you're already listed" state is a corollary of rule 3, not an exception
+ * to it: it is read from this device's own localStorage, never from the server.
+ * See src/utils/checkinMemory.js for why, and do not replace it with a lookup.
+ *
  * This view must not import DashboardLayout or anything under it: the router
  * lazy-loads it precisely so an attendee's phone never downloads the staff
  * bundle over church wifi.
@@ -40,6 +45,7 @@ const STATE = {
   BAD_LINK: 'bad-link',
   CLOSED: 'closed',
   OPEN: 'open',
+  ALREADY: 'already',
   DONE: 'done',
 }
 
@@ -49,8 +55,23 @@ const token = ref('')
 const submitting = ref(false)
 const formError = ref('')
 const doneMessage = ref('')
+const rememberedNames = ref([])
 
 const form = ref({ name: '', contact: '' })
+
+/**
+ * localStorage, or null when it cannot be reached.
+ *
+ * Reading `window.localStorage` can itself throw when storage is disabled, so
+ * the access is guarded and not just the calls on it.
+ */
+function deviceStorage() {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage
+  } catch {
+    return null
+  }
+}
 
 const serviceDateLabel = computed(() => {
   const value = session.value?.service_date
@@ -69,9 +90,24 @@ const closingLabel = computed(() =>
   session.value?.closes_at ? formatTimeRemaining(session.value.closes_at) : ''
 )
 
-onMounted(loadSession)
+/**
+ * Phrasing for the already-listed state.
+ *
+ * One name is the attendee re-opening their own confirmation. Several means a
+ * volunteer's phone worked through a queue, which is an expected case rather
+ * than an edge one, so it is named plainly instead of being flattened to the
+ * most recent person.
+ */
+const rememberedLabel = computed(() => {
+  const names = rememberedNames.value
+  if (names.length === 0) return ''
+  if (names.length === 1) return `This phone checked in ${names[0]}.`
+  return `This phone checked in ${names.length} people: ${names.join(', ')}.`
+})
 
-async function loadSession() {
+onMounted(() => loadSession())
+
+async function loadSession({ checkMemory = true } = {}) {
   state.value = STATE.LOADING
 
   const hash = typeof window === 'undefined' ? '' : window.location.hash
@@ -100,6 +136,17 @@ async function loadSession() {
   }
 
   session.value = row
+
+  // Device-local, and costs no request: the status call above happens either
+  // way. Asking the server "has this person already checked in?" would answer
+  // "is X here today?" for anyone holding the token — see checkinMemory.js.
+  const remembered = checkMemory ? readCheckedInNames(deviceStorage(), row) : []
+  if (remembered.length > 0) {
+    rememberedNames.value = remembered
+    state.value = STATE.ALREADY
+    return
+  }
+
   state.value = STATE.OPEN
 }
 
@@ -135,7 +182,10 @@ async function handleSubmit() {
     return
   }
 
-  doneMessage.value = `Thanks, ${sanitizeCheckinName(form.value.name)}.`
+  const name = sanitizeCheckinName(form.value.name)
+  rememberedNames.value = rememberCheckinName(deviceStorage(), session.value, name)
+
+  doneMessage.value = `Thanks, ${name}.`
   state.value = STATE.DONE
 }
 
@@ -143,7 +193,9 @@ function checkInSomeoneElse() {
   form.value = { name: '', contact: '' }
   formError.value = ''
   doneMessage.value = ''
-  loadSession()
+  // checkMemory: false — the visitor has just said this is a different person,
+  // so re-reading this device's history would bounce them straight back.
+  loadSession({ checkMemory: false })
 }
 </script>
 
@@ -166,6 +218,25 @@ function checkInSomeoneElse() {
         <p class="state-detail">
           Check-in opens shortly before each service. Please ask a volunteer if you need help.
         </p>
+      </template>
+
+      <!-- Read from this device's localStorage, never from the server. A
+           server-sourced version of this screen would answer "is X here today?"
+           for anyone holding the token. See src/utils/checkinMemory.js. -->
+      <template v-else-if="state === STATE.ALREADY">
+        <div class="success-mark" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+        </div>
+        <h1>You're already listed</h1>
+        <p class="state-detail">{{ rememberedLabel }}</p>
+        <p class="state-detail service-context">
+          {{ session.service_label }} · {{ serviceDateLabel }}
+        </p>
+        <button type="button" class="btn-secondary" @click="checkInSomeoneElse">
+          Check in someone else
+        </button>
       </template>
 
       <template v-else-if="state === STATE.DONE">
@@ -385,6 +456,11 @@ input:focus {
 
 .state-detail {
   margin: 12px 0 0;
+}
+
+.service-context {
+  font-size: 0.8125rem;
+  color: #94a3b8;
 }
 
 .success-mark {
