@@ -1,5 +1,9 @@
 # Prisma + Supabase Migration Plan
 
+> **HISTORICAL — this plan shipped.** Retained as a record of intent and rationale.
+> The current workflow, commands, and the per-migration operator caveats are in
+> [OPERATIONS.md](OPERATIONS.md) §2, which is what you want if you are about to deploy something.
+
 This document defines how to manage the existing Supabase Postgres schema through Prisma so schema changes are versioned in code.
 
 ## Scope

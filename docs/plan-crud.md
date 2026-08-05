@@ -1,5 +1,16 @@
 # Plan: Member CRUD + Archiving
 
+> **HISTORICAL — this plan shipped. Do not implement from it.**
+>
+> Retained as a record of intent. Parts of it are now **wrong**: Phase 1 step 3 prescribes a
+> `members` SELECT policy of `member_of = get_my_church_id() AND archived_at IS NULL`. That
+> predicate made archiving impossible — Postgres evaluates the SELECT policy against the *new*
+> row during an `UPDATE` — and `0010_members_select_allow_archived` removed it. Filtering
+> archived members is now the application's job on every read.
+>
+> Current state: [ARCHITECTURE.md](ARCHITECTURE.md) §5.1–§5.2 and
+> [ADR-0001](decisions/0001-rls-is-the-only-authz.md).
+
 Add Create / Update / Archive (soft-delete) to the UDFC dashboard. The existing details modal becomes tri-mode (`view` / `edit` / `create`). Archiving uses **nullable columns + a partial index** on `members` — the most storage-efficient pattern that also accommodates the `archive_reason` field (NULLs cost ~1 bit each in Postgres' null bitmap; the partial index excludes archived rows entirely so its size scales with *active* members only).
 
 ## Phase 1 — Database (Supabase SQL)
@@ -34,14 +45,14 @@ Add Create / Update / Archive (soft-delete) to the UDFC dashboard. The existing 
 
 ## Phase 5 — Documentation *(depends on 1–4)*
 
-1. Update [ARCHITECTURE.md](../ARCHITECTURE.md): §5.4 (modal modes + handlers), §6.1 (new columns), §6.2 (new policies), new "Archiving Model" subsection (storage rationale), §9 (replace "No CRUD UI"), §11 (new flows).
+1. Update [ARCHITECTURE.md](ARCHITECTURE.md): §5.4 (modal modes + handlers), §6.1 (new columns), §6.2 (new policies), new "Archiving Model" subsection (storage rationale), §9 (replace "No CRUD UI"), §11 (new flows).
 2. Update [README.md](../README.md): Features, schema table, RLS migration SQL block.
 
 ## Relevant files
 
 - [src/views/DashboardView.vue](../src/views/DashboardView.vue) — primary surface; reuse existing `.modal` / `.detail-row` / palette tokens.
 - [src/lib/supabase.js](../src/lib/supabase.js) — no changes (shared client suffices).
-- [ARCHITECTURE.md](../ARCHITECTURE.md) — §5.4, §6.1, §6.2, §9, §11.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — §5.4, §6.1, §6.2, §9, §11.
 - [README.md](../README.md) — schema + RLS sections.
 - Supabase SQL editor — migration + RLS (SQL also committed to README).
 

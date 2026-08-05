@@ -3,5 +3,8 @@ dist
 .env
 .env.local
 
+# Personal Claude Code overrides — contains machine-local absolute paths
+.claude/settings.local.json
+
 /src/generated/prisma
 .xlsx
