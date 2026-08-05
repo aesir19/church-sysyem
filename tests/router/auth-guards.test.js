@@ -170,6 +170,58 @@ describe('router auth guards', () => {
     expect(secondNext).toHaveBeenCalledWith('/dashboard')
   })
 
+  it('lets an anonymous visitor reach the public check-in page', async () => {
+    // /checkin carries no meta.requiresAuth. If it ever gains one, or the guard
+    // stops short-circuiting on it, every attendee scanning the QR is bounced to
+    // a login page they have no account for.
+    state.session = null
+    await loadRouter()
+
+    const next = vi.fn()
+    await state.guard({ path: '/checkin', meta: {} }, {}, next)
+
+    expect(next).toHaveBeenCalledWith()
+  })
+
+  it('does not query the database when serving the public check-in page', async () => {
+    // The public page is opened by people with no account, on church wifi, all
+    // at once. It must not cost a session lookup or a user_accounts round-trip.
+    state.session = null
+    await loadRouter()
+    supabaseMock.auth.getSession.mockClear()
+    supabaseMock.from.mockClear()
+
+    await state.guard({ path: '/checkin', meta: {} }, {}, vi.fn())
+
+    expect(supabaseMock.auth.getSession).not.toHaveBeenCalled()
+    expect(supabaseMock.from).not.toHaveBeenCalled()
+  })
+
+  it('keeps a signed-in staff member on the check-in page rather than redirecting to the dashboard', async () => {
+    // A volunteer scanning the QR on their own phone is an ordinary case, and
+    // the signed-in redirect must not hijack it.
+    state.session = { user: { id: 'user-1' } }
+    state.linked = true
+    await loadRouter()
+
+    const next = vi.fn()
+    await state.guard({ path: '/checkin', meta: {} }, {}, next)
+
+    expect(next).toHaveBeenCalledWith()
+  })
+
+  it('lets an unmatched path fall through to the catch-all rather than redirecting', async () => {
+    // The NotFound route has no meta, so the guard's final next() serves it.
+    // Before the catch-all existed this rendered a blank page (D13).
+    state.session = null
+    await loadRouter()
+
+    const next = vi.fn()
+    await state.guard({ path: '/checkin/typo', meta: {} }, {}, next)
+
+    expect(next).toHaveBeenCalledWith()
+  })
+
   it('redirects non-finance users away from collections route', async () => {
     state.session = { user: { id: 'user-1' } }
     state.linked = true
