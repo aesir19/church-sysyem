@@ -139,6 +139,56 @@ export function formatScheduleRange(schedule) {
 }
 
 /**
+ * The next moment self check-in will open, derived from the recurring schedule.
+ *
+ * Weekday and clock time are read from the browser's local calendar, which
+ * carries the same assumption buildAdhocServicePayload already makes: the device
+ * is in Manila. The database stays the authority on whether a window is really
+ * open — this only decides what to render while nothing is live.
+ *
+ * @returns {{ schedule: object, startsAt: Date } | null}
+ */
+export function nextWindow(schedules, now = new Date()) {
+  const active = (Array.isArray(schedules) ? schedules : []).filter((row) => row?.is_active)
+  if (active.length === 0) return null
+
+  let best = null
+  // 0..7, not 0..6: a slot whose time has already passed today is next due a
+  // week from today, and offset 7 is the only one that finds it.
+  for (let offset = 0; offset <= 7; offset += 1) {
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset)
+    for (const schedule of active) {
+      if (Number(schedule.weekday) !== day.getDay()) continue
+      const [hour, minute] = String(schedule.starts_at ?? '').split(':').map(Number)
+      if (!Number.isInteger(hour) || !Number.isInteger(minute)) continue
+      const startsAt = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour, minute)
+      if (startsAt.getTime() <= now.getTime()) continue
+      if (!best || startsAt.getTime() < best.startsAt.getTime()) best = { schedule, startsAt }
+    }
+  }
+  return best
+}
+
+/**
+ * 'Sunday Service opens tomorrow at 8:00 AM'. Empty string when no active slot
+ * is scheduled, which the caller renders as a warning rather than a blank.
+ */
+export function describeNextWindow(schedules, now = new Date()) {
+  const next = nextWindow(schedules, now)
+  if (!next) return ''
+
+  // Compared at midnight boundaries so "tomorrow" means the next calendar day,
+  // not "within 24 hours" — 11 PM Saturday to 8 AM Sunday is 9 hours but is
+  // still tomorrow.
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const then = new Date(next.startsAt.getFullYear(), next.startsAt.getMonth(), next.startsAt.getDate())
+  const days = Math.round((then.getTime() - today.getTime()) / 86400000)
+
+  const when = days === 0 ? 'today' : days === 1 ? 'tomorrow' : weekdayLabel(next.startsAt.getDay())
+  return `${next.schedule.label} opens ${when} at ${formatClockTime(next.schedule.starts_at)}`
+}
+
+/**
  * Validate a schedule form before it reaches the database, so the user sees a
  * sentence rather than a constraint name (docs/SECURITY.md §3.5).
  * Mirrors service_schedules_label_shape / _weekday_check / _window_check.

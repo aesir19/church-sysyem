@@ -3,6 +3,7 @@ import {
   attendeeLabel,
   buildAdhocServicePayload,
   buildSchedulePayload,
+  describeNextWindow,
   formatClockTime,
   formatScheduleRange,
   formatTimeRemaining,
@@ -10,6 +11,7 @@ import {
   memberDisplayName,
   memberMatchName,
   minutesUntil,
+  nextWindow,
   normalizeName,
   summariseRoster,
   validateAdhocService,
@@ -275,5 +277,48 @@ describe('summariseRoster', () => {
 
   it('handles a missing roster', () => {
     expect(summariseRoster(null).total).toBe(0)
+  })
+})
+
+describe('nextWindow / describeNextWindow', () => {
+  const sunday = { id: 's1', label: 'Sunday Service', weekday: 0, starts_at: '08:00:00', ends_at: '11:00:00', is_active: true }
+  const wednesday = { id: 's2', label: 'Prayer Meeting', weekday: 3, starts_at: '18:00:00', ends_at: '20:00:00', is_active: true }
+
+  // Local-time constructor throughout, matching how the helper reads the clock.
+  const wedMorning = new Date(2026, 7, 5, 9, 0) // Wednesday 5 Aug 2026, 9:00 AM
+
+  it('finds a slot later the same day', () => {
+    const result = nextWindow([wednesday], wedMorning)
+    expect(result.schedule.id).toBe('s2')
+    expect(result.startsAt.getDate()).toBe(5)
+    expect(describeNextWindow([wednesday], wedMorning)).toBe('Prayer Meeting opens today at 6:00 PM')
+  })
+
+  it('rolls to the next week when the slot has already passed today', () => {
+    const wedEvening = new Date(2026, 7, 5, 21, 0)
+    const result = nextWindow([wednesday], wedEvening)
+    expect(result.startsAt.getDate()).toBe(12)
+    expect(describeNextWindow([wednesday], wedEvening)).toBe('Prayer Meeting opens Wednesday at 6:00 PM')
+  })
+
+  it('picks the soonest across several slots', () => {
+    // Sunday is four days out, Wednesday is nine hours out.
+    expect(describeNextWindow([sunday, wednesday], wedMorning)).toBe('Prayer Meeting opens today at 6:00 PM')
+  })
+
+  it('names the next calendar day as tomorrow', () => {
+    const saturdayNight = new Date(2026, 7, 8, 23, 0) // Saturday
+    expect(describeNextWindow([sunday], saturdayNight)).toBe('Sunday Service opens tomorrow at 8:00 AM')
+  })
+
+  it('ignores paused slots', () => {
+    expect(nextWindow([{ ...wednesday, is_active: false }], wedMorning)).toBeNull()
+    expect(describeNextWindow([{ ...wednesday, is_active: false }], wedMorning)).toBe('')
+  })
+
+  it('handles an empty or malformed schedule', () => {
+    expect(nextWindow([], wedMorning)).toBeNull()
+    expect(nextWindow(null, wedMorning)).toBeNull()
+    expect(nextWindow([{ ...wednesday, starts_at: '' }], wedMorning)).toBeNull()
   })
 })

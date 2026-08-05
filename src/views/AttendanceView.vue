@@ -8,6 +8,7 @@ import {
   attendeeLabel,
   buildAdhocServicePayload,
   buildSchedulePayload,
+  describeNextWindow,
   formatScheduleRange,
   formatTimeRemaining,
   isWindowOpen,
@@ -43,6 +44,11 @@ const roster = ref([])
 const schedules = ref([])
 const members = ref([])
 
+// The page is the two halves of one causal chain — the schedule and QR that make
+// check-in open, and the record that falls out of it. The tabs name that split
+// instead of leaving it to scroll position.
+const activeTab = ref('checkin')
+
 const toast = ref(null)
 const savingAttendee = ref(false)
 const closingService = ref(false)
@@ -64,19 +70,18 @@ const adhocModal = ref({ open: false, saving: false, error: '', form: null })
 // changed quickly — the slower earlier request must not overwrite the newer one.
 let rosterRequestId = 0
 
-const selectedService = computed(
-  () => services.value.find((service) => service.id === selectedServiceId.value) || null
-)
-
-const isSelectedOpen = computed(() =>
-  selectedService.value
-    ? isWindowOpen(selectedService.value.opens_at, selectedService.value.closes_at)
-    : false
+// The live service, found by window rather than by selection. The select below
+// is a filter over history; reviewing last month's roster must not make the
+// banner claim check-in is closed while a service is actually running.
+const openService = computed(
+  () => services.value.find((service) => isWindowOpen(service.opens_at, service.closes_at)) || null
 )
 
 const closingLabel = computed(() =>
-  selectedService.value ? formatTimeRemaining(selectedService.value.closes_at) : ''
+  openService.value ? formatTimeRemaining(openService.value.closes_at) : ''
 )
+
+const nextWindowLabel = computed(() => describeNextWindow(schedules.value))
 
 const rosterSummary = computed(() => summariseRoster(roster.value))
 
@@ -152,6 +157,11 @@ async function loadContext() {
   if (serviceResult.error || schedulesResult.error || membersResult.error) {
     contextError.value = 'Some information could not be loaded. What you see below may be incomplete.'
   }
+
+  // Land on whichever half of the chain the user came for. A service running
+  // right now means they are here to record; the rest of the week, the schedule
+  // is the thing worth seeing.
+  activeTab.value = openService.value ? 'record' : 'checkin'
 
   loadingContext.value = false
 
@@ -278,13 +288,14 @@ async function handleRemove(row) {
 }
 
 async function handleCloseNow() {
-  if (!selectedService.value) return
+  const target = openService.value
+  if (!target) return
   if (!window.confirm('Close check-in for this service now? People will no longer be able to check themselves in.')) {
     return
   }
 
   closingService.value = true
-  const { error } = await supabase.rpc('close_service_now', { p_service_id: selectedService.value.id })
+  const { error } = await supabase.rpc('close_service_now', { p_service_id: target.id })
   closingService.value = false
 
   if (error) {
@@ -297,7 +308,7 @@ async function handleCloseNow() {
   const { data } = await supabase
     .from('services')
     .select(SERVICE_COLUMNS)
-    .eq('id', selectedService.value.id)
+    .eq('id', target.id)
     .maybeSingle()
 
   if (data) {
@@ -360,6 +371,8 @@ function openScheduleModal() {
     open: true,
     saving: false,
     error: '',
+    // 0 = Sunday, the common case, but only as the default — a midweek service
+    // is a recurring slot too, not something to re-create as a one-off weekly.
     form: { label: '', weekday: 0, startsAt: '08:00', endsAt: '11:00' },
   }
 }
@@ -448,6 +461,9 @@ async function saveAdhocService() {
   services.value = [result.data[0], ...services.value]
   selectedServiceId.value = result.data[0].id
   adhocModal.value.open = false
+  // A one-off exists to be recorded against, so follow the chain to its output
+  // rather than leaving the user on the setup tab wondering where it went.
+  activeTab.value = 'record'
   showToast('Service created.')
 }
 
@@ -468,251 +484,330 @@ function formatRecordedAt(value) {
 <template>
   <div class="page-container">
     <header class="page-header">
-      <div>
-        <h1>Attendance</h1>
-        <p class="page-subtitle">{{ myChurchName }}</p>
-      </div>
-      <div class="header-actions">
-        <button type="button" class="btn-secondary" @click="openAdhocModal">+ One-off service</button>
-      </div>
+      <h1>Attendance</h1>
+      <p class="page-subtitle">{{ myChurchName }}</p>
     </header>
 
-    <p v-if="loadError" class="load-warning">{{ loadError }}</p>
+    <!-- Amber, not red: a partial load is degraded output, not a failed action.
+         Red stays reserved for writes that were rejected. -->
+    <p v-if="loadError" class="notice notice-warning">{{ loadError }}</p>
 
     <div v-if="loading" class="card">
       <div class="state-message"><p>Loading attendance…</p></div>
     </div>
 
     <template v-else>
-      <section class="card">
-        <div class="service-bar">
-          <div class="form-group service-select">
-            <label for="service-select">Service</label>
-            <select id="service-select" v-model="selectedServiceId">
-              <option v-if="services.length === 0" value="">No services yet</option>
-              <option v-for="service in services" :key="service.id" :value="service.id">
-                {{ formatServiceOption(service) }}
-              </option>
-            </select>
-          </div>
+      <!-- Held above the tabs because it is true of the church, not of whichever
+           tab happens to be showing. It is also the thread joining the two: the
+           schedule causes this state, and this state causes the record. -->
+      <div class="status-band" :class="openService ? 'is-open' : 'is-closed'">
+        <span class="status-dot" aria-hidden="true"></span>
+        <div class="status-text">
+          <strong>{{ openService ? 'Check-in is open' : 'Check-in is closed' }}</strong>
+          <span v-if="openService">{{ openService.label }} · {{ closingLabel }}</span>
+          <span v-else-if="nextWindowLabel">{{ nextWindowLabel }}</span>
+          <span v-else class="status-alert">No active weekly slot — self check-in will never open.</span>
+        </div>
+        <button
+          v-if="openService"
+          type="button"
+          class="btn-caution"
+          :disabled="closingService"
+          @click="handleCloseNow"
+        >
+          {{ closingService ? 'Closing…' : 'Close check-in now' }}
+        </button>
+      </div>
 
-          <div v-if="selectedService" class="service-status">
-            <span class="status-pill" :class="isSelectedOpen ? 'is-open' : 'is-closed'">
-              {{ isSelectedOpen ? 'Open' : 'Closed' }}
-            </span>
-            <span v-if="isSelectedOpen" class="status-detail">{{ closingLabel }}</span>
-            <button
-              v-if="isSelectedOpen"
-              type="button"
-              class="btn-danger-ghost"
-              :disabled="closingService"
-              @click="handleCloseNow"
-            >
-              {{ closingService ? 'Closing…' : 'Close check-in now' }}
+      <div class="tabs" role="tablist" aria-label="Attendance sections">
+        <button
+          id="tab-checkin"
+          type="button"
+          role="tab"
+          class="tab"
+          :class="{ 'is-active': activeTab === 'checkin' }"
+          :aria-selected="activeTab === 'checkin'"
+          aria-controls="panel-checkin"
+          @click="activeTab = 'checkin'"
+        >
+          Self check-in
+        </button>
+        <button
+          id="tab-record"
+          type="button"
+          role="tab"
+          class="tab"
+          :class="{ 'is-active': activeTab === 'record' }"
+          :aria-selected="activeTab === 'record'"
+          aria-controls="panel-record"
+          @click="activeTab = 'record'"
+        >
+          Attendance record
+        </button>
+      </div>
+
+      <!-- Tab 1 — the cause. The schedule is the opening hours, the QR is the
+           door; they were only ever separate because the tables are. Numbering
+           them makes the dependency visible instead of implied. -->
+      <section
+        v-show="activeTab === 'checkin'"
+        id="panel-checkin"
+        role="tabpanel"
+        aria-labelledby="tab-checkin"
+        class="card"
+      >
+        <div class="chain-step">
+          <span class="step-index" aria-hidden="true">1</span>
+          <div class="step-body">
+            <div class="step-head">
+              <div>
+                <h2>When check-in opens</h2>
+                <p class="step-note">
+                  Self check-in works only inside these windows, and opens on its own when one
+                  starts. Pause a slot to stop it without losing past records.
+                </p>
+              </div>
+              <div class="step-actions">
+                <button type="button" class="btn-tertiary" @click="openScheduleModal">+ Weekly slot</button>
+                <button type="button" class="btn-tertiary" @click="openAdhocModal">+ One-off service</button>
+              </div>
+            </div>
+
+            <div v-if="schedules.length === 0" class="state-message">
+              <p>No recurring services yet. Add a weekly slot and check-in will open on its own.</p>
+            </div>
+
+            <ul v-else class="schedule-list">
+              <li v-for="schedule in schedules" :key="schedule.id" class="schedule-item">
+                <div>
+                  <span class="schedule-label">{{ schedule.label }}</span>
+                  <span class="schedule-when">
+                    {{ weekdayLabel(schedule.weekday) }} · {{ formatScheduleRange(schedule) }}
+                  </span>
+                </div>
+                <div class="schedule-actions">
+                  <span v-if="!schedule.is_active" class="tag tag-paused">Paused</span>
+                  <button type="button" class="btn-link" @click="toggleSchedule(schedule)">
+                    {{ schedule.is_active ? 'Pause' : 'Resume' }}
+                  </button>
+                </div>
+              </li>
+            </ul>
+
+            <p v-if="activeSchedules.length === 0 && schedules.length > 0" class="notice notice-warning">
+              Every slot is paused, so self check-in will never open.
+            </p>
+          </div>
+        </div>
+
+        <div class="chain-link"><span>During those windows</span></div>
+
+        <div class="chain-step">
+          <span class="step-index" aria-hidden="true">2</span>
+          <div class="step-body">
+            <div class="step-head">
+              <div>
+                <h2>How people check themselves in</h2>
+                <p class="step-note">
+                  Print this once and post it where people arrive. The link never changes — it
+                  simply stops working whenever no window is open.
+                </p>
+              </div>
+              <div class="step-actions">
+                <button type="button" class="btn-secondary" @click="toggleQr">
+                  {{ showQr ? 'Hide QR' : 'Show QR' }}
+                </button>
+              </div>
+            </div>
+
+            <div v-if="showQr" class="qr-panel">
+              <p v-if="qrError" class="form-error">{{ qrError }}</p>
+              <!-- eslint-disable-next-line vue/no-v-html -->
+              <div v-else-if="qrSvg" class="qr-code" v-html="qrSvg"></div>
+              <div v-else class="state-message"><p>Generating…</p></div>
+            </div>
+
+            <div class="link-row">
+              <code class="checkin-link">{{ checkinUrl || 'Unavailable' }}</code>
+              <button type="button" class="btn-secondary" :disabled="!checkinUrl" @click="copyLink">Copy</button>
+            </div>
+
+            <!-- Deliberately not styled as danger. ADR-0007 makes rotation *the*
+                 control when a code leaks, so dressing it in error red discourages
+                 the one action we want reachable. The consequence is carried by
+                 the text and the confirm dialog, which is where it belongs. -->
+            <div class="rotate-row">
+              <button
+                type="button"
+                class="btn-caution-link"
+                :disabled="rotatingToken"
+                @click="handleRotateToken"
+              >
+                {{ rotatingToken ? 'Generating…' : 'Generate a new link' }}
+              </button>
+              <p class="rotate-hint">
+                Use this if the code was shared outside the congregation. Every QR code already
+                printed stops working.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 2 — the effect. The service picker is a filter over history here,
+           not a subject in its own right, so it sits inline rather than in a card
+           of its own. -->
+      <section
+        v-show="activeTab === 'record'"
+        id="panel-record"
+        role="tabpanel"
+        aria-labelledby="tab-record"
+        class="record-panel"
+      >
+        <div v-if="services.length === 0" class="card">
+          <div class="state-message">
+            <p>
+              No services yet. Check-in opens on its own once a weekly slot exists — or create a
+              one-off service for something outside the usual pattern.
+            </p>
+            <button type="button" class="btn-secondary" @click="activeTab = 'checkin'">
+              Set up self check-in
             </button>
           </div>
         </div>
 
-        <div v-if="services.length === 0" class="state-message">
-          <p>
-            No services yet. Add a recurring schedule below and one will be created automatically
-            when its window opens, or create a one-off service now.
-          </p>
-        </div>
-
-        <div v-else class="summary-row">
-          <div class="summary-tile">
-            <span class="summary-value">{{ rosterSummary.total }}</span>
-            <span class="summary-label">Total</span>
-          </div>
-          <div class="summary-tile">
-            <span class="summary-value">{{ rosterSummary.members }}</span>
-            <span class="summary-label">Members</span>
-          </div>
-          <div class="summary-tile">
-            <span class="summary-value">{{ rosterSummary.guests }}</span>
-            <span class="summary-label">Guests</span>
-          </div>
-          <div class="summary-tile">
-            <span class="summary-value">{{ rosterSummary.selfRecorded }}</span>
-            <span class="summary-label">Self check-in</span>
-          </div>
-        </div>
-      </section>
-
-      <section v-if="selectedServiceId" class="card">
-        <h2>Record attendance</h2>
-
-        <div class="mode-toggle" role="group" aria-label="Attendee type">
-          <button
-            type="button"
-            :class="{ 'is-active': attendeeMode === 'member' }"
-            @click="attendeeMode = 'member'"
-          >
-            Registered member
-          </button>
-          <button
-            type="button"
-            :class="{ 'is-active': attendeeMode === 'guest' }"
-            @click="attendeeMode = 'guest'"
-          >
-            Guest / visitor
-          </button>
-        </div>
-
-        <form class="attendee-form" @submit.prevent="handleAddAttendee">
-          <MemberAutocomplete
-            v-if="attendeeMode === 'member'"
-            ref="memberPicker"
-            v-model="attendeeForm.memberId"
-            :members="members"
-            input-id="attendance-member"
-            label="Member"
-          />
-
-          <template v-else>
-            <div class="form-group">
-              <label for="guest-name">Guest name</label>
-              <input
-                id="guest-name"
-                v-model="attendeeForm.guestName"
-                type="text"
-                maxlength="80"
-                placeholder="e.g. Maria Santos"
-              />
+        <template v-else>
+          <div class="card">
+            <div class="record-bar">
+              <div class="form-group service-select">
+                <label for="service-select">Showing</label>
+                <select id="service-select" v-model="selectedServiceId">
+                  <option v-for="service in services" :key="service.id" :value="service.id">
+                    {{ formatServiceOption(service) }}
+                  </option>
+                </select>
+              </div>
             </div>
-            <div class="form-group">
-              <label for="guest-contact">Contact number <span class="optional">(optional)</span></label>
-              <input
-                id="guest-contact"
-                v-model="attendeeForm.guestContact"
-                type="tel"
-                maxlength="32"
-                placeholder="e.g. 0917 555 1234"
-              />
+
+            <div class="summary-row">
+              <div class="summary-tile is-primary">
+                <span class="summary-value">{{ rosterSummary.total }}</span>
+                <span class="summary-label">Total</span>
+              </div>
+              <div class="summary-tile">
+                <span class="summary-value">{{ rosterSummary.members }}</span>
+                <span class="summary-label">Members</span>
+              </div>
+              <div class="summary-tile">
+                <span class="summary-value">{{ rosterSummary.guests }}</span>
+                <span class="summary-label">Guests</span>
+              </div>
+              <div class="summary-tile">
+                <span class="summary-value">{{ rosterSummary.selfRecorded }}</span>
+                <span class="summary-label">Self check-in</span>
+              </div>
             </div>
-          </template>
+          </div>
 
-          <button type="submit" class="btn-primary" :disabled="savingAttendee">
-            {{ savingAttendee ? 'Saving…' : 'Add' }}
-          </button>
-        </form>
+          <div v-if="selectedServiceId" class="card">
+            <h2>Who attended</h2>
 
-        <p v-if="attendeeError" class="form-error">{{ attendeeError }}</p>
-      </section>
-
-      <section v-if="selectedServiceId" class="card">
-        <h2>Who attended</h2>
-
-        <div v-if="roster.length === 0" class="state-message">
-          <p>Nobody recorded yet for this service.</p>
-        </div>
-
-        <table v-else class="data-table">
-          <thead>
-            <tr>
-              <th scope="col">Name</th>
-              <th scope="col">Type</th>
-              <th scope="col">Recorded</th>
-              <th scope="col"><span class="visually-hidden">Actions</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in roster" :key="row.id">
-              <td>
-                <span class="attendee-name">{{ attendeeLabel(row) }}</span>
-                <span v-if="row.guest_contact" class="attendee-contact">{{ row.guest_contact }}</span>
-              </td>
-              <td>
-                <span class="tag" :class="row.member_id ? 'tag-member' : 'tag-guest'">
-                  {{ row.member_id ? 'Member' : 'Guest' }}
-                </span>
-                <!-- Provenance is surfaced on every row because a self check-in is
-                     an unverified self-assertion — anyone holding the QR link can
-                     type any name. Staff-recorded rows are the authoritative ones. -->
-                <span class="tag" :class="row.source === 'self' ? 'tag-self' : 'tag-staff'">
-                  {{ row.source === 'self' ? 'Self check-in' : 'Recorded by staff' }}
-                </span>
-              </td>
-              <td class="time-cell">{{ formatRecordedAt(row.created_at) }}</td>
-              <td class="actions-cell">
-                <button type="button" class="btn-link-danger" @click="handleRemove(row)">Remove</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section class="card">
-        <div class="card-header">
-          <h2>Check-in QR code</h2>
-          <button type="button" class="btn-secondary" @click="toggleQr">
-            {{ showQr ? 'Hide' : 'Show QR' }}
-          </button>
-        </div>
-
-        <p class="card-note">
-          Print this once and post it where people arrive. The link stays the same — it only works
-          while a service window is open, so there is nothing to change week to week.
-        </p>
-
-        <div v-if="showQr" class="qr-panel">
-          <p v-if="qrError" class="form-error">{{ qrError }}</p>
-          <!-- eslint-disable-next-line vue/no-v-html -->
-          <div v-else-if="qrSvg" class="qr-code" v-html="qrSvg"></div>
-          <div v-else class="state-message"><p>Generating…</p></div>
-        </div>
-
-        <div class="link-row">
-          <code class="checkin-link">{{ checkinUrl || 'Unavailable' }}</code>
-          <button type="button" class="btn-secondary" :disabled="!checkinUrl" @click="copyLink">Copy</button>
-        </div>
-
-        <button
-          type="button"
-          class="btn-link-danger rotate-btn"
-          :disabled="rotatingToken"
-          @click="handleRotateToken"
-        >
-          {{ rotatingToken ? 'Generating…' : 'Generate a new link' }}
-        </button>
-      </section>
-
-      <section class="card">
-        <div class="card-header">
-          <h2>Weekly schedule</h2>
-          <button type="button" class="btn-secondary" @click="openScheduleModal">+ Add slot</button>
-        </div>
-
-        <p class="card-note">
-          Check-in opens automatically during these windows. Pause a slot to stop it without losing
-          past records.
-        </p>
-
-        <div v-if="schedules.length === 0" class="state-message">
-          <p>No recurring services yet.</p>
-        </div>
-
-        <ul v-else class="schedule-list">
-          <li v-for="schedule in schedules" :key="schedule.id" class="schedule-item">
-            <div>
-              <span class="schedule-label">{{ schedule.label }}</span>
-              <span class="schedule-when">
-                {{ weekdayLabel(schedule.weekday) }} · {{ formatScheduleRange(schedule) }}
-              </span>
-            </div>
-            <div class="schedule-actions">
-              <span v-if="!schedule.is_active" class="tag tag-paused">Paused</span>
-              <button type="button" class="btn-link" @click="toggleSchedule(schedule)">
-                {{ schedule.is_active ? 'Pause' : 'Resume' }}
+            <div class="mode-toggle" role="group" aria-label="Attendee type">
+              <button
+                type="button"
+                :class="{ 'is-active': attendeeMode === 'member' }"
+                @click="attendeeMode = 'member'"
+              >
+                Registered member
+              </button>
+              <button
+                type="button"
+                :class="{ 'is-active': attendeeMode === 'guest' }"
+                @click="attendeeMode = 'guest'"
+              >
+                Guest / visitor
               </button>
             </div>
-          </li>
-        </ul>
 
-        <p v-if="activeSchedules.length === 0 && schedules.length > 0" class="card-note warning-note">
-          Every slot is paused, so self check-in will never open.
-        </p>
+            <form class="attendee-form" @submit.prevent="handleAddAttendee">
+              <MemberAutocomplete
+                v-if="attendeeMode === 'member'"
+                ref="memberPicker"
+                v-model="attendeeForm.memberId"
+                :members="members"
+                input-id="attendance-member"
+                label="Member"
+              />
+
+              <template v-else>
+                <div class="form-group">
+                  <label for="guest-name">Guest name</label>
+                  <input
+                    id="guest-name"
+                    v-model="attendeeForm.guestName"
+                    type="text"
+                    maxlength="80"
+                    placeholder="e.g. Maria Santos"
+                  />
+                </div>
+                <div class="form-group">
+                  <label for="guest-contact">Contact number <span class="optional">(optional)</span></label>
+                  <input
+                    id="guest-contact"
+                    v-model="attendeeForm.guestContact"
+                    type="tel"
+                    maxlength="32"
+                    placeholder="e.g. 0917 555 1234"
+                  />
+                </div>
+              </template>
+
+              <button type="submit" class="btn-primary" :disabled="savingAttendee">
+                {{ savingAttendee ? 'Saving…' : 'Add' }}
+              </button>
+            </form>
+
+            <p v-if="attendeeError" class="form-error">{{ attendeeError }}</p>
+
+            <div v-if="roster.length === 0" class="state-message">
+              <p>Nobody recorded yet for this service.</p>
+            </div>
+
+            <table v-else class="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Type</th>
+                  <th scope="col">Recorded</th>
+                  <th scope="col"><span class="visually-hidden">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in roster" :key="row.id">
+                  <td>
+                    <span class="attendee-name">{{ attendeeLabel(row) }}</span>
+                    <span v-if="row.guest_contact" class="attendee-contact">{{ row.guest_contact }}</span>
+                  </td>
+                  <td>
+                    <span class="tag" :class="row.member_id ? 'tag-member' : 'tag-guest'">
+                      {{ row.member_id ? 'Member' : 'Guest' }}
+                    </span>
+                    <!-- Provenance is surfaced on every row because a self check-in is
+                         an unverified self-assertion — anyone holding the QR link can
+                         type any name. Staff-recorded rows are the authoritative ones. -->
+                    <span class="tag" :class="row.source === 'self' ? 'tag-self' : 'tag-staff'">
+                      {{ row.source === 'self' ? 'Self check-in' : 'Recorded by staff' }}
+                    </span>
+                  </td>
+                  <td class="time-cell">{{ formatRecordedAt(row.created_at) }}</td>
+                  <td class="actions-cell">
+                    <button type="button" class="btn-link-danger" @click="handleRemove(row)">Remove</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
       </section>
     </template>
 
@@ -730,6 +825,8 @@ function formatRecordedAt(value) {
             </div>
             <div class="form-group">
               <label for="schedule-weekday">Day</label>
+              <!-- .number matters: weekday is an integer column and validateSchedule
+                   rejects a non-integer, which a plain v-model would produce. -->
               <select id="schedule-weekday" v-model.number="scheduleModal.form.weekday">
                 <option v-for="(day, index) in WEEKDAY_LABELS" :key="day" :value="index">{{ day }}</option>
               </select>
@@ -802,14 +899,10 @@ function formatRecordedAt(value) {
 <style scoped>
 .page-container {
   padding: 24px;
-  max-width: 1100px;
+  max-width: 900px;
 }
 
 .page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
   margin-bottom: 20px;
 }
 
@@ -836,84 +929,234 @@ h2 {
   border: 1px solid #e2e8f0;
   border-radius: 12px;
   padding: 20px;
+}
+
+.record-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ---- Live state ------------------------------------------------------- */
+
+.status-band {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  border-radius: 12px;
+  border: 1px solid;
   margin-bottom: 16px;
 }
 
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
+.status-band.is-open {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
 }
 
-.card-note {
-  margin: 8px 0 16px;
+.status-band.is-closed {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+.status-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.status-band.is-open .status-dot {
+  background: #059669;
+  box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.16);
+}
+
+.status-band.is-closed .status-dot {
+  background: #94a3b8;
+}
+
+.status-text {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.status-text strong {
+  font-size: 0.9375rem;
+  color: #1e293b;
+}
+
+.status-text span {
+  font-size: 0.8125rem;
+  color: #64748b;
+}
+
+.status-text .status-alert {
+  color: #92400e;
+  font-weight: 600;
+}
+
+/* ---- Tabs ------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 16px;
+}
+
+.tab {
+  padding: 12px 16px;
+  border: none;
+  background: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tab:hover {
+  color: #1e293b;
+}
+
+.tab.is-active {
+  color: #1a56db;
+  border-bottom-color: #1a56db;
+}
+
+/* ---- The causal chain ------------------------------------------------- */
+
+.chain-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.step-index {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin-top: 2px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1a56db;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.step-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.step-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.step-note {
+  margin: 6px 0 0;
+  max-width: 52ch;
   font-size: 0.8125rem;
   line-height: 1.5;
   color: #64748b;
 }
 
-.warning-note {
-  color: #dc2626;
+/* The dashed rule descends from the step marker so the two steps read as one
+   sequence rather than two panels that happen to be stacked. */
+.chain-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0;
+  padding-left: 12px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #94a3b8;
 }
 
-.load-warning {
+.chain-link::before {
+  content: '';
+  align-self: stretch;
+  border-left: 2px dashed #e2e8f0;
+}
+
+.chain-link::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #e2e8f0;
+}
+
+.chain-link span {
+  padding: 6px 0;
+}
+
+/* ---- Notices ---------------------------------------------------------- */
+
+/* Amber is the app's caution colour (DashboardView .form-warning,
+   AccountPendingView). Red is kept for rejected writes only — .form-error and
+   .toast-error — so the two read as different classes of event. */
+.notice {
   margin: 0 0 16px;
   padding: 10px 14px;
   border-radius: 8px;
-  background: #fef2f2;
-  color: #dc2626;
   font-size: 0.875rem;
+  line-height: 1.5;
 }
 
-.service-bar {
+.notice-warning {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+}
+
+.card .notice {
+  margin: 14px 0 0;
+}
+
+/* ---- Record ----------------------------------------------------------- */
+
+.record-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 16px;
-  justify-content: space-between;
 }
 
 .service-select {
   flex: 1;
-  min-width: 220px;
-}
-
-.service-status {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.status-pill {
-  padding: 4px 12px;
-  border-radius: 999px;
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-.status-pill.is-open {
-  background: #ecfdf5;
-  color: #059669;
-}
-
-.status-pill.is-closed {
-  background: #f1f5f9;
-  color: #64748b;
-}
-
-.status-detail {
-  font-size: 0.8125rem;
-  color: #64748b;
+  min-width: 240px;
+  max-width: 380px;
+  margin-bottom: 0;
 }
 
 .summary-row {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  margin-top: 20px;
+  margin-top: 18px;
 }
 
 .summary-tile {
@@ -922,15 +1165,28 @@ h2 {
   padding: 14px;
   border-radius: 12px;
   background: #f8fafc;
+  border: 1px solid #e2e8f0;
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* One tile carries the headline number so the row has a focal point instead of
+   four identical boxes. The rest are supporting breakdown. */
+.summary-tile.is-primary {
+  background: #eff6ff;
+  border-color: #bfdbfe;
 }
 
 .summary-value {
   font-size: 1.5rem;
   font-weight: 700;
   color: #1e293b;
+  line-height: 1.2;
+}
+
+.summary-tile.is-primary .summary-value {
+  color: #1a56db;
 }
 
 .summary-label {
@@ -956,11 +1212,17 @@ h2 {
   font-weight: 600;
   color: #64748b;
   cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.mode-toggle button:hover:not(.is-active) {
+  color: #1e293b;
 }
 
 .mode-toggle button.is-active {
   background: #ffffff;
   color: #1a56db;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
 }
 
 .attendee-form {
@@ -978,6 +1240,8 @@ h2 {
 .attendee-form .btn-primary {
   margin-top: 26px;
 }
+
+/* ---- Forms ------------------------------------------------------------ */
 
 .form-row {
   display: flex;
@@ -1026,10 +1290,12 @@ select:focus {
   box-shadow: 0 0 0 3px rgba(26, 86, 219, 0.12);
 }
 
+/* ---- Roster ----------------------------------------------------------- */
+
 .data-table {
   width: 100%;
   border-collapse: collapse;
-  margin-top: 12px;
+  margin-top: 16px;
 }
 
 .data-table th {
@@ -1048,6 +1314,14 @@ select:focus {
   font-size: 0.875rem;
   color: #1e293b;
   vertical-align: middle;
+}
+
+.data-table tbody tr {
+  transition: background 0.15s;
+}
+
+.data-table tbody tr:hover {
+  background: #f8fafc;
 }
 
 .attendee-name {
@@ -1105,10 +1379,13 @@ select:focus {
   text-align: right;
 }
 
+/* ---- Schedule --------------------------------------------------------- */
+
 .schedule-list {
   list-style: none;
-  margin: 0;
+  margin: 14px 0 0;
   padding: 0;
+  border-top: 1px solid #f1f5f9;
 }
 
 .schedule-item {
@@ -1140,10 +1417,12 @@ select:focus {
   gap: 10px;
 }
 
+/* ---- QR and link ------------------------------------------------------ */
+
 .qr-panel {
   display: flex;
   justify-content: center;
-  padding: 16px 0;
+  padding: 18px 0;
 }
 
 .qr-code :deep(svg) {
@@ -1156,6 +1435,7 @@ select:focus {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  margin-top: 14px;
 }
 
 .checkin-link {
@@ -1170,23 +1450,45 @@ select:focus {
   overflow-wrap: anywhere;
 }
 
-.rotate-btn {
-  margin-top: 14px;
+.rotate-row {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #f1f5f9;
 }
 
+.rotate-hint {
+  margin: 6px 0 0;
+  max-width: 52ch;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+/* ---- Buttons ---------------------------------------------------------- */
+
+/* Four tiers, and the tier is the message: primary = the thing you came to do,
+   secondary/tertiary = supporting, caution (amber) = deliberate and disruptive
+   but expected, danger (red) = destroys a record. */
 .btn-primary {
   padding: 10px 20px;
   font-size: 0.9375rem;
   font-weight: 600;
   color: #ffffff;
   background: #1a56db;
-  border: none;
+  border: 1px solid #1a56db;
   border-radius: 8px;
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #1547b5;
+  border-color: #1547b5;
 }
 
 .btn-primary:disabled {
   background: #94a3b8;
+  border-color: #94a3b8;
   cursor: not-allowed;
 }
 
@@ -1196,39 +1498,111 @@ select:focus {
   font-weight: 600;
   color: #1e293b;
   background: #f1f5f9;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 8px;
   cursor: pointer;
+  transition: background 0.15s;
 }
 
-.btn-danger-ghost {
+.btn-secondary:hover:not(:disabled) {
+  background: #e2e8f0;
+}
+
+.btn-secondary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-tertiary {
+  padding: 8px 14px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #475569;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.btn-tertiary:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #1e293b;
+}
+
+.btn-caution {
   padding: 8px 14px;
   font-size: 0.8125rem;
   font-weight: 600;
-  color: #dc2626;
-  background: #fef2f2;
-  border: none;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
   border-radius: 8px;
   cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-caution:hover:not(:disabled) {
+  background: #fef3c7;
+}
+
+.btn-caution:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .btn-link,
-.btn-link-danger {
-  padding: 0;
+.btn-link-danger,
+.btn-caution-link {
+  padding: 4px 6px;
+  margin: -4px -6px;
   border: none;
   background: none;
+  border-radius: 6px;
   font-size: 0.8125rem;
   font-weight: 600;
   cursor: pointer;
+  transition: background 0.15s;
 }
 
 .btn-link {
   color: #1a56db;
 }
 
-.btn-link-danger {
-  color: #dc2626;
+.btn-link:hover {
+  background: #eff6ff;
 }
+
+.btn-link-danger {
+  color: #b91c1c;
+}
+
+.btn-link-danger:hover {
+  background: #fef2f2;
+}
+
+.btn-caution-link {
+  color: #92400e;
+}
+
+.btn-caution-link:hover:not(:disabled) {
+  background: #fffbeb;
+}
+
+.btn-caution-link:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* The base reset strips focus rings; keyboard users need them back on every
+   control that is not a native input (those already have :focus styling). */
+button:focus-visible {
+  outline: 2px solid #1a56db;
+  outline-offset: 2px;
+}
+
+/* ---- Shared states ---------------------------------------------------- */
 
 .form-error {
   margin: 12px 0 0;
@@ -1246,6 +1620,23 @@ select:focus {
   font-size: 0.9375rem;
 }
 
+.state-message p {
+  margin: 0 auto 12px;
+  max-width: 46ch;
+  line-height: 1.5;
+}
+
+.state-message p:last-child {
+  margin-bottom: 0;
+}
+
+.card-note {
+  margin: 8px 0 16px;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: #64748b;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -1253,6 +1644,31 @@ select:focus {
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .page-container {
+    padding: 16px;
+  }
+
+  .chain-step {
+    gap: 10px;
+  }
+
+  .step-actions {
+    width: 100%;
+  }
+
+  .step-actions .btn-tertiary,
+  .step-actions .btn-secondary {
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+  }
 }
 </style>
 
