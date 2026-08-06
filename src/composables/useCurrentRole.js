@@ -60,16 +60,15 @@ export function clearCurrentRole() {
   pending = null
 }
 
-// Reset the cache the moment the user changes, so a new sign-in never sees the
-// previous user's role. Guarded so a view test's partial auth mock cannot throw.
+// Invalidate the cache ONLY on a real sign-out. Supabase re-emits SIGNED_IN (and
+// TOKEN_REFRESHED / USER_UPDATED) on token refresh and tab focus, which navigation
+// can trigger — clearing on those made the role, and therefore the church selector,
+// flicker off and reset mid-session. A new user signing in clears via the SIGNED_OUT
+// that precedes it, and the next view mount reloads permissions for them.
+// Guarded so a view test's partial auth mock cannot throw.
 if (typeof supabase.auth?.onAuthStateChange === 'function') {
   supabase.auth.onAuthStateChange((event) => {
-    if (event === 'SIGNED_OUT') {
-      clearCurrentRole()
-    } else if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
-      clearCurrentRole()
-      loadPermissions()
-    }
+    if (event === 'SIGNED_OUT') clearCurrentRole()
   })
 }
 

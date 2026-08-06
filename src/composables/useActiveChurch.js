@@ -84,12 +84,13 @@ export function clearActiveChurch() {
   pending = null
 }
 
-// Reset when the user changes so one account's church list never leaks to the next.
+// Reset ONLY on a real sign-out. Supabase re-emits SIGNED_IN / TOKEN_REFRESHED on
+// token refresh and tab focus (which navigation can trigger); clearing on those wiped
+// the selected church and snapped the view back to the home church mid-session. A new
+// user signs in after a SIGNED_OUT, which has already reset this. Guarded for tests.
 if (typeof supabase.auth?.onAuthStateChange === 'function') {
   supabase.auth.onAuthStateChange((event) => {
-    if (event === 'SIGNED_OUT' || event === 'SIGNED_IN' || event === 'USER_UPDATED') {
-      clearActiveChurch()
-    }
+    if (event === 'SIGNED_OUT') clearActiveChurch()
   })
 }
 
