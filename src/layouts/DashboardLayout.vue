@@ -2,6 +2,8 @@
   <div class="layout">
     <AppSidebar :userName="userName" @logout="handleLogout" @collapse="onCollapse" />
     <div class="layout-main" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
+      <!-- Cross-church church picker (SuperAdmin / Head Pastor only; hidden otherwise). -->
+      <ChurchSelector />
       <router-view />
     </div>
   </div>
@@ -12,6 +14,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { supabase } from '../lib/supabase'
 import AppSidebar from '../components/AppSidebar.vue'
+import ChurchSelector from '../components/ChurchSelector.vue'
 
 const router = useRouter()
 const sidebarCollapsed = ref(false)

@@ -19,6 +19,16 @@ import {
   WEEKDAY_LABELS,
 } from '../utils/attendanceWindow'
 import { formatDateISO } from '../utils/collectionsDate'
+import { useCurrentRole } from '../composables/useCurrentRole'
+import { useActiveChurch } from '../composables/useActiveChurch'
+
+// canManageAttendance (Welcome Team / SuperAdmin) gates every write action; viewers
+// (Pastor / Church Leader / Head Pastor) see the roster read-only. RLS enforces it.
+const { canManageAttendance } = useCurrentRole()
+
+// Church scoping. The church-param RPCs (0018) let a SuperAdmin / Head Pastor target
+// the selected church; a single-church user's active church is simply their own.
+const { activeChurchId, activeChurchName, ensureLoaded } = useActiveChurch()
 
 const ATTENDANCE_COLUMNS =
   'id, member_id, guest_name, guest_contact, source, created_at, members(first_name, middle_name, last_name)'
@@ -35,8 +45,9 @@ const rosterError = ref('')
 const loading = computed(() => loadingContext.value || loadingRoster.value)
 const loadError = computed(() => contextError.value || rosterError.value)
 
-const myChurchId = ref('')
-const myChurchName = ref('')
+// Aliases to the shared active church so the rest of the view is unchanged.
+const myChurchId = activeChurchId
+const myChurchName = activeChurchName
 const checkinToken = ref('')
 const services = ref([])
 const selectedServiceId = ref('')
@@ -95,58 +106,74 @@ const checkinUrl = computed(() => {
 
 const activeSchedules = computed(() => schedules.value.filter((row) => row.is_active))
 
-onMounted(loadContext)
+onMounted(async () => {
+  // Resolve the active church before loadContext scopes its calls to it.
+  await ensureLoaded()
+  loadContext()
+})
 
 watch(selectedServiceId, loadRoster)
+
+// Reload everything for the newly selected church (church selector).
+watch(activeChurchId, () => {
+  if (!activeChurchId.value) return
+  selectedServiceId.value = ''
+  checkinToken.value = ''
+  qrSvg.value = ''
+  showQr.value = false
+  loadContext()
+})
 
 async function loadContext() {
   loadingContext.value = true
   contextError.value = ''
 
-  // One round-trip per intent, run in parallel rather than serialised.
-  const [churchResult, linkResult, serviceResult, schedulesResult, membersResult, ensureResult] =
-    await Promise.all([
-      supabase.rpc('get_my_church').single(),
-      supabase.rpc('get_my_checkin_link'),
-      supabase.from('services').select(SERVICE_COLUMNS).order('opens_at', { ascending: false }).limit(12),
-      supabase.from('service_schedules').select(SCHEDULE_COLUMNS).order('weekday').order('starts_at'),
-      // Fetched once for the autocomplete and filtered in memory. archived_at is
-      // filtered here because this IS a picker — the SELECT policy returns
-      // archived rows and excluding them is the application's job (ADR-0001).
-      supabase
-        .from('members')
-        .select('id, first_name, middle_name, last_name')
-        .is('archived_at', null)
-        .order('first_name', { ascending: true }),
-      // Materialises today's service from the recurring schedule if the window is
-      // open and nothing has created it yet, so "close now" and "add attendee"
-      // always have a real service to work against.
-      supabase.rpc('ensure_my_open_service'),
-    ])
-
-  if (churchResult.error || !churchResult.data) {
-    contextError.value = churchResult.error?.message || 'Unable to resolve church context.'
+  const churchId = activeChurchId.value
+  if (!churchId) {
+    contextError.value = 'Unable to resolve church context.'
     loadingContext.value = false
     loadingRoster.value = false
     return
   }
 
-  myChurchId.value = churchResult.data.id
-  myChurchName.value = churchResult.data.name
+  // One round-trip per intent, run in parallel. Every call is scoped to the active
+  // church: the church-param RPCs (0018) and explicit .eq('church_id', …) filters let
+  // a SuperAdmin / Head Pastor target the selected church rather than their own.
+  const [linkResult, serviceResult, schedulesResult, membersResult, ensureResult] =
+    await Promise.all([
+      supabase.rpc('get_checkin_link', { p_church_id: churchId }),
+      supabase.from('services').select(SERVICE_COLUMNS).eq('church_id', churchId).order('opens_at', { ascending: false }).limit(12),
+      supabase.from('service_schedules').select(SCHEDULE_COLUMNS).eq('church_id', churchId).order('weekday').order('starts_at'),
+      // Member picker source. Uses directory_search, NOT the members table: a Welcome
+      // Team member has no can_see_member_detail and cannot read `members` under RLS
+      // (0015), so the table select would be empty and the attendee picker unusable.
+      supabase.rpc('directory_search', { p_church_id: churchId }),
+      // Materialises today's service from the recurring schedule if the window is
+      // open and nothing has created it yet, so "close now" and "add attendee"
+      // always have a real service to work against.
+      supabase.rpc('ensure_open_service', { p_church_id: churchId }),
+    ])
 
   checkinToken.value = linkResult.error ? '' : (linkResult.data?.[0]?.token || '')
   schedules.value = schedulesResult.error ? [] : (schedulesResult.data || [])
-  members.value = membersResult.error ? [] : (membersResult.data || [])
+  members.value = membersResult.error
+    ? []
+    : (membersResult.data || []).map((r) => ({
+        id: r.member_id,
+        first_name: r.first_name,
+        last_name: r.last_name,
+      }))
 
   let list = serviceResult.error ? [] : (serviceResult.data || [])
   const openedId = ensureResult.error ? null : ensureResult.data
 
-  // ensure_my_open_service may have created a row after the services select was
+  // ensure_open_service may have created a row after the services select was
   // planned, so refetch rather than showing a roster with no service attached.
   if (openedId && !list.some((service) => service.id === openedId)) {
     const { data } = await supabase
       .from('services')
       .select(SERVICE_COLUMNS)
+      .eq('church_id', churchId)
       .order('opens_at', { ascending: false })
       .limit(12)
     list = data || list
@@ -352,7 +379,7 @@ async function handleRotateToken() {
   }
 
   rotatingToken.value = true
-  const { data, error } = await supabase.rpc('rotate_my_checkin_token')
+  const { data, error } = await supabase.rpc('rotate_checkin_token', { p_church_id: myChurchId.value })
   rotatingToken.value = false
 
   if (error) {
@@ -509,7 +536,7 @@ function formatRecordedAt(value) {
           <span v-else class="status-alert">No active weekly slot — self check-in will never open.</span>
         </div>
         <button
-          v-if="openService"
+          v-if="openService && canManageAttendance"
           type="button"
           class="btn-caution"
           :disabled="closingService"
@@ -567,7 +594,7 @@ function formatRecordedAt(value) {
                   starts. Pause a slot to stop it without losing past records.
                 </p>
               </div>
-              <div class="step-actions">
+              <div v-if="canManageAttendance" class="step-actions">
                 <button type="button" class="btn-tertiary" @click="openScheduleModal">+ Weekly slot</button>
                 <button type="button" class="btn-tertiary" @click="openAdhocModal">+ One-off service</button>
               </div>
@@ -587,7 +614,7 @@ function formatRecordedAt(value) {
                 </div>
                 <div class="schedule-actions">
                   <span v-if="!schedule.is_active" class="tag tag-paused">Paused</span>
-                  <button type="button" class="btn-link" @click="toggleSchedule(schedule)">
+                  <button v-if="canManageAttendance" type="button" class="btn-link" @click="toggleSchedule(schedule)">
                     {{ schedule.is_active ? 'Pause' : 'Resume' }}
                   </button>
                 </div>
@@ -636,7 +663,7 @@ function formatRecordedAt(value) {
                  control when a code leaks, so dressing it in error red discourages
                  the one action we want reachable. The consequence is carried by
                  the text and the confirm dialog, which is where it belongs. -->
-            <div class="rotate-row">
+            <div v-if="canManageAttendance" class="rotate-row">
               <button
                 type="button"
                 class="btn-caution-link"
@@ -712,6 +739,9 @@ function formatRecordedAt(value) {
           <div v-if="selectedServiceId" class="card">
             <h2>Who attended</h2>
 
+            <!-- Recording attendees is a management action (Welcome Team / SuperAdmin);
+                 viewers see the roster below read-only. -->
+            <template v-if="canManageAttendance">
             <div class="mode-toggle" role="group" aria-label="Attendee type">
               <button
                 type="button"
@@ -768,6 +798,7 @@ function formatRecordedAt(value) {
             </form>
 
             <p v-if="attendeeError" class="form-error">{{ attendeeError }}</p>
+            </template>
 
             <div v-if="roster.length === 0" class="state-message">
               <p>Nobody recorded yet for this service.</p>
@@ -801,7 +832,7 @@ function formatRecordedAt(value) {
                   </td>
                   <td class="time-cell">{{ formatRecordedAt(row.created_at) }}</td>
                   <td class="actions-cell">
-                    <button type="button" class="btn-link-danger" @click="handleRemove(row)">Remove</button>
+                    <button v-if="canManageAttendance" type="button" class="btn-link-danger" @click="handleRemove(row)">Remove</button>
                   </td>
                 </tr>
               </tbody>

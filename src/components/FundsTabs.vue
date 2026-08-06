@@ -1,15 +1,17 @@
 <template>
-  <nav v-if="isFinance" class="funds-tabs" aria-label="Church funds sections">
+  <nav v-if="canViewFinance" class="funds-tabs" aria-label="Church funds sections">
     <router-link to="/dashboard/funds/reports" class="funds-tab">Reports</router-link>
-    <router-link to="/dashboard/funds/collections" class="funds-tab">Collections</router-link>
-    <router-link to="/dashboard/funds/expenses" class="funds-tab">Expenses</router-link>
+    <router-link v-if="canWriteFinance" to="/dashboard/funds/collections" class="funds-tab">Collections</router-link>
+    <router-link v-if="canWriteFinance" to="/dashboard/funds/expenses" class="funds-tab">Expenses</router-link>
   </nav>
 </template>
 
 <script setup>
-import { useFinanceMember } from '../composables/useFinanceMember'
+// Reports show to any finance viewer; Collections/Expenses (the write paths) only
+// to those who can write finance. RLS is the enforcement — this is presentation.
+import { useCurrentRole } from '../composables/useCurrentRole'
 
-const { isFinance } = useFinanceMember()
+const { canViewFinance, canWriteFinance } = useCurrentRole()
 </script>
 
 <style scoped>

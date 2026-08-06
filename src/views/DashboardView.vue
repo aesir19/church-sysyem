@@ -19,7 +19,7 @@
         </div>
         <div class="page-header-actions">
           <span class="stat-badge">{{ members.length }} total</span>
-          <button @click="openCreate" class="btn-primary" :disabled="!myChurchId">
+          <button v-if="canWriteMembers" @click="openCreate" class="btn-primary" :disabled="!myChurchId">
             <span aria-hidden="true">+</span> Add Member
           </button>
         </div>
@@ -49,25 +49,37 @@
                 <th @click="setSort('first_name')" :class="{ active: sortKey === 'first_name' }">
                   First Name <span class="sort-icon">{{ sortIcon('first_name') }}</span>
                 </th>
-                <th @click="setSort('age')" :class="{ active: sortKey === 'age' }">
-                  Age <span class="sort-icon">{{ sortIcon('age') }}</span>
-                </th>
-                <th @click="setSort('gender')" :class="{ active: sortKey === 'gender' }">
-                  Gender <span class="sort-icon">{{ sortIcon('gender') }}</span>
-                </th>
+                <template v-if="!directoryMode">
+                  <th @click="setSort('age')" :class="{ active: sortKey === 'age' }">
+                    Age <span class="sort-icon">{{ sortIcon('age') }}</span>
+                  </th>
+                  <th @click="setSort('gender')" :class="{ active: sortKey === 'gender' }">
+                    Gender <span class="sort-icon">{{ sortIcon('gender') }}</span>
+                  </th>
+                </template>
+                <template v-else>
+                  <th>Ministries</th>
+                  <th>Small Groups</th>
+                </template>
               </tr>
             </thead>
             <tbody>
               <tr
                 v-for="member in sortedMembers"
                 :key="member.id"
-                @click="openDetails(member)"
-                class="member-row"
+                @click="canSeeMemberDetail && openDetails(member)"
+                :class="['member-row', { clickable: canSeeMemberDetail }]"
               >
                 <td>{{ member.last_name }}</td>
                 <td>{{ member.first_name }}</td>
-                <td>{{ computeAge(member.birthdate) }}</td>
-                <td>{{ member.gender }}</td>
+                <template v-if="!directoryMode">
+                  <td>{{ computeAge(member.birthdate) }}</td>
+                  <td>{{ member.gender }}</td>
+                </template>
+                <template v-else>
+                  <td>{{ member.ministries && member.ministries.length ? member.ministries.join(', ') : '—' }}</td>
+                  <td>{{ member.small_groups && member.small_groups.length ? member.small_groups.join(', ') : '—' }}</td>
+                </template>
               </tr>
             </tbody>
           </table>
@@ -82,7 +94,7 @@
           <h3>{{ modalTitle }}</h3>
           <div class="modal-header-actions">
             <button
-              v-if="modalMode === 'view'"
+              v-if="modalMode === 'view' && canWriteMembers"
               @click="startEdit"
               class="btn-icon"
               aria-label="Edit member"
@@ -312,11 +324,25 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { supabase } from '../lib/supabase'
 import { isMemberFormDirty, snapshotMemberForm } from '../utils/memberFormDirty'
 import { buildMemberPayload } from '../utils/memberPayload'
+import { useCurrentRole } from '../composables/useCurrentRole'
+import { useActiveChurch } from '../composables/useActiveChurch'
+
+// RBAC. canSeeMemberDetail → the full PII table + clickable detail. Everyone else
+// (baseline, Head Pastor) gets the safe name/group DIRECTORY via directory_search
+// and no detail modal. canWriteMembers gates create/edit/archive. RLS enforces all
+// of this server-side; this is presentation.
+const { canSeeMemberDetail, canWriteMembers } = useCurrentRole()
+const directoryMode = computed(() => !canSeeMemberDetail.value)
+
+// Church scoping. For a single-church user this is their own church; for a
+// SuperAdmin / Head Pastor it is the church chosen in the selector. The list is
+// filtered by this id explicitly, since RLS returns all churches to those roles.
+const { activeChurchId, activeChurchName, ensureLoaded } = useActiveChurch()
 
 const router = useRouter()
 
@@ -408,8 +434,9 @@ function writeCachedChurchName(name) {
   } catch { /* localStorage unavailable (e.g. private mode) — no-op */ }
 }
 
-const myChurchId = ref(null)
-const myChurchName = ref(readCachedChurchName())
+// Aliases to the shared active-church state so the rest of the view is unchanged.
+const myChurchId = activeChurchId
+const myChurchName = activeChurchName
 
 const sortKey = ref('last_name')
 const sortDir = ref('asc')
@@ -438,26 +465,44 @@ function fullName(m) {
   return `${m.first_name}${mid} ${m.last_name}`
 }
 
-async function fetchMyChurch() {
-  // Single round-trip: returns { id, name } via the public.get_my_church() RPC.
-  // Replaces the prior two-call sequence (rpc('get_my_church_id') + churches.select).
-  const { data, error: rpcError } = await supabase
-    .rpc('get_my_church')
-    .single()
-  if (rpcError || !data) return
-  myChurchId.value = data.id
-  myChurchName.value = data.name
-  writeCachedChurchName(data.name)
-}
-
 async function fetchMembers() {
   loading.value = true
   error.value = ''
 
-  // RLS already filters to the caller's church AND archived_at IS NULL.
+  const churchId = myChurchId.value
+  if (!churchId) {
+    members.value = []
+    loading.value = false
+    return
+  }
+
+  // Directory path (baseline / Head Pastor): safe columns only, via the RPC, scoped
+  // to the active church. The base members table returns them nothing under RLS.
+  if (directoryMode.value) {
+    const { data, error: dirError } = await supabase.rpc('directory_search', { p_church_id: churchId })
+    if (dirError) {
+      error.value = `Failed to load members: ${dirError.message}`
+    } else {
+      members.value = (data || []).map((r) => ({
+        id: r.member_id,
+        first_name: r.first_name,
+        last_name: r.last_name,
+        ministries: r.ministries || [],
+        small_groups: r.small_groups || [],
+      }))
+    }
+    loading.value = false
+    return
+  }
+
+  // Detail path (privileged): RLS already filters to the caller's church.
+  // Detail path (privileged): scope to the active church explicitly. RLS returns
+  // every church to a SuperAdmin, so without this filter their list would merge all
+  // churches; a single-church user's active church is simply their own.
   const { data, error: fetchError } = await supabase
     .from('members')
     .select(MEMBER_COLUMNS)
+    .eq('member_of', churchId)
     // Required since 0010_members_select_allow_archived: RLS no longer excludes
     // archived rows, because doing so made archiving itself impossible.
     .is('archived_at', null)
@@ -533,6 +578,9 @@ const sortedMembers = computed(() => {
 // ── Modal openers / closers ───────────────────────────────────────
 
 function openDetails(member) {
+  // Defence in depth: baseline / Head Pastor have no detail rows and the row is not
+  // clickable, but never open the PII modal for them even if called.
+  if (!canSeeMemberDetail.value) return
   selectedMember.value = member
   modalMode.value = 'view'
   formError.value = ''
@@ -730,8 +778,16 @@ async function handleLogout() {
   router.push('/login')
 }
 
-onMounted(() => {
-  fetchMyChurch()
+// Re-fetch whenever the active church changes (SuperAdmin / Head Pastor switching
+// churches in the selector).
+watch(activeChurchId, () => {
+  if (activeChurchId.value) fetchMembers()
+})
+
+onMounted(async () => {
+  // ensureLoaded resolves capabilities AND the active church, so directoryMode and
+  // the church filter are both correct before the first fetch.
+  await ensureLoaded()
   fetchMembers()
   window.addEventListener('keydown', handleEsc)
 })
@@ -745,6 +801,11 @@ onUnmounted(() => {
 .dashboard-container {
   min-height: 100vh;
   background: #f8fafc;
+}
+
+/* Only privileged rows are clickable into detail; directory rows are static. */
+.member-row.clickable {
+  cursor: pointer;
 }
 
 .dashboard-header {

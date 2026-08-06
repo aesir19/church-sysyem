@@ -131,11 +131,15 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '../lib/supabase'
 import FundsTabs from '../components/FundsTabs.vue'
 import { defaultMonthKey, getMonthRange, monthKeyFromDate } from '../utils/expensesMonth'
+import { useActiveChurch } from '../composables/useActiveChurch'
 
 const EXPENSE_COLUMNS = 'id, spent_on, description, amount, notes, created_at'
 
+// Church scoping (own church, or the church selected by SuperAdmin / Head Pastor).
+const { activeChurchId, ensureLoaded } = useActiveChurch()
+
 const selectedMonth = ref(defaultMonthKey())
-const myChurchId = ref('')
+const myChurchId = activeChurchId
 const currentUserId = ref('')
 const entries = ref([])
 const saving = ref(false)
@@ -180,18 +184,14 @@ watch(selectedMonth, async () => {
 })
 
 onMounted(async () => {
-  await Promise.all([fetchMyChurch(), fetchCurrentUser()])
-  await loadMonthEntries()
+  await ensureLoaded()
+  await Promise.all([fetchCurrentUser(), loadMonthEntries()])
 })
 
-async function fetchMyChurch() {
-  const { data, error } = await supabase.rpc('get_my_church').single()
-  if (error || !data) {
-    formError.value = error?.message || 'Unable to resolve church context.'
-    return
-  }
-  myChurchId.value = data.id
-}
+// Reload when the active church changes (church selector).
+watch(activeChurchId, async () => {
+  if (activeChurchId.value) await loadMonthEntries()
+})
 
 async function fetchCurrentUser() {
   const { data: authData } = await supabase.auth.getUser()
@@ -206,9 +206,15 @@ async function loadMonthEntries() {
     return
   }
 
+  if (!myChurchId.value) {
+    entries.value = []
+    return
+  }
+
   const { data, error } = await supabase
     .from('expenses')
     .select(EXPENSE_COLUMNS)
+    .eq('from_church', myChurchId.value)
     .gte('spent_on', range.start)
     .lt('spent_on', range.endExclusive)
     .order('spent_on', { ascending: false })
