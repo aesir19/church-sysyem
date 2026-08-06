@@ -619,6 +619,12 @@ model groups {
   type          String          @db.VarChar
   church_id     String?         @db.Uuid
   color_slot    Int             @unique(map: "groups_color_slot_key")
+  /// Stable slug for the system ministries that authorization keys on ('finance',
+  /// 'secretariat', 'welcome'). Set only on the three global Ministry rows; NULL for
+  /// every small group and any non-system ministry. Keyed on rather than `name` so a
+  /// ministry rename cannot grant or revoke access — see 0014 and docs/DEFECTS.md D4.
+  /// Not in the authenticated INSERT/UPDATE column grants, so it is system-managed only.
+  ministry_key  String?         @db.Text
   churches      churches?       @relation(fields: [church_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   group_members group_members[]
 

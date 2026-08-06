@@ -304,8 +304,8 @@
           </section>
         </div>
 
-        <!-- Contributors (finance team only) -->
-        <section v-if="isFinance" class="card report-section section-contributors">
+        <!-- Contributors (finance staff / SuperAdmin only) -->
+        <section v-if="canWriteFinance" class="card report-section section-contributors">
           <header class="section-header">
             <div>
               <h3>Contributors</h3>
@@ -426,9 +426,17 @@ import { supabase } from '../lib/supabase'
 import { defaultMonthKey, getMonthRange, parseMonthKey } from '../utils/expensesMonth'
 import { mergeMonthSourceWithLiveExpenses } from '../utils/reportExpenseMerge'
 import { buildMonthSourceFromCollections, openingBalanceForMonth } from '../utils/collectivesSource'
-import { useFinanceMember } from '../composables/useFinanceMember'
+import { useCurrentRole } from '../composables/useCurrentRole'
+import { useActiveChurch } from '../composables/useActiveChurch'
 
-const { isFinance } = useFinanceMember()
+// Contributor identity is finance-staff detail: shown to the Finance ministry and
+// SuperAdmin (canWriteFinance). Pastor / Church Leader / Head Pastor see the report
+// but not individual contributor names.
+const { canWriteFinance } = useCurrentRole()
+
+// Church scoping (own church, or the selected church for SuperAdmin / Head Pastor).
+// RLS returns every church to those roles, so the report filters by from_church.
+const { activeChurchId, ensureLoaded } = useActiveChurch()
 
 // Narrower than COLLECTION_SELECT in CollectionsInputView: the report has no
 // edit window to enforce, so it needs neither created_at nor middle_name.
@@ -473,9 +481,22 @@ const MONTH_NAMES = [
 const monthLabel = computed(() => `${MONTH_NAMES[cursor.value.month - 1]} ${cursor.value.year}`)
 const cursorMonthKey = computed(() => `${cursor.value.year}-${String(cursor.value.month).padStart(2, '0')}`)
 
-onMounted(loadServiceTotals)
+onMounted(async () => {
+  // Resolve the active church, then load the ledger. loadServiceTotals runs here
+  // (not only in the watch) because the active church may already be cached from a
+  // prior view, in which case the watch would not fire. loadMonth's first run comes
+  // from the immediate cursorMonthKey watch (fast paint; RLS scopes single-church).
+  await ensureLoaded()
+  loadServiceTotals()
+})
 
 watch(cursorMonthKey, loadMonth, { immediate: true })
+
+// Reload the ledger and the current month once the active church resolves or changes.
+watch(activeChurchId, () => {
+  loadServiceTotals()
+  loadMonth()
+})
 
 const report = computed(() => {
   const source = buildMonthSourceFromCollections(monthCollections.value, {
@@ -493,10 +514,15 @@ async function loadServiceTotals() {
   loadingLedger.value = true
   ledgerError.value = ''
 
-  const { data, error } = await supabase
+  // Filter by the active church when it is known. RLS already scopes a single-church
+  // user; the explicit filter is what stops a SuperAdmin's ledger merging churches
+  // once a church is selected. The watch below re-runs this after the church resolves.
+  let query = supabase
     .from('collectives_service_totals')
     .select('service_date, tithes, offering, expenses')
-    .order('service_date', { ascending: true })
+  if (activeChurchId.value) query = query.eq('from_church', activeChurchId.value)
+
+  const { data, error } = await query.order('service_date', { ascending: true })
 
   if (error) {
     serviceTotals.value = []
@@ -521,20 +547,21 @@ async function loadMonth() {
     return
   }
 
-  const [collectionsResult, expensesResult] = await Promise.all([
-    supabase
-      .from('collections')
-      .select(REPORT_COLLECTION_SELECT)
-      .gte('collectedOn', range.start)
-      .lt('collectedOn', range.endExclusive)
-      .order('collectedOn', { ascending: true }),
-    supabase
-      .from('expenses')
-      .select('spent_on, description, amount')
-      .gte('spent_on', range.start)
-      .lt('spent_on', range.endExclusive)
-      .order('spent_on', { ascending: true }),
-  ])
+  let collectionsQuery = supabase.from('collections').select(REPORT_COLLECTION_SELECT)
+  if (activeChurchId.value) collectionsQuery = collectionsQuery.eq('from_church', activeChurchId.value)
+  collectionsQuery = collectionsQuery
+    .gte('collectedOn', range.start)
+    .lt('collectedOn', range.endExclusive)
+    .order('collectedOn', { ascending: true })
+
+  let expensesQuery = supabase.from('expenses').select('spent_on, description, amount')
+  if (activeChurchId.value) expensesQuery = expensesQuery.eq('from_church', activeChurchId.value)
+  expensesQuery = expensesQuery
+    .gte('spent_on', range.start)
+    .lt('spent_on', range.endExclusive)
+    .order('spent_on', { ascending: true })
+
+  const [collectionsResult, expensesResult] = await Promise.all([collectionsQuery, expensesQuery])
 
   if (requestId !== monthRequestId) return
 

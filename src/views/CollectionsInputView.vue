@@ -240,6 +240,11 @@ import FundsTabs from '../components/FundsTabs.vue'
 import { defaultMonthKey, getMonthRange, monthKeyFromDate } from '../utils/expensesMonth'
 import { interpretMutation } from '../utils/mutationResult'
 import { buildCollectionPayload, contributorLabel, isAnonymousRow } from '../utils/collectionPayload'
+import { useActiveChurch } from '../composables/useActiveChurch'
+
+// Church scoping (own church, or the church selected by SuperAdmin / Head Pastor).
+// RLS returns every church's rows to those roles, so the reads filter explicitly.
+const { activeChurchId, ensureLoaded } = useActiveChurch()
 
 const COLLECTION_SELECT = 'id, from, amount, is_tithes, collectedOn, created_at, members!collections_from_fkey(first_name, middle_name, last_name)'
 
@@ -261,7 +266,7 @@ const formError = ref('')
 const formSuccess = ref('')
 const memberOptions = ref([])
 const showSuggestions = ref(false)
-const myChurchId = ref('')
+const myChurchId = activeChurchId
 const entries = ref([])
 const selectedEntry = ref(null)
 const editing = ref(false)
@@ -311,8 +316,9 @@ const filteredMembers = computed(() => {
 
 onMounted(async () => {
   document.addEventListener('keydown', onKeydown)
-  await Promise.all([fetchMyChurch(), loadMembers()])
-  await loadMonthEntries()
+  // Resolve the active church before scoping the reads.
+  await ensureLoaded()
+  await Promise.all([loadMembers(), loadMonthEntries()])
 })
 
 onUnmounted(() => {
@@ -321,6 +327,12 @@ onUnmounted(() => {
 
 watch(selectedMonth, async () => {
   await loadMonthEntries()
+})
+
+// Reload the picker + entries when the active church changes (church selector).
+watch(activeChurchId, async () => {
+  if (!activeChurchId.value) return
+  await Promise.all([loadMembers(), loadMonthEntries()])
 })
 
 function onKeydown(event) {
@@ -351,21 +363,14 @@ function normalizeEntry(row) {
   }
 }
 
-async function fetchMyChurch() {
-  const { data, error } = await supabase.rpc('get_my_church').single()
-  if (!error && data) {
-    myChurchId.value = data.id
-  }
-}
 
 async function loadMembers() {
-  const { data, error } = await supabase
-    .from('members')
-    .select('id, first_name, middle_name, last_name')
-    // Required since 0010_members_select_allow_archived — RLS no longer filters
-    // archived members, so archived people would otherwise appear in this picker.
-    .is('archived_at', null)
-    .order('first_name', { ascending: true })
+  // Load id + name through the directory RPC, NOT the members table. A Finance
+  // ministry member has no can_see_member_detail and so cannot read `members`
+  // under RLS (0015) — the table select would come back empty and break this
+  // picker. directory_search returns the caller's own church, archived excluded,
+  // to any authenticated user. (middle_name is not exposed by the directory.)
+  const { data, error } = await supabase.rpc('directory_search', { p_church_id: myChurchId.value })
 
   if (error) {
     formError.value = `Failed to load members: ${error.message}`
@@ -373,10 +378,10 @@ async function loadMembers() {
   }
 
   memberOptions.value = (data || [])
-    .map((member) => ({
-      ...member,
-      fullName: fullName(member)
-    }))
+    .map((row) => {
+      const member = { id: row.member_id, first_name: row.first_name, last_name: row.last_name }
+      return { ...member, fullName: fullName(member) }
+    })
     .sort((a, b) => a.fullName.localeCompare(b.fullName))
 }
 
@@ -388,9 +393,15 @@ async function loadMonthEntries() {
     return
   }
 
+  if (!myChurchId.value) {
+    entries.value = []
+    return
+  }
+
   const { data, error } = await supabase
     .from('collections')
     .select(COLLECTION_SELECT)
+    .eq('from_church', myChurchId.value)
     .gte('collectedOn', range.start)
     .lt('collectedOn', range.endExclusive)
     .order('collectedOn', { ascending: false })

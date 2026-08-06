@@ -15,7 +15,7 @@
         </div>
         <div class="page-header-actions">
           <span class="stat-badge">{{ filteredGroups.length }} total</span>
-          <button @click="openCreateGroup" class="btn-primary" :disabled="!myChurchId">
+          <button v-if="canManageSmallGroups" @click="openCreateGroup" class="btn-primary" :disabled="!myChurchId">
             <span aria-hidden="true">+</span> Add Small Group
           </button>
         </div>
@@ -163,7 +163,7 @@
           <h3>{{ detailModal.group?.name }}</h3>
           <div class="modal-header-actions">
             <button
-              v-if="detailModal.group?.type === 'Small Group'"
+              v-if="detailModal.group?.type === 'Small Group' && canManageSmallGroups"
               @click="openEditGroup(detailModal.group)"
               class="btn-icon"
               aria-label="Edit small group"
@@ -188,7 +188,7 @@
           <div class="members-section">
             <div class="members-section-header">
               <h4>Members ({{ detailModal.members.length }})</h4>
-              <button @click="showMemberPicker = true" class="btn-primary btn-sm">
+              <button v-if="canManageCurrentGroup" @click="showMemberPicker = true" class="btn-primary btn-sm">
                 <span aria-hidden="true">+</span> Add
               </button>
             </div>
@@ -235,7 +235,7 @@
                   <span class="member-name">{{ gm.members?.first_name }} {{ gm.members?.last_name }}</span>
                 </div>
                 <button
-                  v-if="!gm.confirmRemove"
+                  v-if="!gm.confirmRemove && canManageCurrentGroup"
                   @click.stop="gm.confirmRemove = true"
                   class="btn-remove"
                   aria-label="Remove member"
@@ -255,7 +255,7 @@
           </div>
         </div>
 
-        <div v-if="detailModal.group?.type === 'Small Group'" class="modal-footer view-footer">
+        <div v-if="detailModal.group?.type === 'Small Group' && canManageSmallGroups" class="modal-footer view-footer">
           <button type="button" class="btn-link-danger" @click="startDeleteGroup">Delete small group</button>
         </div>
 
@@ -337,14 +337,23 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from
 import { supabase } from '../lib/supabase'
 import { getGroupAccentStyle } from '../utils/groupPresentation'
 import { buildSmallGroupCreatePayload, buildSmallGroupUpdatePayload } from '../utils/groupPayload'
-import { buildMemberNameOrFilter } from '../utils/searchFilters'
+import { useCurrentRole } from '../composables/useCurrentRole'
+import { useActiveChurch } from '../composables/useActiveChurch'
+
+// RBAC (presentation; RLS enforces). canManageSmallGroups → create/edit/delete small
+// groups. Membership management is group-specific: the Finance ministry is Pastor-only.
+const { canManageSmallGroups, canManageGroupMembers, isCrossChurch } = useCurrentRole()
+
+// Church scoping (own church, or the selected church for SuperAdmin / Head Pastor).
+const { activeChurchId, ensureLoaded } = useActiveChurch()
 
 // ── State ──────────────────────────────────────────────────────
 
 const groups = ref([])
 const loading = ref(true)
 const error = ref('')
-const myChurchId = ref(null)
+// Alias to the shared active church so the rest of the view is unchanged.
+const myChurchId = activeChurchId
 
 const activeTab = ref('all')
 const searchQuery = ref('')
@@ -378,6 +387,12 @@ const detailModal = reactive({
   members: [],
   membersLoading: false,
 })
+
+// Whether the caller may add/remove members for the currently open group. The
+// Finance ministry is Pastor-only; canManageGroupMembers encodes that rule.
+const canManageCurrentGroup = computed(() =>
+  canManageGroupMembers({ isFinanceGroup: detailModal.group?.ministry_key === 'finance' })
+)
 
 // Delete modal
 const deleteModal = reactive({ open: false, group: null })
@@ -438,87 +453,73 @@ watch(memberSearchQuery, (val) => {
 
 async function searchMemberGroups(query) {
   memberSearchLoading.value = true
-  if (!myChurchId.value) {
-    memberSearchResults.value = []
-    memberSearchLoading.value = false
-    return
-  }
-  const filter = buildMemberNameOrFilter(query)
-  if (!filter) {
-    memberSearchResults.value = []
-    memberSearchLoading.value = false
-    return
-  }
 
-  // Search members matching the query
-  const { data: members, error: membersError } = await supabase
-    .from('members')
-    .select('id, first_name, last_name')
-    .eq('member_of', myChurchId.value)
-    // Required since 0010_members_select_allow_archived — RLS no longer filters
-    // archived members, so they would otherwise be addable to groups.
-    .is('archived_at', null)
-    .or(filter)
-    .limit(10)
-
-  if (membersError || !members || members.length === 0) {
-    memberSearchResults.value = []
-    memberSearchLoading.value = false
-    return
-  }
-
-  // For each member, fetch their group memberships
-  const memberIds = members.map(m => m.id)
-  const { data: groupMemberships } = await supabase
-    .from('group_members')
-    .select('member_id, groups(id, name, type)')
-    .in('member_id', memberIds)
-
-  // Build results
-  const visibleGroupIds = new Set(groups.value.map(group => group.id))
-  const results = members.map(member => {
-    const memberGroups = (groupMemberships || [])
-      .filter(gm => gm.member_id === member.id && gm.groups && visibleGroupIds.has(gm.groups.id))
-      .map(gm => gm.groups)
-    return { member, groups: memberGroups }
+  // Use directory_search rather than the members table: baseline users cannot read
+  // `members` under RLS (0015), but "search a person, see their ministries/small
+  // groups" is an explicit baseline feature. The RPC returns exactly that — names
+  // plus the member's ministry and small-group names — scoped to the caller's
+  // church (all churches for SuperAdmin/Head Pastor), archived excluded.
+  const { data, error: dirError } = await supabase.rpc('directory_search', {
+    p_query: query,
+    p_church_id: activeChurchId.value,
   })
 
-  memberSearchResults.value = results
+  if (dirError || !data) {
+    memberSearchResults.value = []
+    memberSearchLoading.value = false
+    return
+  }
+
+  memberSearchResults.value = data.map((row) => ({
+    member: { id: row.member_id, first_name: row.first_name, last_name: row.last_name },
+    groups: [
+      ...(row.ministries || []).map((name) => ({ id: `m:${name}`, name, type: 'Ministry' })),
+      ...(row.small_groups || []).map((name) => ({ id: `sg:${name}`, name, type: 'Small Group' })),
+    ],
+  }))
   memberSearchLoading.value = false
 }
 
 // ── Data Fetching ──────────────────────────────────────────────
 
-async function fetchMyChurch() {
-  const { data, error: churchError } = await supabase
-    .rpc('get_my_church')
-    .single()
-
-  if (churchError || !data?.id) {
-    error.value = churchError?.message || 'Unable to resolve church context.'
-    loading.value = false
-    return false
-  }
-
-  myChurchId.value = data.id
-  return true
-}
-
 async function fetchGroups() {
   loading.value = true
   error.value = ''
 
-  const { data, error: fetchError } = await supabase
-    .from('groups')
-    .select('id, name, type, church_id, color_slot, group_members(count)')
-    .or(`and(type.eq.Ministry,church_id.is.null),and(type.eq.Small Group,church_id.eq.${myChurchId.value})`)
+  const churchId = myChurchId.value
 
-  if (fetchError) {
-    error.value = `Failed to load groups: ${fetchError.message}`
+  // Groups (global ministries + this church's small groups) and the per-church
+  // member counts, in parallel. The count must be scoped to the active church:
+  // a Ministry is GLOBAL, so its group_members span every church, and an embedded
+  // group_members(count) would report the all-church total that never changes when
+  // the church selector switches (the bug this fixes).
+  //
+  // For a single-church user, group_members RLS already scopes to their church, so
+  // a plain group_id select counts correctly. A cross-church user (SuperAdmin) sees
+  // every church under RLS, so the count is filtered by the member's church via an
+  // inner join to members.
+  const countSelect = isCrossChurch.value ? 'group_id, members!inner(member_of)' : 'group_id'
+  let countQuery = supabase.from('group_members').select(countSelect)
+  if (isCrossChurch.value) countQuery = countQuery.eq('members.member_of', churchId)
+
+  const [groupsRes, countsRes] = await Promise.all([
+    supabase
+      .from('groups')
+      .select('id, name, type, church_id, color_slot, ministry_key')
+      .or(`and(type.eq.Ministry,church_id.is.null),and(type.eq.Small Group,church_id.eq.${churchId})`),
+    countQuery,
+  ])
+
+  if (groupsRes.error) {
+    error.value = `Failed to load groups: ${groupsRes.error.message}`
   } else {
-    groups.value = (data || []).map(g => ({
+    const counts = {}
+    for (const row of countsRes.data || []) {
+      counts[row.group_id] = (counts[row.group_id] || 0) + 1
+    }
+    groups.value = (groupsRes.data || []).map(g => ({
       ...g,
-      member_count: g.group_members?.[0]?.count ?? 0,
+      member_count: counts[g.id] ?? 0,
     }))
   }
   loading.value = false
@@ -747,8 +748,19 @@ function handleEsc(e) {
   if (detailModal.open) { closeDetailModal(); return }
 }
 
+// Re-load groups when the active church changes (church selector).
+watch(activeChurchId, () => {
+  if (!activeChurchId.value) return
+  closeDetailModal()
+  memberSearchResults.value = []
+  memberSearchQuery.value = ''
+  allMembers.value = []
+  fetchGroups()
+})
+
 onMounted(async () => {
-  if (await fetchMyChurch()) await fetchGroups()
+  await ensureLoaded()
+  if (activeChurchId.value) await fetchGroups()
   window.addEventListener('keydown', handleEsc)
 })
 

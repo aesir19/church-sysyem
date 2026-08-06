@@ -59,6 +59,7 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import { useCurrentRole } from '../composables/useCurrentRole'
 
 const props = defineProps({
   userName: { type: String, default: '' }
@@ -67,6 +68,10 @@ const props = defineProps({
 const emit = defineEmits(['logout', 'collapse'])
 
 const collapsed = ref(false)
+
+// Presentation only — the router guard and RLS are the real gates. Attendance and
+// Church Funds nav items are hidden from users who cannot view those areas.
+const { canViewAttendance, canViewFinance } = useCurrentRole()
 
 const displayName = computed(() => {
   return props.userName || 'User'
@@ -77,7 +82,8 @@ function toggleSidebar() {
   emit('collapse', collapsed.value)
 }
 
-const navItems = [
+// `cap` names the capability required to see the item; undefined = always visible.
+const allNavItems = [
   {
     to: '/dashboard/members',
     label: 'Members',
@@ -100,6 +106,7 @@ const navItems = [
   {
     to: '/dashboard/attendance',
     label: 'Attendance',
+    cap: 'canViewAttendance',
     icon: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M9 11l3 3L22 4"/>
       <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
@@ -108,12 +115,18 @@ const navItems = [
   {
     to: '/dashboard/funds',
     label: 'Church Funds',
+    cap: 'canViewFinance',
     icon: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <line x1="12" y1="1" x2="12" y2="23"/>
       <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
     </svg>`
   }
 ]
+
+const capFlags = { canViewAttendance, canViewFinance }
+const navItems = computed(() =>
+  allNavItems.filter((item) => !item.cap || capFlags[item.cap]?.value)
+)
 </script>
 
 <style scoped>

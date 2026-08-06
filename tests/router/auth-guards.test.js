@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({
   session: null,
   linked: false,
-  inFinanceGroup: false,
+  // Row returned by the get_my_permissions() RPC (null = no capabilities).
+  permissions: null,
   hash: '',
   guard: null,
   afterGuard: null,
@@ -27,27 +28,21 @@ const supabaseMock = vi.hoisted(() => ({
       state.authStateChangeHandler = cb
     }),
   },
-  from: vi.fn((table) => {
-    const makeChain = (resolver) => {
-      const chain = {
-        select: vi.fn(() => chain),
-        eq: vi.fn(() => chain),
-        maybeSingle: vi.fn(async () => resolver()),
-      }
-      return chain
+  // isAccountLinked() reads user_accounts.
+  from: vi.fn(() => {
+    const chain = {
+      select: vi.fn(() => chain),
+      eq: vi.fn(() => chain),
+      maybeSingle: vi.fn(async () =>
+        state.linked ? { data: { id: 'user-1', member_id: 'member-1' } } : { data: null }
+      ),
     }
-    if (table === 'group_members') {
-      return makeChain(() => {
-        if (state.inFinanceGroup) return { data: { id: 'gm-1', groups: { name: 'Finance Team' } } }
-        return { data: null }
-      })
-    }
-    // user_accounts
-    return makeChain(() => {
-      if (!state.linked) return { data: null }
-      return { data: { id: 'user-1', member_id: 'member-1' } }
-    })
+    return chain
   }),
+  // fetchCapabilities() reads the get_my_permissions() RPC.
+  rpc: vi.fn(() => ({
+    maybeSingle: vi.fn(async () => ({ data: state.permissions })),
+  })),
 }))
 
 vi.mock('vue-router', () => ({
@@ -81,7 +76,7 @@ describe('router auth guards', () => {
   beforeEach(() => {
     state.session = null
     state.linked = false
-    state.role = 'unassigned'
+    state.permissions = null
     state.hash = ''
     vi.clearAllMocks()
   })
@@ -222,47 +217,48 @@ describe('router auth guards', () => {
     expect(next).toHaveBeenCalledWith()
   })
 
-  it('redirects non-finance users away from collections route', async () => {
+  it('redirects users without canWriteFinance away from collections route', async () => {
     state.session = { user: { id: 'user-1' } }
     state.linked = true
-    state.role = 'unassigned'
+    state.permissions = null // no capabilities
     await loadRouter()
 
     const next = vi.fn()
     await state.guard(
-      { path: '/dashboard/funds/collections', meta: { requiresAuth: true, requiresFinance: true } },
+      { path: '/dashboard/funds/collections', meta: { requiresAuth: true, requiresCapability: 'canWriteFinance' } },
       {},
       next
     )
 
-    expect(next).toHaveBeenCalledWith('/dashboard/funds/reports')
+    // Members is the always-reachable fallback for a missing capability.
+    expect(next).toHaveBeenCalledWith('/dashboard/members')
   })
 
-  it('redirects non-finance users away from expenses route', async () => {
+  it('redirects users without canWriteFinance away from expenses route', async () => {
     state.session = { user: { id: 'user-1' } }
     state.linked = true
-    state.role = 'unassigned'
+    state.permissions = null
     await loadRouter()
 
     const next = vi.fn()
     await state.guard(
-      { path: '/dashboard/funds/expenses', meta: { requiresAuth: true, requiresFinance: true } },
+      { path: '/dashboard/funds/expenses', meta: { requiresAuth: true, requiresCapability: 'canWriteFinance' } },
       {},
       next
     )
 
-    expect(next).toHaveBeenCalledWith('/dashboard/funds/reports')
+    expect(next).toHaveBeenCalledWith('/dashboard/members')
   })
 
-  it('allows finance-group members to access collections route', async () => {
+  it('allows Finance ministry members onto the collections route', async () => {
     state.session = { user: { id: 'user-1' } }
     state.linked = true
-    state.inFinanceGroup = true
+    state.permissions = { role: 'member', is_finance: true }
     await loadRouter()
 
     const next = vi.fn()
     await state.guard(
-      { path: '/dashboard/funds/collections', meta: { requiresAuth: true, requiresFinance: true } },
+      { path: '/dashboard/funds/collections', meta: { requiresAuth: true, requiresCapability: 'canWriteFinance' } },
       {},
       next
     )
@@ -270,15 +266,48 @@ describe('router auth guards', () => {
     expect(next).toHaveBeenCalledWith()
   })
 
-  it('allows finance-group members to access expenses route', async () => {
+  it('redirects a Pastor (see-only) away from the collections write route', async () => {
+    // Pastor can VIEW finance but not write it — the ministry is required.
     state.session = { user: { id: 'user-1' } }
     state.linked = true
-    state.inFinanceGroup = true
+    state.permissions = { role: 'pastor', is_pastor: true }
     await loadRouter()
 
     const next = vi.fn()
     await state.guard(
-      { path: '/dashboard/funds/expenses', meta: { requiresAuth: true, requiresFinance: true } },
+      { path: '/dashboard/funds/collections', meta: { requiresAuth: true, requiresCapability: 'canWriteFinance' } },
+      {},
+      next
+    )
+
+    expect(next).toHaveBeenCalledWith('/dashboard/members')
+  })
+
+  it('redirects a user without canViewAttendance away from the attendance route', async () => {
+    state.session = { user: { id: 'user-1' } }
+    state.linked = true
+    state.permissions = { role: 'member', is_secretariat: true } // no attendance view
+    await loadRouter()
+
+    const next = vi.fn()
+    await state.guard(
+      { path: '/dashboard/attendance', meta: { requiresAuth: true, requiresCapability: 'canViewAttendance' } },
+      {},
+      next
+    )
+
+    expect(next).toHaveBeenCalledWith('/dashboard/members')
+  })
+
+  it('allows a Welcome Team member onto the attendance route', async () => {
+    state.session = { user: { id: 'user-1' } }
+    state.linked = true
+    state.permissions = { role: 'member', is_welcome: true }
+    await loadRouter()
+
+    const next = vi.fn()
+    await state.guard(
+      { path: '/dashboard/attendance', meta: { requiresAuth: true, requiresCapability: 'canViewAttendance' } },
       {},
       next
     )

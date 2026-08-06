@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { supabase } from '../lib/supabase'
+import { deriveCapabilities, routeAllowed } from '../utils/capabilities'
 
 // Every route is lazy-loaded. This closes docs/DEFECTS.md D9 — previously every
 // view was imported eagerly into one 404 KB chunk — but it is load-bearing for
@@ -45,13 +46,17 @@ const routes = [
     meta: { requiresAuth: true },
     children: [
       { path: '', redirect: '/dashboard/members' },
+      // Members and Ministry carry no capability gate: baseline users may view the
+      // directory and groups. What they cannot do (open PII detail, manage members)
+      // is gated inside the views. requiresCapability names a boolean key of the
+      // derived capabilities (src/utils/capabilities.js) and is enforced below.
       { path: 'members', name: 'Members', component: () => import('../views/DashboardView.vue') },
       { path: 'ministry', name: 'Ministry', component: () => import('../views/MinistrySmallGroupView.vue') },
-      { path: 'attendance', name: 'Attendance', component: () => import('../views/AttendanceView.vue') },
+      { path: 'attendance', name: 'Attendance', component: () => import('../views/AttendanceView.vue'), meta: { requiresCapability: 'canViewAttendance' } },
       { path: 'funds', redirect: '/dashboard/funds/reports' },
-      { path: 'funds/reports', name: 'ChurchFunds', component: () => import('../views/ChurchFundsView.vue') },
-      { path: 'funds/collections', name: 'Collections', component: () => import('../views/CollectionsInputView.vue'), meta: { requiresFinance: true } },
-      { path: 'funds/expenses', name: 'Expenses', component: () => import('../views/ExpensesInputView.vue'), meta: { requiresFinance: true } }
+      { path: 'funds/reports', name: 'ChurchFunds', component: () => import('../views/ChurchFundsView.vue'), meta: { requiresCapability: 'canViewFinance' } },
+      { path: 'funds/collections', name: 'Collections', component: () => import('../views/CollectionsInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } },
+      { path: 'funds/expenses', name: 'Expenses', component: () => import('../views/ExpensesInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } }
     ]
   },
   {
@@ -100,21 +105,12 @@ async function isAccountLinked(userId) {
   return !!data
 }
 
-// Check if the authenticated user is in the 'Finance Team' group
-async function hasFinanceRole(userId) {
-  const { data: account } = await supabase
-    .from('user_accounts')
-    .select('member_id')
-    .eq('id', userId)
-    .maybeSingle()
-  if (!account?.member_id) return false
-  const { data: membership } = await supabase
-    .from('group_members')
-    .select('id, groups!inner(name)')
-    .eq('member_id', account.member_id)
-    .eq('groups.name', 'Finance Team')
-    .maybeSingle()
-  return !!membership
+// Resolve the caller's capabilities in one round-trip via the get_my_permissions()
+// RPC (0017), then derive the capability booleans the same way the SPA and the RLS
+// policies do. Replaces the old finance-only, name-based hasFinanceRole check.
+async function fetchCapabilities() {
+  const { data } = await supabase.rpc('get_my_permissions').maybeSingle()
+  return deriveCapabilities(data)
 }
 
 router.beforeEach(async (to, from, next) => {
@@ -170,11 +166,12 @@ router.beforeEach(async (to, from, next) => {
       next('/account-pending')
       return
     }
-    // Finance-only routes require 'finance' role
-    if (to.meta.requiresFinance) {
-      const allowed = await hasFinanceRole(session.user.id)
-      if (!allowed) {
-        next('/dashboard/funds/reports')
+    // Capability-gated routes (finance, attendance). Members is always reachable,
+    // so it is the safe fallback for a user who lacks the required capability.
+    if (to.meta.requiresCapability) {
+      const caps = await fetchCapabilities()
+      if (!routeAllowed(caps, to.meta)) {
+        next('/dashboard/members')
         return
       }
     }

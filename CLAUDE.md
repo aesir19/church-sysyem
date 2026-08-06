@@ -65,6 +65,29 @@ Evaluate every decision against this order, in order:
   this ordering; the failure mode is a live column-not-found error.
 - **Every Supabase call uses the shared client** imported from
   [src/lib/supabase.js](src/lib/supabase.js). Do not construct a second one.
+- **Every code or schema change gets a `code-reviewer` pass before it is called done.** Dispatch
+  the `code-reviewer` agent (or run `/code-review`) on the working diff and resolve CRITICAL and
+  HIGH findings before merge — those are blocking. This is in addition to `/security-review` for
+  any change to policies, grants, helper functions, or views. See [Review and design tooling](#review-and-design-tooling).
+
+## Review and design tooling
+
+Two project tools formalize how review and load-bearing design happen here. Both live under
+`.claude/` and load on session start (reload after adding or editing them).
+
+- **`code-reviewer` agent** ([.claude/agents/code-reviewer.md](.claude/agents/code-reviewer.md)) —
+  a read-only reviewer, dispatched after writing or modifying code per the Always rule above. It
+  reads this file for project conventions. Its generic React/Node checklist items do not all apply
+  (this is Vue 3 + Supabase, **no TypeScript**, no state library) — but its security, data-policy,
+  cost-awareness, and correctness checks do. It never substitutes for `/security-review` on
+  RLS/grant/function/view changes, nor for the isolation matrix in
+  [docs/security/VERIFICATION.md](docs/security/VERIFICATION.md).
+- **`software-architecture` skill** ([.claude/skills/software-architecture/SKILL.md](.claude/skills/software-architecture/SKILL.md)) —
+  a "what's hard to change?" lens for **load-bearing** decisions (the data model, the auth/RLS
+  model, service boundaries, an API's public shape). It is **invoked explicitly** — reach for it
+  by name when scoping a new subsystem, reviewing a design, or writing an ADR under
+  [docs/decisions/](docs/decisions/). It is *not* triggered automatically just because a task
+  touches system design.
 
 ## Code conventions
 
