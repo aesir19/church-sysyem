@@ -22,9 +22,25 @@ Vendor-published limits. **Verify before any major change** — quotas move.
 | Supabase | File storage | 1 GB | None today; re-evaluate if member photos land |
 | Supabase | Free projects | 2 per org | Constrains a staging project *and* multi-tenancy — pick one |
 | Supabase | **Auto-pause** | after 7 days idle | **High operationally** — see below |
-| Netlify | Bandwidth / month | 100 GB | Low with cache headers in place |
-| Netlify | Build minutes / month | 300 | Low — a Vite SPA builds in well under a minute |
+| Netlify | Credits / month (Free plan) | 300 | **Medium** — one shared pool, see below |
 | Netlify | Functions | — | **Unused and must stay unused** ([ADR-0002](decisions/0002-no-second-compute-vendor.md)) |
+
+**Netlify moved to credit-based billing in September 2025** — there is no separate bandwidth or
+build-minute quota anymore; build minutes aren't metered at all. Everything draws from one
+300-credit/month pool, hard-capped with no auto-recharge (the site pauses when it's gone):
+
+| Metered item | Cost |
+|---|---|
+| Production deploy (push to `main`) | 15 credits |
+| Bandwidth | 20 credits / GB |
+| Web requests | 2 credits / 10,000 |
+| Compute (Functions) | 10 credits / GB-hour — n/a, Functions unused |
+| Deploy previews / branch deploys | **Free** (0 credits) — PR previews from [ci.yml](../.github/workflows/ci.yml) don't touch the budget |
+
+Deploy capacity depends on bandwidth drawn from the same pool, so there's no fixed "N deploys per
+month" — check the Netlify dashboard Usage tab for actual bandwidth before assuming headroom.
+Rough shape: at ~0 GB bandwidth, 300 credits ≈ 20 production deploys/month; at a few GB of
+real traffic, closer to 10–16.
 
 Thresholds that force an engineering response are in [CLAUDE.md](../CLAUDE.md).
 
@@ -174,9 +190,10 @@ documented, dated restore drill.
 
 | ID | Gap |
 |---|---|
-| O23 | **No linter or formatter.** `eslint-plugin-vue` catches a class of template bug — unused refs, missing `:key`, unresolved components, typo'd bindings — that Vitest structurally cannot, because those files are never mounted. |
-| O24 | **Interaction tests are impossible today.** [vitest.config.js](../vitest.config.js) sets `environment: 'node'` and `@vue/test-utils` is not installed, so nothing can click, type, or open a modal. Coverage is inverted against risk: pure date helpers are well tested; the archive flow, the modal state machine, the 3-hour lock, and finance gating have none. **Partially narrowed** — `vue/server-renderer` needs no new dependency, and [tests/views/churchFundsView.test.js](../tests/views/churchFundsView.test.js) uses it to assert a view's `setup()` runs, queries the right tables, and renders the right initial state. It caught a real crash that `npm run build` passed. Worth copying to the other views. |
+| O23 | **No linter or formatter.** `eslint-plugin-vue` catches a class of template bug — unused refs, missing `:key`, unresolved components, typo'd bindings — that Vitest structurally cannot, because those files are never mounted. Prettier is the natural pairing (removes formatting bikeshedding from review), and a Husky + `lint-staged` pre-commit hook makes both self-enforcing instead of advisory. All three are devDependencies — zero runtime/bundle impact. |
+| O24 | **Interaction tests are impossible today.** [vitest.config.js](../vitest.config.js) sets `environment: 'node'` and `@vue/test-utils` is not installed, so nothing can click, type, or open a modal. Coverage is inverted against risk: pure date helpers are well tested; the archive flow, the modal state machine, the 3-hour lock, and finance gating have none. **Partially narrowed** — `vue/server-renderer` needs no new dependency, and [tests/views/churchFundsView.test.js](../tests/views/churchFundsView.test.js) uses it to assert a view's `setup()` runs, queries the right tables, and renders the right initial state. It caught a real crash that `npm run build` passed. Worth copying to the other views. A separate, complementary gap: none of this exercises a real browser — Playwright is the closer-to-industry-standard tool for true end-to-end coverage (real clicks, real navigation, runs against a built preview) and would run on its own free CI-minutes budget independently of whether jsdom is ever added here. |
 | O25 | **No type checking.** Cross-ref [BACKLOG.md](BACKLOG.md) B7. Noted because O23/O24 partially compensate and are cheaper. |
+| O26 | **No performance/accessibility budget in CI.** Nothing catches a bundle-size or accessibility regression before it ships — the D9/CLAUDE.md route-count threshold (§ thresholds table) is checked by memory, not tooling. Lighthouse CI (or the `netlify-plugin-lighthouse` build plugin) is the standard fit: dev/CI-time only, no runtime dependency, runs against Netlify preview deploys for free. Only has teeth if wired into [ci.yml](../.github/workflows/ci.yml) or the Netlify build — a manual local Lighthouse run is easy to skip. |
 
 **O24's two traps** for anyone copying that SSR test: SSR skips `onMounted`, and Vue routes
 watcher failures to `app.config.errorHandler` rather than rejecting the render — so a test that
