@@ -66,9 +66,12 @@ Quick start:
 
 ```bash
 npm install
-npm run dev      # needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env
+npm run dev      # always the STAGING database — see docs/STAGING.md for the .env.staging it needs
 npm test
 ```
+
+`npm run dev` cannot reach production: production credentials live in `.env.production`, which Vite
+loads only for `npm run build`. That is deliberate — see [docs/STAGING.md](docs/STAGING.md) §1.
 
 **Before deploying anything that touches the database, read
 [docs/OPERATIONS.md](docs/OPERATIONS.md).** Several migrations have caveats that will cost you a

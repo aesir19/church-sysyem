@@ -1,7 +1,12 @@
 node_modules
 dist
+# Broad on purpose: every .env variant holds live credentials, and a new one
+# must never depend on someone remembering to add a line here.
 .env
-.env.local
+.env.*
+
+# Lighthouse CI run output (lighthouserc.json writes reports here)
+.lighthouseci
 
 # Personal Claude Code overrides — contains machine-local absolute paths
 .claude/settings.local.json

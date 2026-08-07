@@ -20,10 +20,11 @@ Vendor-published limits. **Verify before any major change** — quotas move.
 | Supabase | Egress / month | 5 GB | **Medium** — the dominant cost as use grows |
 | Supabase | Monthly active users | 50 000 | Negligible — internal staff only |
 | Supabase | File storage | 1 GB | None today; re-evaluate if member photos land |
-| Supabase | Free projects | 2 per org | Constrains a staging project *and* multi-tenancy — pick one |
-| Supabase | **Auto-pause** | after 7 days idle | **High operationally** — see below |
+| Supabase | Free projects | 2 per org | **Both now in use** — production + staging ([STAGING.md](STAGING.md)). No slot left for a third environment |
+| Supabase | **Auto-pause** | after 7 days idle | **High operationally** — see below; now applies to staging too |
 | Netlify | Credits / month (Free plan) | 300 | **Medium** — one shared pool, see below |
 | Netlify | Functions | — | **Unused and must stay unused** ([ADR-0002](decisions/0002-no-second-compute-vendor.md)) |
+| Sentry | Errors / month (Developer plan) | 5 000 | Low at current volume — but a render error in a hot loop can exhaust a month in minutes. Tracing and replay are off for this reason ([ADR-0008](decisions/0008-sentry-alongside-in-stack-sink.md)) |
 
 **Netlify moved to credit-based billing in September 2025** — there is no separate bandwidth or
 build-minute quota anymore; build minutes aren't metered at all. Everything draws from one
@@ -44,22 +45,64 @@ real traffic, closer to 10–16.
 
 Thresholds that force an engineering response are in [CLAUDE.md](../CLAUDE.md).
 
-**Auto-pause.** A church using the dashboard weekly keeps the project warm. For a longer gap
+**Bandwidth per visit grew ~41% when Sentry landed.** Measured at
+[ADR-0008](decisions/0008-sentry-alongside-in-stack-sink.md): the entry chunk went from 96.59 KB
+to 136.45 KB gzip. This is a **Netlify** cost, not a Supabase one — the bundle is a static asset,
+so it draws on the credit pool at 20 credits/GB and never touches Supabase egress. It lands in the
+entry chunk because `main.js` imports the SDK statically, so every visit pays it regardless of
+route, and it ships even when `VITE_SENTRY_DSN` is unset since only `init()` is guarded.
+
+In absolute terms this is small: ~26,000 uncached loads to spend 1 GB (20 of 300 credits), and
+`/assets/*` is cached `immutable`, so a returning user re-downloads only after a deploy changes the
+hash. It matters more for load time on a volunteer's phone, and for the Lighthouse `performance`
+gate in [ci.yml](../.github/workflows/ci.yml). If the Netlify credit threshold in
+[CLAUDE.md](../CLAUDE.md) is ever breached, making the Sentry import dynamic (`await import()`
+after mount) is the first lever — at the cost of missing errors thrown during initial render.
+
+**The two project slots.** An earlier version of this table claimed the 2-project cap forced a
+choice between staging and multi-tenancy. That was wrong: multi-tenancy here is single-database
+RLS — a church is a **row** in `churches`, not a project ([ADR-0001](decisions/0001-rls-is-the-only-authz.md)),
+and the two-church isolation matrix already runs as two rows inside one project. Adding churches
+costs no project slots. The two slots are production and staging.
+
+**Auto-pause.** A church using the dashboard weekly keeps production warm. For a longer gap
 (seasonal closure), expect a one-time manual unpause from the Supabase dashboard. **Do not add a
 synthetic keep-alive cron** — budget spend for no real-user benefit, and it risks tripping abuse
 policies.
 
+Staging pauses far more readily, because it is only touched while someone is actively developing
+against it. Expect to unpause it manually most times you return to it after a quiet stretch, and
+expect the first `npm run prisma:migrate:*` run after that to fail on connection until it is awake.
+This is normal and not worth engineering around — a paused project also stops counting against the
+2-project cap.
+
 ## 2. Deploying
 
-Netlify builds `npm run build` and publishes `dist/`. `VITE_SUPABASE_URL` and
-`VITE_SUPABASE_ANON_KEY` are set in the Netlify dashboard and must exist **at build time**.
+Netlify's own git-triggered auto-deploy is **stopped** (Site configuration → Build & deploy →
+Continuous deployment → Build settings → "Stopped builds") — it never builds or publishes on its
+own. [ci.yml](../.github/workflows/ci.yml)'s `deploy` job is the only thing that publishes,
+building with `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` from GitHub Actions repository
+*variables* (not secrets — the anon key is safe to publish; RLS is the actual control) and
+publishing via `netlify deploy --prod` (the Netlify CLI, run through `npx`, never installed as a
+project dependency — see [STAGING.md](STAGING.md) §3 for why).
 
-**Database migrations deploy before the SPA release that depends on them.** Nothing enforces
-this; the failure mode is a live column-not-found error (O16).
+**Database migrations deploy before the SPA release that depends on them — enforced by GitHub
+Actions' own dependency graph, not a Netlify setting.** `deploy` has `needs: [test, lighthouse,
+migrate]` in the same workflow file, so it cannot run unless the migration job actually succeeded
+first (O16, O17). An earlier version of this document assumed Netlify had a dashboard toggle for
+this; it doesn't — verified directly against Netlify's docs, not assumed. See
+[STAGING.md](STAGING.md) §3 for the full reasoning.
+
+The manual commands remain, for recovery and for inspection. **The unqualified ones target
+staging** — production needs an explicit `:prod`, which reads `.env.production` and prints the
+resolved host before it does anything:
 
 ```bash
-npm run prisma:migrate:status    # what's pending
-npm run prisma:migrate:deploy    # apply
+npm run prisma:migrate:status         # staging — what's pending
+npm run prisma:migrate:deploy         # staging — apply
+
+npm run prisma:migrate:status:prod    # production — inspection is safe
+npm run prisma:migrate:deploy:prod    # production — recovery only; ci.yml normally does this
 ```
 
 Every migration directory also carries a `rollback.sql`. **Prisma never executes these** — they
@@ -70,12 +113,16 @@ tab while deploying. After running one, record it:
 npx prisma migrate resolve --rolled-back 0009_narrow_grants
 ```
 
-There is no staging project (O15), so behaviour-changing migrations deploy one at a time with
-verification between each.
+Behaviour-changing migrations are rehearsed on staging first — see [STAGING.md](STAGING.md) for the
+full flow. On a fresh database (staging, or a rebuild) `0006_baseline_rls` **is** executed rather
+than resolved-as-applied; the "do not run this" caveat below is specific to production, where that
+state predates the migration.
 
 ### Schema change workflow
 
-1. Configure `.env` with `DATABASE_URL` (pooled) and `DIRECT_URL` (direct, port 5432).
+1. Credentials are already split by environment: staging in `.env.staging`, production in
+   `.env.production`, and **`.env` deliberately holds nothing** — see [STAGING.md](STAGING.md) §1
+   for why that split is what prevents a local command reaching production. All are gitignored.
 2. `npm run prisma:pull` — introspect current state.
 3. Edit `prisma/schema.prisma`.
 4. `npm run prisma:migrate:create -- --name your_change_name`.
@@ -102,22 +149,26 @@ diff against the migrations to detect drift.
 | ID | Gap |
 |---|---|
 | O1 | **No logging abstraction.** Every failure path is `error.value = err.message`, then discarded. No `src/lib/logger.js`, no levels, no correlation id. |
-| O2 | **No global Vue error handler.** `app.config.errorHandler` is unset in [main.js](../src/main.js). A render-time throw produces a white screen and no record. |
-| O3 | **No `window.onerror` / `unhandledrejection` capture.** Async failures outside a `try` vanish. |
-| O4 | **No error sink.** Nobody ever learns that `handleCreate` failed for three users on Sunday. The only channel is a staff member choosing to mention it. |
+| O2 | ~~**No global Vue error handler.**~~ **Closed for JS errors.** `Sentry.init({ app })` installs `app.config.errorHandler` ([ADR-0008](decisions/0008-sentry-alongside-in-stack-sink.md)). A render-time throw is now recorded. |
+| O3 | ~~**No `window.onerror` / `unhandledrejection` capture.**~~ **Closed for JS errors.** Sentry's default `globalHandlersIntegration` attaches both. |
+| O4 | **No error sink — narrowed, not closed.** Sentry now receives *JavaScript* failures. Database failures are deliberately **dropped** before send (constraint text carries member PII), so `handleCreate` failing for three users on Sunday is still invisible until `client_errors` exists. See below. |
 | O5 | **No domain audit log.** See below — the ledger needs this more than `members` does. |
 | O6 | **No DB performance visibility.** `pg_stat_statements` is available free and reviewed by no one, so D2-class problems stay invisible until they become outages. |
 
-**O4 — two free paths, and they are not equivalent.**
+**O4 — both free paths are now in play, and they cover different things.**
 
-- *Sentry free tier* — 5k errors/month, well above this app's volume, but adds a third-party
-  processor holding fragments of member PII in error payloads. That is a privacy trade-off, not
-  merely a cost one.
+- *Sentry free tier* — **adopted** ([ADR-0008](decisions/0008-sentry-alongside-in-stack-sink.md)).
+  5k errors/month, well above this app's volume. The privacy trade-off was paid explicitly, not
+  waived: collection defaults are inverted (no headers, bodies, cookies, query params, user info,
+  or Vue props) and [src/utils/sentryScrub.js](../src/utils/sentryScrub.js) drops database-shaped
+  events entirely and redacts what remains. Covers render throws, unhandled rejections, and
+  genuine JS bugs — **not** database failures.
 - *In-stack, $0, no new processor* — a bounded `public.client_errors` table with `INSERT`-only
   RLS for `authenticated` and no `SELECT` grant, a row cap enforced by a trigger (keep the most
   recent ~5,000), and a scrubber reducing message bodies to a whitelist of known error codes
   before insert. Stays inside the existing Supabase footprint, adds no dependency, keeps PII in
-  the one database that already holds it. **Preferred.** It also gives O21 a destination for free.
+  the one database that already holds it. **Still to build**, and now the *only* path for the
+  database-failure class Sentry deliberately refuses. It also gives O21 a destination for free.
 
 **O5 — the ledger, not the member table, is the urgent case.** [SECURITY.md](SECURITY.md) §3.7
 scopes the audit-trail gap to `members`. But `collections` enforces a 3-hour edit window, permits
@@ -147,34 +198,63 @@ than as a white page that loads fine.
 | ID | Gap |
 |---|---|
 | O11 | **No backup beyond platform defaults.** Free-tier Supabase provides daily backups with short retention and no PITR (confirm current terms). No `pg_dump` runs anywhere, and no restore has ever been tested. |
-| O12 | **Clean-room rebuild is impossible.** See below. |
-| O13 | **No seed or fixture path.** A fresh environment cannot reach a working state without hand-editing production-shaped data. This is also why O15 is hard to close. |
+| O12 | **Clean-room rebuild is impossible.** Substantially narrowed — see below. |
+| O13 | **No seed or fixture path.** A fresh environment cannot reach a working state without hand-editing production-shaped data. Still open, but no longer blocking: [STAGING.md](STAGING.md) §2 documents the manual seed as a procedure, which is what standing up staging actually needed. |
 | O14 | **No retention or erasure policy.** Soft delete is forever; there is no hard-delete path and no documented subject-access or erasure procedure. Under the PH **Data Privacy Act (RA 10173)** the church is a personal information controller for this data, which makes retention an obligation rather than a preference. Cross-ref [SECURITY.md](SECURITY.md) §3.10. |
 
-**O12 in detail.** Two separately-documented facts combine into something worse than either:
+**O12 in detail.** Two separately-documented facts combined into something worse than either:
 
-1. `0006_baseline_rls` is a record of live state that **must not be executed**.
+1. `0006_baseline_rls` is a record of live state that **must not be executed** *against production*.
 2. The trigger on `auth.users` calling `handle_new_user()`, and the event trigger calling
    `rls_auto_enable()`, live outside the `public` schema and exist in **no migration**
    ([SECURITY.md](SECURITY.md) §3.13).
 
-Therefore `prisma/migrations/` cannot reconstruct a working database, and the one migration that
-describes the missing security state is by design non-runnable. Without the `auth.users` trigger,
-every user signs in to an empty dashboard. If the Supabase project were lost tomorrow, recovery
-would depend on a never-restore-tested backup plus institutional memory of manual dashboard
-steps. **The repository is not currently a sufficient disaster-recovery artifact.**
+Both are now addressed. [scripts/sql/bootstrap-triggers.sql](../scripts/sql/bootstrap-triggers.sql)
+recreates the two triggers idempotently, and point 1 turned out to be narrower than written: 0006
+is non-runnable *against production only*, because that state predates it. On a fresh database it
+executes normally, which is what its own header always said ("its first real execution will be a
+rebuild, which is why every statement is idempotent").
 
-Closing it requires: (a) an idempotent `scripts/sql/bootstrap-triggers.sql` covering the two
-out-of-schema triggers, (b) a scheduled `pg_dump` to a GitHub Actions artifact, and (c) one
-documented, dated restore drill.
+The bootstrap script discovers triggers **by the function they call, not by name** — the names
+production uses are recorded nowhere in this repository, and a name-matching script run against a
+real restore would create a second parallel trigger rather than replacing the original, making
+`handle_new_user()` fire twice per signup.
+
+**This is no longer theoretical: standing up staging exercised the whole path end to end**
+(migrations → bootstrap → seed → sign in), which is the closest thing to a rebuild drill this
+project has had — and it surfaced two *additional* landmines that this document did not previously
+know about, beyond the two it was written to close:
+
+3. **`0001_baseline` cannot execute as literal SQL, on any fresh Supabase project, ever.** It
+   recreates Supabase's own built-in `auth.*` tables (via `prisma migrate diff --from-empty`
+   against production), and the connecting role has no `CREATE` privilege on the `auth` schema
+   (owned by `supabase_admin` — confirmed via `has_schema_privilege`). This is not a
+   staging-specific quirk; it means production's `public` tables were never created by literally
+   running this file either. The fix (extract the `public`-only statements, run those, mark the
+   whole migration applied) is documented in [STAGING.md](STAGING.md) §2, step 2.
+4. **Migration order isn't strictly linear.** `0003_expenses` calls `get_my_church_id()`, which
+   isn't created until `0004_church_scoped_groups` — invisible on production because that database
+   was built by hand first and captured into numbered files afterward, so the numbering doesn't
+   fully match creation order. `0004` has to run before `0003` on a truly fresh database. Full
+   dependency mapping (confirmed: `0006` needs nothing from `0002`/`0003`/`0005`; nothing in
+   `0002`-`0018` besides `0001` touches the `auth` schema) is in [STAGING.md](STAGING.md) §2.
+
+Point 1 in this list means the "0006 is idempotent, let it run normally on a rebuild" note above,
+while still true, undersold the problem — `0006` was never the hard part of a rebuild; `0001` was,
+and the docs didn't know that until this was actually attempted.
+
+Still open before O12 can be called closed: (b) a scheduled `pg_dump` to a GitHub Actions artifact,
+and (c) one documented, dated restore drill against a *production* backup. Until (b) exists there
+is still no artifact to restore *from* — the repository can now rebuild the schema and its security
+surface, but not the data.
 
 ## 6. Environments and release safety
 
 | ID | Gap |
 |---|---|
-| O15 | **No staging.** RLS changes — the highest-blast-radius change type in this architecture — go straight to production with `rollback.sql` open in another tab. A second free Supabase project costs $0 (but see the 2-project cap in §1). |
-| O16 | **Deploy ordering is human memory.** Migrations must land before the matching SPA release; nothing enforces it. |
-| O17 | **Netlify builds are not gated on CI.** [ci.yml](../.github/workflows/ci.yml) runs `test` + `build`, but Netlify builds on push independently unless configured otherwise — verify the dashboard setting. A red build can currently ship. |
+| O15 | ~~**No staging.**~~ **Closed.** A second free Supabase project is now the staging database, reached from local dev via `npm run dev` and `npm run prisma:migrate:deploy` — see [STAGING.md](STAGING.md). Database only: there is no staging website, by decision, since one developer testing locally is the whole use case. |
+| O16 | ~~**Deploy ordering is human memory.**~~ **Closed.** `deploy` (in [ci.yml](../.github/workflows/ci.yml)) has `needs: [test, lighthouse, migrate]` — GitHub Actions' own dependency graph, not a Netlify setting, guarantees the migration lands before the SPA that depends on it. See [STAGING.md](STAGING.md) §3. |
+| O17 | ~~**Netlify builds are not gated on CI.**~~ **Closed, by removing Netlify from the decision entirely.** Netlify has **no native way** to make a deploy wait on external check results — verified against Netlify's own docs, not assumed (an earlier version of this row assumed a dashboard toggle existed; it doesn't). Instead, Netlify's git-triggered auto-deploy is disabled outright (Site configuration → Build & deploy → Continuous deployment → Build settings → "Stopped builds"), and `ci.yml`'s `deploy` job is the *only* thing that publishes, via `netlify deploy --prod` after `needs: [test, lighthouse, migrate]` all succeed. |
 | O18 | **No version tag, changelog, or rollback runbook.** Netlify supports instant rollback to a prior deploy; nobody has written down that this is the procedure, so it will not be found under pressure. |
 | O19 | **No secret rotation runbook.** No procedure or trigger condition for rotating `VITE_SUPABASE_ANON_KEY`, `DATABASE_URL`, or `DIRECT_URL`, and no statement of who holds a service-role key, if anyone. |
 
