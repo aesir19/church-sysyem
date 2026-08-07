@@ -134,3 +134,142 @@ environment) first — they are cheaper and catch overlapping classes of bug.
 covers the authenticated shell, but anything genuinely app-wide — a toast container, an offline
 banner ([OPERATIONS.md](OPERATIONS.md) O8), a global error boundary (O2) — belongs in `App.vue`,
 not duplicated into individual views.
+
+**B27 — No vetted runtime-dependency candidates for common utility gaps.** Three keep coming up
+in discussion and are worth naming so they aren't re-litigated from scratch, though none is
+justified yet per [CLAUDE.md](../CLAUDE.md)'s "never add a runtime dependency without a stated
+reason and a free-tier impact note" rule:
+
+- **VueUse** — tree-shakeable composables (debounce, storage sync, etc.); only imported functions
+  ship, typically a few KB.
+- **Zod or Valibot** — schema validation at input/RPC boundaries, matching this codebase's
+  existing validate-at-the-boundary convention. Valibot is the lighter option (~1-3 KB gzip vs
+  Zod's ~10-13 KB).
+- **date-fns** — general date formatting/math. Could double as the fix vehicle for
+  [DEFECTS.md](DEFECTS.md) D14's three-different-date-format duplication if adopted with that
+  intent specifically, rather than ad hoc.
+
+**Error monitoring (Sentry) is a related but already-resolved question — see
+[ADR-0006](decisions/0006-error-sink-in-stack.md).** That record rejected a third-party processor
+in favor of an in-stack `client_errors` table, for reasons (bundle size, CSP `connect-src`
+weakening, member PII inside error payloads) that still hold. Its final line leaves "whether to
+*additionally* adopt Sentry" explicitly open — if ever revisited, it needs a PII-scrubbing plan
+before error payloads (which can carry names/birthdates/addresses lifted from constraint-violation
+text) leave the stack.
+
+## AI integration
+
+**B26 — AI-assisted Statistics Report (Secretariat), and other bounded AI features.** No AI
+integration exists today. The first candidate is a narrative layer over the planned Secretariat
+Statistics Report — e.g. "membership grew 8% this quarter, driven mainly by two new small
+groups" — generated from numbers the report already computes, not from a live query the AI runs
+itself. A second candidate raised but not designed: natural-language search over the member
+directory. Both are additive summaries on top of existing, already-correct data — the AI is
+never the source of truth for a number, only a sentence about numbers computed elsewhere.
+
+**The stated cost intent — a free API key, so it incurs no cost — is necessary but not
+sufficient.** Two failure modes to design against, not assume away:
+
+1. Most "free" LLM API tiers are trial credits that convert to billed usage, not free
+   indefinitely. The specific vendor/plan must be verified to have no expiry and no
+   silent card-on-file conversion **at implementation time** — that is what "$0/month
+   indefinitely" ([CLAUDE.md](../CLAUDE.md) priority 1) actually requires, not what today's
+   pricing page happens to say.
+2. A free tier is still a quota, not a guarantee. The feature must fail closed to its non-AI
+   baseline when the quota is exhausted or the call errors — the Statistics Report renders its
+   computed numbers either way; the AI summary is decoration, never a dependency the report needs
+   to function.
+
+**This is currently blocked by [ADR-0002](decisions/0002-no-second-compute-vendor.md), on
+purpose.** That record lists third-party API keys explicitly under "blocked until this record is
+superseded," for the reason that applies here regardless of price: **a key is a secret the
+browser must never hold, free or not.** Shipping it to the frontend hands every visitor of the
+deployed site an unmetered way to spend the owner's quota, defeats whatever per-key rate limit
+the vendor sets, and risks the key being scraped and revoked. Being free changes the cost of that
+key leaking; it does not change whether the key must stay server-side.
+
+The fix is the escape hatch ADR-0002 already names: a **Supabase Edge Function** holds the AI
+vendor's key as a function secret, is invoked from the SPA the same way `supabase.functions.invoke()`
+would be used anywhere else in this codebase, and forwards the caller's JWT so any church data it
+touches goes through PostgREST under the caller's own RLS — the function ends up with no more
+authority than the person calling it. Concretely:
+
+- The Edge Function receives already-aggregated figures, or fetches them itself RLS-scoped to the
+  caller — **never raw member rows.** A stats summary needs counts and totals, not names,
+  birthdates, or addresses; sending PII to a third-party API is a data-exposure question priority
+  2 doesn't get to skip just because priority 1 is satisfied for free.
+- The function returns text; the SPA renders it inline in the report. No new frontend runtime
+  dependency — `@supabase/supabase-js` already exposes `functions.invoke()`.
+- Errors and quota-exhaustion are caught the existing way (surfaced as `error.message`, per
+  [CLAUDE.md](../CLAUDE.md) conventions) and the report keeps rendering without its AI section.
+
+**Before implementation, this needs its own ADR (next number: ADR-0008),** because it formally
+supersedes the "third-party API keys: blocked" line in ADR-0002 — precisely the case that
+record's own "What would supersede this" section anticipates. That ADR should pin: the chosen
+vendor and plan (with the free-tier verification above actually done, not deferred), the exact
+data sent per call, the invocation budget, and the fail-closed behavior. Do not build the Edge
+Function before the ADR exists — ADR-0002 is binding until a superseding record is written.
+
+### Sketch: request/response shape (for ADR-0008 to adapt, not final text)
+
+No `supabase/` directory exists in this repo yet — Edge Functions are greenfield here. A
+candidate name: `summarize-statistics`.
+
+**SPA → function.** The SPA never assembles this from raw member rows; it passes only numbers a
+report has already computed. On the funds side, `computeMonthlyReport()`
+([collectivesReport.js](../src/utils/collectivesReport.js)) already returns exactly this shape —
+its `totals` object, **not** its `weeklyReports`, which carry `contributions[]`/`expenses[]`, and
+those carry contributor names via `contributorLabel()`. Stripping to `totals` is what keeps this
+call PII-free; passing a whole weekly report would not.
+
+```js
+const { data, error } = await supabase.functions.invoke('summarize-statistics', {
+  body: {
+    church_id: activeChurchId.value,
+    period: { month: 7, year: 2026 },
+    funds: {                                 // computeMonthlyReport(...).totals — figures only
+      tithes: 42000, offering: 18500, others: 0, totalFunds: 60500,
+      churchAllocation: 19360, totalExpenses: 12100, netChurchFunds: 7260,
+      openingBalance: 55000, closingBalance: 62260,
+    },
+    membership: { activeCount: 214, newThisMonth: 6, archivedThisMonth: 1 },
+    attendance: { servicesCount: 9, avgAttendance: 121, trendVsPriorMonth: 0.04 },
+  },
+})
+```
+
+No `contributions[]`, no `expenses[]`, no names, no member or contributor ids — the function
+receives exactly what already appears as totals on screen, nothing that could re-identify anyone.
+(Membership and attendance aggregation don't exist yet — the Statistics Report itself needs its
+own `src/utils/` aggregator, same "pure function, no I/O, has a test" pattern as
+`collectivesReport.js`, before there's anything to send on that side.)
+
+**Function → SPA.**
+
+```json
+{ "summary": "Giving held steady this month at ₱60,500, with attendance up 4% across 9 services. Membership grew by 5 net.",
+  "generated_at": "2026-08-14T03:12:00Z",
+  "model": "<vendor/model pinned by the ADR>" }
+```
+
+A plain string plus provenance — nothing structured for the SPA to parse and trust. The numbers
+on screen stay the ones `computeMonthlyReport()` produced; the AI sentence sits alongside them,
+never recomputes or overrides them.
+
+**Inside the function (Deno runtime):**
+
+1. Reads the caller's JWT from the `Authorization` header — forwarded automatically by
+   `functions.invoke()` — and, if the function ever fetches data itself rather than trusting the
+   request body, uses it to build its PostgREST client so RLS still evaluates under the caller's
+   own identity, never a service key.
+2. Reads the AI vendor key from a Supabase **function secret** (`supabase secrets set`) — never in
+   `.env`, never shipped to the browser, never committed to this repo.
+3. Calls the AI vendor once, with a fixed prompt template and a token cap — the invocation budget
+   ADR-0008 has to name a number for.
+4. On any failure — quota exhausted, timeout, vendor error — returns a non-2xx. The SPA catches it
+   the existing way (`error.message`, no throw) and renders the report **without** the AI section,
+   same pattern as every other Supabase failure in this app.
+
+**Deployment is a separate command, deliberately not folded into the Prisma flow:** Edge Functions
+ship via `supabase functions deploy`, not `prisma migrate deploy`. [OPERATIONS.md](OPERATIONS.md)'s
+deploy procedure needs a line added for this once it's real.

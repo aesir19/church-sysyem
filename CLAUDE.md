@@ -121,7 +121,7 @@ These follow from priority 1 and are binding unless the owner overrides them.
 | Active members in one church | 300 | Add `.range()` pagination *before* the next list feature |
 | Routes registered | ≥ 3 | Convert `router/index.js` to `() => import(...)` lazy imports |
 | Supabase egress | 60 % of 5 GB/mo | Audit list queries; tighten column selection |
-| Netlify bandwidth | 60 % of 100 GB/mo | Verify cache headers; look for an unminified asset |
+| Netlify credits | 60 % of 300/mo | Check Usage tab (bandwidth + deploys share one pool); verify cache headers |
 | Database storage | 60 % of 500 MB | Audit text column sizes; archive old data offline |
 
 The route threshold is **already breached** — every view is eagerly imported into a single
