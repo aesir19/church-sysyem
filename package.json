@@ -5,16 +5,21 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:staging": "vite --mode staging",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "lighthouse": "lhci autorun",
     "prisma:check:pull": "node scripts/prisma/check-env.js pull",
     "prisma:check:migrate": "node scripts/prisma/check-env.js migrate",
     "prisma:pull": "npm run prisma:check:pull && prisma db pull",
     "prisma:generate": "prisma generate",
     "prisma:migrate:create": "npm run prisma:check:migrate && prisma migrate dev --create-only",
     "prisma:migrate:status": "npm run prisma:check:migrate && prisma migrate status",
-    "prisma:migrate:deploy": "npm run prisma:check:migrate && prisma migrate deploy"
+    "prisma:migrate:deploy": "npm run prisma:check:migrate && prisma migrate deploy",
+    "prisma:migrate:status:staging": "node scripts/prisma/with-env-file.js .env.staging npm run prisma:migrate:status",
+    "prisma:migrate:deploy:staging": "node scripts/prisma/with-env-file.js .env.staging npm run prisma:migrate:deploy",
+    "deploy:prod": "npx --yes netlify-cli@27.1.0 deploy --prod --dir=dist"
   },
   "dependencies": {
     "@prisma/client": "^6.16.0",
@@ -24,7 +29,9 @@
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@lhci/cli": "^0.15.1",
     "@vitejs/plugin-vue": "^5.2.3",
+    "dotenv": "^16.6.1",
     "prisma": "^6.16.0",
     "vite": "^6.3.5",
     "vitest": "^4.1.9"

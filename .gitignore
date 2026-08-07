@@ -2,6 +2,10 @@ node_modules
 dist
 .env
 .env.local
+.env.staging
+
+# Lighthouse CI run output (lighthouserc.json writes reports here)
+.lighthouseci
 
 # Personal Claude Code overrides — contains machine-local absolute paths
 .claude/settings.local.json

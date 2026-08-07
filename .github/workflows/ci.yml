@@ -35,3 +35,125 @@ jobs:
 
       - name: Build app
         run: npm run build
+
+  lighthouse:
+    name: Lighthouse CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # src/lib/supabase.js throws at module-evaluation time when these are
+      # missing, and Vite bakes VITE_* in at build time — without them every
+      # audited route renders a blank page and tanks all four categories for
+      # reasons unrelated to performance. These are throwaway placeholders, not
+      # secrets: the anon key is safe to publish by design (RLS is the control),
+      # and nothing in this job talks to a real Supabase project.
+      - name: Build app
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://placeholder.supabase.co
+          VITE_SUPABASE_ANON_KEY: placeholder-anon-key-for-ci-lighthouse-build
+
+      - name: Run Lighthouse CI
+        run: npm run lighthouse
+
+  migrate:
+    name: Deploy Prisma migrations to production
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
+    # Overrides the workflow-level concurrency group above: a migration must
+    # queue behind a prior one, never be cancelled mid-flight by a newer push
+    # the way test/lighthouse correctly are.
+    concurrency:
+      group: prod-migrate
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Goes through the existing prisma:check:migrate gate, which fails fast on
+      # a missing DIRECT_URL or an unencoded @ in the credentials.
+      - name: Deploy migrations
+        run: npm run prisma:migrate:deploy
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.PROD_DIRECT_URL }}
+
+  deploy:
+    name: Deploy to Netlify (production)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # The actual ordering guarantee: GitHub Actions' own dependency graph, not
+    # a Netlify setting. Netlify has no native "wait for external CI" feature
+    # (verified against its docs — the only related toggle, "Stop builds", is
+    # a manual global on/off switch, not conditional). So Netlify's git-based
+    # auto-deploy is disabled entirely (Site configuration > Build & deploy >
+    # Continuous deployment > Build settings > "Stopped builds"), and this job
+    # is the only thing that publishes to production — only after test,
+    # lighthouse, AND the migration have all succeeded.
+    needs: [test, lighthouse, migrate]
+    environment: production
+    # Overrides the workflow-level concurrency group, same reasoning as
+    # `migrate` above: without this, `deploy` shares ci-${{ github.ref }} with
+    # cancel-in-progress: true, so a second rapid push to main could cancel an
+    # in-flight deploy AFTER migrate already succeeded — production ends up
+    # migrated with the previous frontend still live. Queue instead.
+    concurrency:
+      group: prod-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Repository VARIABLES, not secrets: the anon key is designed to be
+      # public (RLS is the actual access control, not key secrecy), so a
+      # GitHub Actions "Variable" (Settings > Secrets and variables > Actions >
+      # Variables tab — distinct from Secrets) is the right home. Rotation or
+      # repointing to a different Supabase project becomes "edit one
+      # variable," not "edit this workflow file."
+      - name: Build app
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+
+      # `netlify-cli` is deliberately NOT a devDependency: it pulls in
+      # @netlify/otel, whose @opentelemetry/api requirement conflicts with
+      # vitest's peer dependency. It's only ever needed transiently here, so
+      # `npx` runs it in an isolated environment per invocation instead —
+      # `npm run deploy:prod` does the same locally if a manual deploy is
+      # ever needed for recovery.
+      - name: Deploy to Netlify
+        run: npm run deploy:prod
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
