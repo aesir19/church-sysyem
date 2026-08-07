@@ -23,6 +23,13 @@
     Cache-Control = "no-cache"
 
 # Security headers — apply to every response.
+#
+# connect-src includes one Sentry ingest host (ADR-0008). It is the exact
+# project host from VITE_SENTRY_DSN, not a wildcard, so a stolen or swapped DSN
+# cannot redirect error payloads somewhere else. This file cannot read the env
+# var, so the two are coupled by hand: if the DSN is ever repointed at a
+# different Sentry project, this host must change with it or reporting silently
+# stops.
 [[headers]]
   for = "/*"
   [headers.values]
@@ -31,5 +38,5 @@
     X-Frame-Options            = "DENY"
     Referrer-Policy            = "strict-origin-when-cross-origin"
     Permissions-Policy         = "camera=(), microphone=(), geolocation=(), interest-cohort=()"
-    Content-Security-Policy    = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests"
+    Content-Security-Policy    = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://o4511869055074304.ingest.de.sentry.io; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests"
     Cross-Origin-Opener-Policy = "same-origin"

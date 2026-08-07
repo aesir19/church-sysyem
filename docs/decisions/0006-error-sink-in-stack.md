@@ -69,8 +69,14 @@ authenticated` **first**, then grant back only `INSERT` to `authenticated`.
 - Reading it is a manual operator action. There is no alerting. That is a deliberate limit of the
   $0 path: this closes "we never find out", not "we find out immediately".
 
-## Still open, and deliberately separate
+## Answered by ADR-0008
 
-Whether to *additionally* adopt Sentry for stack traces and release tracking. The bundle, CSP, and
-privacy trade-offs above are unchanged and still argue against it. The in-stack sink covers
-detection, which was the part that mattered.
+Whether to *additionally* adopt Sentry for stack traces and release tracking was left open here.
+**[ADR-0008](0008-sentry-alongside-in-stack-sink.md) answers it: yes, conditional on the scrubbing
+plan this record's trade-offs demanded.** The bundle, CSP, and privacy costs named above are all
+real and were paid explicitly rather than waived — see that record for what they cost and what
+controls hold them.
+
+**This decision is not superseded.** `public.client_errors` remains the sink for database failures
+and for the CSP `report-uri` (§3.17). ADR-0008 deliberately routes database-shaped errors *away*
+from Sentry and back to this table, because constraint-violation text carries member PII.

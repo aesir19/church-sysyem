@@ -58,6 +58,9 @@ jobs:
       # reasons unrelated to performance. These are throwaway placeholders, not
       # secrets: the anon key is safe to publish by design (RLS is the control),
       # and nothing in this job talks to a real Supabase project.
+      # VITE_SENTRY_DSN is deliberately left unset here — main.js skips
+      # Sentry.init() when it's empty, so this build's placeholder-driven
+      # errors never get reported into the real Sentry project.
       - name: Build app
         run: npm run build
         env:
@@ -91,10 +94,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Goes through the existing prisma:check:migrate gate, which fails fast on
-      # a missing DIRECT_URL or an unencoded @ in the credentials.
+      # `prisma:migrate:run:deploy`, NOT `prisma:migrate:deploy`. The latter is
+      # the local developer command and force-loads .env.staging — pointing this
+      # job at it would either fail (no such file in CI) or, worse, migrate the
+      # wrong database. The `:run:` variants take their credentials from the
+      # ambient environment, which is what the secrets below provide.
+      # Still goes through prisma:check:migrate, which fails fast on a missing
+      # DIRECT_URL or an unencoded @ in the credentials.
       - name: Deploy migrations
-        run: npm run prisma:migrate:deploy
+        run: npm run prisma:migrate:run:deploy
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
           DIRECT_URL: ${{ secrets.PROD_DIRECT_URL }}
@@ -145,6 +153,7 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+          VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
 
       # `netlify-cli` is deliberately NOT a devDependency: it pulls in
       # @netlify/otel, whose @opentelemetry/api requirement conflicts with

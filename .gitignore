@@ -1,8 +1,9 @@
 node_modules
 dist
+# Broad on purpose: every .env variant holds live credentials, and a new one
+# must never depend on someone remembering to add a line here.
 .env
-.env.local
-.env.staging
+.env.*
 
 # Lighthouse CI run output (lighthouserc.json writes reports here)
 .lighthouseci

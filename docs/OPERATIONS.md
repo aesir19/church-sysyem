@@ -24,6 +24,7 @@ Vendor-published limits. **Verify before any major change** — quotas move.
 | Supabase | **Auto-pause** | after 7 days idle | **High operationally** — see below; now applies to staging too |
 | Netlify | Credits / month (Free plan) | 300 | **Medium** — one shared pool, see below |
 | Netlify | Functions | — | **Unused and must stay unused** ([ADR-0002](decisions/0002-no-second-compute-vendor.md)) |
+| Sentry | Errors / month (Developer plan) | 5 000 | Low at current volume — but a render error in a hot loop can exhaust a month in minutes. Tracing and replay are off for this reason ([ADR-0008](decisions/0008-sentry-alongside-in-stack-sink.md)) |
 
 **Netlify moved to credit-based billing in September 2025** — there is no separate bandwidth or
 build-minute quota anymore; build minutes aren't metered at all. Everything draws from one
@@ -44,6 +45,20 @@ real traffic, closer to 10–16.
 
 Thresholds that force an engineering response are in [CLAUDE.md](../CLAUDE.md).
 
+**Bandwidth per visit grew ~41% when Sentry landed.** Measured at
+[ADR-0008](decisions/0008-sentry-alongside-in-stack-sink.md): the entry chunk went from 96.59 KB
+to 136.45 KB gzip. This is a **Netlify** cost, not a Supabase one — the bundle is a static asset,
+so it draws on the credit pool at 20 credits/GB and never touches Supabase egress. It lands in the
+entry chunk because `main.js` imports the SDK statically, so every visit pays it regardless of
+route, and it ships even when `VITE_SENTRY_DSN` is unset since only `init()` is guarded.
+
+In absolute terms this is small: ~26,000 uncached loads to spend 1 GB (20 of 300 credits), and
+`/assets/*` is cached `immutable`, so a returning user re-downloads only after a deploy changes the
+hash. It matters more for load time on a volunteer's phone, and for the Lighthouse `performance`
+gate in [ci.yml](../.github/workflows/ci.yml). If the Netlify credit threshold in
+[CLAUDE.md](../CLAUDE.md) is ever breached, making the Sentry import dynamic (`await import()`
+after mount) is the first lever — at the cost of missing errors thrown during initial render.
+
 **The two project slots.** An earlier version of this table claimed the 2-project cap forced a
 choice between staging and multi-tenancy. That was wrong: multi-tenancy here is single-database
 RLS — a church is a **row** in `churches`, not a project ([ADR-0001](decisions/0001-rls-is-the-only-authz.md)),
@@ -57,7 +72,7 @@ policies.
 
 Staging pauses far more readily, because it is only touched while someone is actively developing
 against it. Expect to unpause it manually most times you return to it after a quiet stretch, and
-expect the first `prisma:migrate:*:staging` run after that to fail on connection until it is awake.
+expect the first `npm run prisma:migrate:*` run after that to fail on connection until it is awake.
 This is normal and not worth engineering around — a paused project also stops counting against the
 2-project cap.
 
@@ -78,11 +93,16 @@ first (O16, O17). An earlier version of this document assumed Netlify had a dash
 this; it doesn't — verified directly against Netlify's docs, not assumed. See
 [STAGING.md](STAGING.md) §3 for the full reasoning.
 
-The manual commands remain, for recovery and for inspection:
+The manual commands remain, for recovery and for inspection. **The unqualified ones target
+staging** — production needs an explicit `:prod`, which reads `.env.production` and prints the
+resolved host before it does anything:
 
 ```bash
-npm run prisma:migrate:status    # what's pending
-npm run prisma:migrate:deploy    # apply
+npm run prisma:migrate:status         # staging — what's pending
+npm run prisma:migrate:deploy         # staging — apply
+
+npm run prisma:migrate:status:prod    # production — inspection is safe
+npm run prisma:migrate:deploy:prod    # production — recovery only; ci.yml normally does this
 ```
 
 Every migration directory also carries a `rollback.sql`. **Prisma never executes these** — they
@@ -100,8 +120,9 @@ state predates the migration.
 
 ### Schema change workflow
 
-1. Configure `.env` with `DATABASE_URL` (pooled) and `DIRECT_URL` (direct, port 5432).
-   Staging credentials go in `.env.staging` — both files are gitignored.
+1. Credentials are already split by environment: staging in `.env.staging`, production in
+   `.env.production`, and **`.env` deliberately holds nothing** — see [STAGING.md](STAGING.md) §1
+   for why that split is what prevents a local command reaching production. All are gitignored.
 2. `npm run prisma:pull` — introspect current state.
 3. Edit `prisma/schema.prisma`.
 4. `npm run prisma:migrate:create -- --name your_change_name`.
@@ -128,22 +149,26 @@ diff against the migrations to detect drift.
 | ID | Gap |
 |---|---|
 | O1 | **No logging abstraction.** Every failure path is `error.value = err.message`, then discarded. No `src/lib/logger.js`, no levels, no correlation id. |
-| O2 | **No global Vue error handler.** `app.config.errorHandler` is unset in [main.js](../src/main.js). A render-time throw produces a white screen and no record. |
-| O3 | **No `window.onerror` / `unhandledrejection` capture.** Async failures outside a `try` vanish. |
-| O4 | **No error sink.** Nobody ever learns that `handleCreate` failed for three users on Sunday. The only channel is a staff member choosing to mention it. |
+| O2 | ~~**No global Vue error handler.**~~ **Closed for JS errors.** `Sentry.init({ app })` installs `app.config.errorHandler` ([ADR-0008](decisions/0008-sentry-alongside-in-stack-sink.md)). A render-time throw is now recorded. |
+| O3 | ~~**No `window.onerror` / `unhandledrejection` capture.**~~ **Closed for JS errors.** Sentry's default `globalHandlersIntegration` attaches both. |
+| O4 | **No error sink — narrowed, not closed.** Sentry now receives *JavaScript* failures. Database failures are deliberately **dropped** before send (constraint text carries member PII), so `handleCreate` failing for three users on Sunday is still invisible until `client_errors` exists. See below. |
 | O5 | **No domain audit log.** See below — the ledger needs this more than `members` does. |
 | O6 | **No DB performance visibility.** `pg_stat_statements` is available free and reviewed by no one, so D2-class problems stay invisible until they become outages. |
 
-**O4 — two free paths, and they are not equivalent.**
+**O4 — both free paths are now in play, and they cover different things.**
 
-- *Sentry free tier* — 5k errors/month, well above this app's volume, but adds a third-party
-  processor holding fragments of member PII in error payloads. That is a privacy trade-off, not
-  merely a cost one.
+- *Sentry free tier* — **adopted** ([ADR-0008](decisions/0008-sentry-alongside-in-stack-sink.md)).
+  5k errors/month, well above this app's volume. The privacy trade-off was paid explicitly, not
+  waived: collection defaults are inverted (no headers, bodies, cookies, query params, user info,
+  or Vue props) and [src/utils/sentryScrub.js](../src/utils/sentryScrub.js) drops database-shaped
+  events entirely and redacts what remains. Covers render throws, unhandled rejections, and
+  genuine JS bugs — **not** database failures.
 - *In-stack, $0, no new processor* — a bounded `public.client_errors` table with `INSERT`-only
   RLS for `authenticated` and no `SELECT` grant, a row cap enforced by a trigger (keep the most
   recent ~5,000), and a scrubber reducing message bodies to a whitelist of known error codes
   before insert. Stays inside the existing Supabase footprint, adds no dependency, keeps PII in
-  the one database that already holds it. **Preferred.** It also gives O21 a destination for free.
+  the one database that already holds it. **Still to build**, and now the *only* path for the
+  database-failure class Sentry deliberately refuses. It also gives O21 a destination for free.
 
 **O5 — the ledger, not the member table, is the urgent case.** [SECURITY.md](SECURITY.md) §3.7
 scopes the audit-trail gap to `members`. But `collections` enforces a 3-hour edit window, permits
@@ -227,7 +252,7 @@ surface, but not the data.
 
 | ID | Gap |
 |---|---|
-| O15 | ~~**No staging.**~~ **Closed.** A second free Supabase project is now the staging database, reached from local dev via `npm run dev:staging` and `npm run prisma:migrate:deploy:staging` — see [STAGING.md](STAGING.md). Database only: there is no staging website, by decision, since one developer testing locally is the whole use case. |
+| O15 | ~~**No staging.**~~ **Closed.** A second free Supabase project is now the staging database, reached from local dev via `npm run dev` and `npm run prisma:migrate:deploy` — see [STAGING.md](STAGING.md). Database only: there is no staging website, by decision, since one developer testing locally is the whole use case. |
 | O16 | ~~**Deploy ordering is human memory.**~~ **Closed.** `deploy` (in [ci.yml](../.github/workflows/ci.yml)) has `needs: [test, lighthouse, migrate]` — GitHub Actions' own dependency graph, not a Netlify setting, guarantees the migration lands before the SPA that depends on it. See [STAGING.md](STAGING.md) §3. |
 | O17 | ~~**Netlify builds are not gated on CI.**~~ **Closed, by removing Netlify from the decision entirely.** Netlify has **no native way** to make a deploy wait on external check results — verified against Netlify's own docs, not assumed (an earlier version of this row assumed a dashboard toggle existed; it doesn't). Instead, Netlify's git-triggered auto-deploy is disabled outright (Site configuration → Build & deploy → Continuous deployment → Build settings → "Stopped builds"), and `ci.yml`'s `deploy` job is the *only* thing that publishes, via `netlify deploy --prod` after `needs: [test, lighthouse, migrate]` all succeed. |
 | O18 | **No version tag, changelog, or rollback runbook.** Netlify supports instant rollback to a prior deploy; nobody has written down that this is the procedure, so it will not be found under pressure. |

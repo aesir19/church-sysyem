@@ -15,25 +15,40 @@ This closes [OPERATIONS.md](OPERATIONS.md) O15. The related durability gap O12 i
 
 ## 1. How environments are selected
 
-Credentials live in two gitignored files at the repo root. **Both are ignored — never commit
-either.** `.env` holds production, `.env.staging` holds staging.
+**Local development cannot reach production. That is structural, not a convention** — there is no
+command to type wrongly and no variable to forget.
 
-| Command | Database | Browser app talks to |
+Credentials live in three gitignored files at the repo root (`.gitignore` ignores `.env` and
+`.env.*` wholesale, so a new variant can't be missed):
+
+| File | Holds | Loaded by |
 |---|---|---|
-| `npm run dev` | production | production |
-| `npm run dev:staging` | staging | staging |
-| `npm run prisma:migrate:status` / `:deploy` | production | — |
-| `npm run prisma:migrate:status:staging` / `:deploy:staging` | staging | — |
+| `.env` | **nothing** — a comment explaining the split | every mode (which is why it must stay empty) |
+| `.env.staging` | staging | `npm run dev`, and the default Prisma commands |
+| `.env.production` | production | `npm run build` only, and the explicit `:prod` Prisma commands |
 
-Two different mechanisms are doing the work, and they have different failure modes:
+| Command | Database | Sentry |
+|---|---|---|
+| `npm run dev` | **staging** | disabled |
+| `npm run build` | production | enabled |
+| `npm run prisma:migrate:status` / `:deploy` | **staging** | — |
+| `npm run prisma:migrate:status:prod` / `:deploy:prod` | production | — |
 
-- **Vite** (`--mode staging`) always loads `.env` *first*, then layers `.env.staging` over it. A
-  variable that is absent from `.env.staging` therefore **silently falls back to its production
-  value**. This is the real footgun on the app side: if `.env.staging` is missing
-  `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`, `npm run dev:staging` points Prisma at staging but
-  the *browser app* at production, with no error. Keep all four variables in `.env.staging`.
+The unqualified commands are the safe ones. Production requires typing `:prod`, and normally isn't
+typed at all — [ci.yml](../.github/workflows/ci.yml) runs the production migration.
+
+Two mechanisms enforce this, and it is worth knowing why each is shaped the way it is:
+
+- **Vite** loads `.env` first, then layers `.env.<mode>` over it — and a key *absent* from the mode
+  file falls through to `.env`. That fallback used to be the real footgun: when `.env` held
+  production values, one missing line in `.env.staging` silently pointed the browser at production
+  with no error. It is gone because **`.env` now holds no credentials at all**. `npm run dev` runs
+  in mode `staging`, which never loads `.env.production`, so the worst case is now a missing
+  variable and a loud throw from [src/lib/supabase.js](../src/lib/supabase.js) — fail closed
+  instead of fail silent. **Do not put credentials back into `.env`;** doing so re-creates exactly
+  that footgun.
 - **Prisma** goes through [scripts/prisma/with-env-file.js](../scripts/prisma/with-env-file.js),
-  which loads `.env.staging` with `override: true` and prints the resolved database host before
+  which loads the named file with `override: true` and prints the resolved database host before
   running anything. Check that line — it is the confirmation of which database you are about to
   touch:
   ```
@@ -48,14 +63,22 @@ Two different mechanisms are doing the work, and they have different failure mod
   against whatever that ambient value points at, with no visible difference in the output. The
   wrapper forces the file to win.
 
-`.env.staging` must therefore contain all four variables:
+`.env.staging` must therefore contain all four variables — a missing one is now a startup throw,
+not a silent switch to production:
 
 ```
 DATABASE_URL=            # staging pooled connection (port 6543)
 DIRECT_URL=              # staging direct connection (port 5432), used for migrations
 VITE_SUPABASE_URL=       # staging project URL
 VITE_SUPABASE_ANON_KEY=  # staging anon key
+VITE_SENTRY_DSN=         # deliberately EMPTY — see below
 ```
+
+**`VITE_SENTRY_DSN` must stay present and empty in `.env.staging`.** `main.js` skips
+`Sentry.init()` entirely when it is unset ([ADR-0008](decisions/0008-sentry-alongside-in-stack-sink.md)),
+which is what keeps local development from reporting into the production Sentry project and
+burning its 5k/month event quota on your own debugging. Keep the line, empty, rather than deleting
+it — so it reads as a decision rather than an omission someone should "fix".
 
 **Encode `@` in the password as `%40`.** Supabase-generated passwords often contain `@`, which
 breaks connection-string parsing. `npm run prisma:check:migrate` catches this and refuses to run —
@@ -75,8 +98,8 @@ apart from which credentials you use.
    `prisma migrate deploy` cannot get past on its own:
 
    ```bash
-   npm run prisma:migrate:status:staging   # expect: all migrations pending
-   npm run prisma:migrate:deploy:staging
+   npm run prisma:migrate:status   # expect: all migrations pending
+   npm run prisma:migrate:deploy
    ```
 
    **Obstacle 1 — `0001_baseline` cannot run as written.** It was captured via
@@ -108,7 +131,7 @@ apart from which credentials you use.
    (`prisma db execute --file=...`) and mark it applied *before* continuing:
    ```bash
    npx prisma migrate resolve --applied 0004_church_scoped_groups
-   npm run prisma:migrate:deploy:staging   # now completes 0002,0003,0005,0006,0007-0018 normally
+   npm run prisma:migrate:deploy   # now completes 0002,0003,0005,0006,0007-0018 normally
    ```
    Confirmed: `0006_baseline_rls` needs nothing from `0002`/`0003`/`0005`, and nothing else in
    `0002`-`0018` creates or alters an `auth`-schema object — these are the only two obstacles.
@@ -144,7 +167,7 @@ apart from which credentials you use.
    `UPDATE public.user_accounts SET member_id = ..., role = ... WHERE id = '<the auth uuid>'` — an
    `UPDATE`, not an `INSERT`, since the trigger already created the row.
 
-5. **Verify end to end:** `npm run dev:staging`, sign in as one of the seeded users, confirm the
+5. **Verify end to end:** `npm run dev`, sign in as one of the seeded users, confirm the
    dashboard loads with the right church name and role-appropriate capabilities.
 
 For any change to policies, grants, helper functions, or views, add a second church row here and
@@ -157,8 +180,8 @@ Staging is a rehearsal surface, not a deployment target. The intended sequence f
 includes a migration:
 
 1. Author the migration (`npm run prisma:migrate:create -- --name your_change`).
-2. Apply it to staging: `npm run prisma:migrate:deploy:staging`.
-3. Test against staging: `npm run dev:staging`.
+2. Apply it to staging: `npm run prisma:migrate:deploy`.
+3. Test against staging: `npm run dev`.
 4. Open the PR. CI runs `test` and `lighthouse` (both also run on every push to `main`).
 5. **Merge to `main`.** This is the approval signal — the merge itself authorizes the production
    migration, because verification already happened at step 3.
