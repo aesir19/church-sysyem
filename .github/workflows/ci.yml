@@ -148,6 +148,17 @@ jobs:
       # Variables tab — distinct from Secrets) is the right home. Rotation or
       # repointing to a different Supabase project becomes "edit one
       # variable," not "edit this workflow file."
+      # A `vars.*` reference to a variable that doesn't exist expands to an
+      # empty string, and Vite bakes whatever it's given into the bundle — so a
+      # missing or malformed value builds cleanly and white-screens in the
+      # browser. This turns that into a failed build instead of a failed site.
+      - name: Verify production build inputs
+        run: node scripts/ci/check-build-env.js
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+          VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
+
       - name: Build app
         run: npm run build
         env:

@@ -49,8 +49,13 @@ Thresholds that force an engineering response are in [CLAUDE.md](../CLAUDE.md).
 [ADR-0008](decisions/0008-sentry-alongside-in-stack-sink.md): the entry chunk went from 96.59 KB
 to 136.45 KB gzip. This is a **Netlify** cost, not a Supabase one — the bundle is a static asset,
 so it draws on the credit pool at 20 credits/GB and never touches Supabase egress. It lands in the
-entry chunk because `main.js` imports the SDK statically, so every visit pays it regardless of
-route, and it ships even when `VITE_SENTRY_DSN` is unset since only `init()` is guarded.
+entry chunk, so every visit pays it regardless of route.
+
+**Only when the DSN is actually set, though.** Vite replaces `import.meta.env.VITE_SENTRY_DSN` with
+a literal at build time, so with it unset the `if (sentryDsn)` guard in `main.js` is statically
+false and Rollup tree-shakes `@sentry/vue` out of the bundle entirely — confirmed by measurement: a
+DSN-less production build is 320 KB, the same as before Sentry existed. A staging or CI build
+therefore carries no Sentry weight at all.
 
 In absolute terms this is small: ~26,000 uncached loads to spend 1 GB (20 of 300 credits), and
 `/assets/*` is cached `immutable`, so a returning user re-downloads only after a deploy changes the
@@ -80,7 +85,9 @@ This is normal and not worth engineering around — a paused project also stops 
 
 Netlify's own git-triggered auto-deploy is **stopped** (Site configuration → Build & deploy →
 Continuous deployment → Build settings → "Stopped builds") — it never builds or publishes on its
-own. [ci.yml](../.github/workflows/ci.yml)'s `deploy` job is the only thing that publishes,
+own. **"Enforce deployment methods" (same Continuous deployment section) must also be off**, or the
+CLI deploy below is rejected with an unexplained `Forbidden` and nothing can reach production at
+all — see [STAGING.md](STAGING.md) §3. [ci.yml](../.github/workflows/ci.yml)'s `deploy` job is the only thing that publishes,
 building with `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` from GitHub Actions repository
 *variables* (not secrets — the anon key is safe to publish; RLS is the actual control) and
 publishing via `netlify deploy --prod` (the Netlify CLI, run through `npx`, never installed as a

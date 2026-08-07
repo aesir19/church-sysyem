@@ -8,6 +8,10 @@ dist
 # Lighthouse CI run output (lighthouserc.json writes reports here)
 .lighthouseci
 
+# Netlify CLI local link state (written by `netlify deploy`). Machine-local —
+# CI passes the site through NETLIFY_SITE_ID instead.
+.netlify
+
 # Personal Claude Code overrides — contains machine-local absolute paths
 .claude/settings.local.json
 
@@ -17,3 +21,5 @@ dist
 
 /src/generated/prisma
 .xlsx
+# Local Netlify folder
+.netlify

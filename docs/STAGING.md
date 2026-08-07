@@ -205,6 +205,17 @@ deploy" (O16) and "nothing red ships" (O17) — not any Netlify setting. Netlify
 CLI deploy (`netlify deploy --prod`) is a separate direct-upload path, independent of the stopped
 build pipeline, which is exactly why this still works with builds stopped.
 
+**Two Netlify settings must be changed, not one — and the second one bites silently.** Alongside
+"Stopped builds", **Project configuration → Build & deploy → Continuous deployment → "Enforce
+deployment methods"** must be **off**. That feature requires every production deploy to come
+through a Git workflow and, per Netlify's changelog, "prevents accidental production publishes from
+the Netlify CLI, MCP server, or API" — which is precisely how this project deploys. With both
+settings on, *nothing* can reach production: Netlify won't build from Git, and it rejects the CLI
+upload. The symptom is a bare `JSONHTTPError: Forbidden` from `netlify deploy --prod`, with no
+mention of the setting, from CI **and** from a laptop, and it survives rotating the auth token.
+Diagnose it by reading `prevent_non_git_prod_deploys` in
+`GET https://api.netlify.com/api/v1/sites/<site-id>`; the CLI never surfaces the real reason.
+
 `netlify-cli` is deliberately not a project devDependency (it conflicts with vitest's peer
 dependencies via `@netlify/otel`) — both the CI step and `npm run deploy:prod` run it through `npx`
 instead, which resolves it in an isolated environment per invocation.

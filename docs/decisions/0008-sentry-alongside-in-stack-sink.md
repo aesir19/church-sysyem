@@ -89,8 +89,10 @@ routine navigation.
   and bodies are off rather than merely filtered.
 - **`netlify.toml` and the DSN are coupled by hand.** Nothing enforces it. Repointing one without
   the other fails silently — reporting just stops.
-- **+39 KB gzip ships to every visitor on every uncached load**, including builds where the DSN is
-  unset (the import is static; only `init()` is guarded). Tracked against the Netlify budget in
+- **+40 KB gzip ships to every visitor on every uncached load** — but *only* when the DSN is set.
+  Vite inlines `VITE_SENTRY_DSN` at build time, so an unset DSN makes the `if (sentryDsn)` guard
+  statically false and Rollup drops `@sentry/vue` entirely (measured: a DSN-less build is 320 KB,
+  identical to before Sentry). Tracked against the Netlify budget in
   [OPERATIONS.md](../OPERATIONS.md) §1.
 - **Local `vite dev` does not enforce the CSP**, so "it worked locally" is not evidence the
   production path works. Verify against a real deploy, or `npm run preview` with headers applied.
