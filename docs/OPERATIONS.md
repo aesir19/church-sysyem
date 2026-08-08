@@ -100,6 +100,56 @@ first (O16, O17). An earlier version of this document assumed Netlify had a dash
 this; it doesn't — verified directly against Netlify's docs, not assumed. See
 [STAGING.md](STAGING.md) §3 for the full reasoning.
 
+### Never mark a `VITE_*` value secret in Netlify
+
+**No Netlify environment variable on this site may have "contains secret values" set.** A value
+marked secret is redacted out of the deployed files, and every `VITE_*` value is compiled into the
+JavaScript bundle every visitor downloads. Marking one secret guarantees a broken site.
+
+This cost hours to find, because all three status lights stay green: the build succeeds, the deploy
+succeeds, Netlify reports **Site is live**, and the served bundle is corrupt. The only symptom is in
+the browser — `Uncaught Error: Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL`.
+
+It is a direct consequence of moving the build off Netlify. While Netlify built the site, its own
+build read the real values — per Netlify's docs, *"only code running on Netlify's systems can read
+the original, unmasked values"* — so secret-marked variables worked fine. Once
+[ci.yml](../.github/workflows/ci.yml) took over the build, Netlify stopped being the producer and
+became a scanner of someone else's output: it finds strings it was told are secrets and replaces
+each with 16 asterisks plus the last four characters. `https://<ref>.supabase.co` becomes
+`****************e.co`. **Nothing in the repo changed to cause this and nothing in the repo can
+prevent it.**
+
+Two properties make it maximally confusing, both worth recognising directly:
+
+- **It is invisible from the GitHub side.** Repository variables can be correct, environment-level
+  overrides absent, and `scripts/ci/check-build-env.js` can pass — because at build time the values
+  *are* correct. The corruption happens after the artifact leaves the runner.
+- **It is invisible from the deploy side.** A CLI deploy from a laptop fails identically, because
+  the redaction is attached to the site, not the deployer or the credentials.
+
+**Diagnosis — compare byte counts, not contents.** What identified it was arithmetic. A local build
+was 442,313 bytes; the deployed bundle was 442,267. The 46-byte gap is exactly the masking delta:
+URL (40) + anon key (46) = 86 real characters, replaced by two 20-character masks = 40, and
+86 − 40 = 46. Everything else was byte-identical. The decisive detail was that **`VITE_SENTRY_DSN`
+survived untouched** — one value passing through while two are mangled cannot be explained by the
+build, only by something that knows which two are special. Checking which keys Netlify holds
+confirmed it:
+
+```bash
+curl -s "https://api.netlify.com/api/v1/accounts/<account-slug>/env?site_id=<site-id>" \
+  -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" \
+  | grep -o '"key":"[^"]*"\|"is_secret":[a-z]*'
+```
+
+**Fix:** delete `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from Netlify entirely. With builds
+stopped they are dead configuration — GitHub Actions supplies these values now. Unchecking "contains
+secret values" also works but leaves a variable that does nothing except wait to be re-marked.
+
+The conceptual rule underneath: **a value that must ship in a browser bundle cannot be a secret.**
+The anon key is public by design and RLS is the access control
+([ADR-0001](decisions/0001-rls-is-the-only-authz.md)). The key that must never appear in the
+frontend is `service_role`, which has no business in any build environment in the first place.
+
 The manual commands remain, for recovery and for inspection. **The unqualified ones target
 staging** — production needs an explicit `:prod`, which reads `.env.production` and prints the
 resolved host before it does anything:

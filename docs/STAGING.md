@@ -216,6 +216,13 @@ mention of the setting, from CI **and** from a laptop, and it survives rotating 
 Diagnose it by reading `prevent_non_git_prod_deploys` in
 `GET https://api.netlify.com/api/v1/sites/<site-id>`; the CLI never surfaces the real reason.
 
+**A third Netlify setting can break the site without breaking the deploy:** any environment
+variable marked "contains secret values" is redacted out of the uploaded bundle, so the build and
+deploy both report success and the served JavaScript is corrupt. This only bites because the build
+moved off Netlify. Full diagnosis and fix in [OPERATIONS.md](OPERATIONS.md) §2, *"Never mark a
+`VITE_*` value secret in Netlify"* — read it before setting any environment variable on the Netlify
+side of a rebuild.
+
 `netlify-cli` is deliberately not a project devDependency (it conflicts with vitest's peer
 dependencies via `@netlify/otel`) — both the CI step and `npm run deploy:prod` run it through `npx`
 instead, which resolves it in an isolated environment per invocation.
