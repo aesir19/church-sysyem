@@ -150,6 +150,49 @@ The anon key is public by design and RLS is the access control
 ([ADR-0001](decisions/0001-rls-is-the-only-authz.md)). The key that must never appear in the
 frontend is `service_role`, which has no business in any build environment in the first place.
 
+### The sibling failure: Netlify *building* the site at all
+
+Deleting those variables closed the masking bug and opened a second one, which took production down
+a second time. The two look alike from the outside — white screen, green deploy — and have opposite
+causes, so **read the error text before doing anything else**:
+
+| Browser error | What it means |
+|---|---|
+| `Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL` | Built **correctly**, then Netlify masked the values in the uploaded file. The variable is marked "contains secret values". |
+| `Supabase Connection Error: Missing environment variables` | Built **with the values empty**. Something other than the `deploy` job compiled the bundle. |
+
+**Telling them apart from the bundle, not from a guess.** `src/lib/supabase.js` guards with
+`if (!supabaseUrl || !supabaseAnonKey)`, and Vite inlines `import.meta.env.VITE_*` as literals
+before minification. So the guard is its own tracer:
+
+- Valid values → the condition folds to `false` and the minifier **deletes the throw**. The string
+  `Supabase Connection Error` does not appear in the bundle at all.
+- Empty values → the condition folds to `true` and the throw **survives**.
+
+Masking happens after compilation, so a masked bundle was built from good values and cannot contain
+that string. **If the browser prints `Supabase Connection Error`, the compile step had nothing to
+work with** — no need to inspect Netlify's variables, they are not the problem.
+
+```bash
+# 1 = built empty. 0 = built with real values (whatever happened after).
+curl -s https://<site>/assets/index-<hash>.js | grep -c 'Supabase Connection Error'
+```
+
+**Cause.** `deploy` in [ci.yml](../.github/workflows/ci.yml) cannot produce an empty build —
+`scripts/ci/check-build-env.js` runs on the same env immediately before `npm run build` and exits 1.
+A Netlify-side build can, and does: it has no `VITE_*` variables, because the fix above removed
+them. So an empty-valued bundle means Netlify built and published over the artifact — git
+auto-deploy switched back on, or someone pressed **Retry deploy**.
+
+**Fix:** re-run the workflow on `main` to republish, then confirm Netlify is not building. The
+repo-side guard is the `[build] command` in [netlify.toml](../netlify.toml), which now exits 1 with
+an explanation: a Netlify build fails loudly instead of shipping a white screen. It does not affect
+`npm run build` or `npm run deploy:prod`, neither of which runs it.
+
+**The general rule:** exactly one system may publish this site. Two publishers with different
+environments is the whole bug, and "Stopped builds" is a dashboard toggle that does not survive
+someone clicking a button — the guard has to live in the repo.
+
 The manual commands remain, for recovery and for inspection. **The unqualified ones target
 staging** — production needs an explicit `:prod`, which reads `.env.production` and prints the
 resolved host before it does anything:
