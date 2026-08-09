@@ -1,23 +1,30 @@
 # Netlify configuration
 [build]
-  # THIS SITE IS NEVER BUILT BY NETLIFY. It is built and published exclusively by
-  # .github/workflows/ci.yml, whose `deploy` job compiles with the VITE_*
-  # repository variables and then uploads `dist` through the CLI.
+  # NOTHING SHOULD EVER RUN THIS COMMAND. It is a tripwire, not a build.
   #
-  # A Netlify-side build has no VITE_* variables — the fix for the masking
-  # incident (OPERATIONS.md §2) deleted them from Netlify on purpose. Vite bakes
-  # whatever it is given in at build time, so an env-less build inlines empty
-  # strings, `src/lib/supabase.js` throws "Missing environment variables" in the
-  # browser, and Netlify reports the deploy as a success. That has now taken
-  # production down once.
+  # This site is compiled exclusively by the `deploy` job in
+  # .github/workflows/ci.yml, which builds with the VITE_* repository variables
+  # and then uploads the finished `dist`. Any *other* build of this repo runs
+  # without those variables, and Vite inlines whatever it is given — so an
+  # env-less build bakes in empty strings, `src/lib/supabase.js` throws
+  # "Missing environment variables" in the browser, and the deploy still reports
+  # success. That has taken production down twice.
   #
-  # Netlify's git auto-deploy is also switched off in the dashboard ("Stopped
-  # builds"), but that is a toggle someone can flip back — this line is the part
-  # that lives in the repo and fails closed. It does NOT affect `npm run build`
-  # locally or in CI, and it does not affect `npm run deploy:prod`, which uploads
-  # a prebuilt --dir and never runs this command. The redirects and headers below
-  # still apply to every deploy.
-  command = "echo 'Netlify must not build this site. Deploys come from .github/workflows/ci.yml — see OPERATIONS.md.' && exit 1"
+  # Two things can invoke it, and both are now blocked:
+  #
+  #   1. `netlify deploy` RUNS THIS BY DEFAULT — it is not a passive setting.
+  #      That is what caused the second outage: the CLI re-ran `npm run build`
+  #      inside the runner, with only NETLIFY_AUTH_TOKEN/NETLIFY_SITE_ID in
+  #      scope, and overwrote the good dist just before uploading it.
+  #      `npm run deploy:prod` therefore passes --no-build. Do not remove it.
+  #   2. A Netlify-side git build, if continuous deployment is switched back on
+  #      in the dashboard ("Stopped builds" is a toggle, not a guarantee).
+  #
+  # Failing loudly beats shipping a white screen that deploys green, so this
+  # exits 1 rather than building. It does NOT affect `npm run build` locally or
+  # in CI — that is `vite build`, not this. The redirects and headers below still
+  # apply to every deploy.
+  command = "echo 'Netlify must not build this site. Deploys come from .github/workflows/ci.yml — see OPERATIONS.md. If you hit this from the CLI, --no-build is missing.' && exit 1"
   publish = "dist"
 
 [[redirects]]
