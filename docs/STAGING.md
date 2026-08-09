@@ -167,6 +167,25 @@ apart from which credentials you use.
    `UPDATE public.user_accounts SET member_id = ..., role = ... WHERE id = '<the auth uuid>'` — an
    `UPDATE`, not an `INSERT`, since the trigger already created the row.
 
+   **Attendance history is a separate, optional fixture.**
+   [scripts/sql/seed-staging-attendance.sql](../scripts/sql/seed-staging-attendance.sql) builds a
+   weekly Sunday schedule per church, materializes the past 8 Sundays, and fills each roster with
+   a staff/self provenance mix plus three deliberate populations of guest rows — mistyped members
+   whose member row is absent, mistyped members whose member row is present, and genuine visitors.
+   Those are the three branches the "Link to member" action (`0019_attendance_guest_link`) has to
+   handle, and the middle one is otherwise very hard to reach by hand.
+
+   ```bash
+   npm run seed:attendance   # .env.staging, prints the resolved host first
+   ```
+
+   Unlike the RBAC fixture this one **is** idempotent — re-run it and it adds the Sundays that
+   have happened since. It writes `source` directly, which only works because it runs as the table
+   owner: that column is withheld from the `authenticated` INSERT grant so no client can forge
+   provenance, which also means no anon-key script could produce a `self` row at all. It has no
+   `:prod` sibling by design. Knobs (weeks, attendance rate, guest counts) are at the top of the
+   file, and the cleanup deletes are at the bottom, commented out.
+
 5. **Verify end to end:** `npm run dev`, sign in as one of the seeded users, confirm the
    dashboard loads with the right church name and role-appropriate capabilities.
 

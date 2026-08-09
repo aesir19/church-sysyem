@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '../lib/supabase'
 import MemberAutocomplete from '../components/MemberAutocomplete.vue'
 import { interpretMutation } from '../utils/mutationResult'
+import { buildGuestLinkPayload, isDuplicateMemberConflict, isPolicyViolation } from '../utils/attendanceLink'
 import { buildStaffAttendancePayload, validateCheckinContact, validateCheckinName } from '../utils/checkinPayload'
 import {
   attendeeLabel,
@@ -77,6 +78,10 @@ const qrError = ref('')
 const scheduleModal = ref({ open: false, saving: false, error: '', form: null })
 const adhocModal = ref({ open: false, saving: false, error: '', form: null })
 
+// Correcting a guest row that is really a member. `row` is the roster entry being
+// corrected, kept so the modal can name the guest it is about to replace.
+const linkModal = ref({ open: false, saving: false, error: '', row: null, memberId: '' })
+
 // Guards against out-of-order roster responses when the service select is
 // changed quickly — the slower earlier request must not overwrite the newer one.
 let rosterRequestId = 0
@@ -112,7 +117,15 @@ onMounted(async () => {
   loadContext()
 })
 
-watch(selectedServiceId, loadRoster)
+// The link modal holds a roster row and is backed by the member list, and both are
+// replaced underneath it when the service or church changes. Leaving it open would
+// show a row from the old context over a picker listing the new one — the write
+// still fails closed on the policy, but the message would make no sense. Close it
+// with the context it belongs to.
+watch(selectedServiceId, () => {
+  closeLinkModal()
+  loadRoster()
+})
 
 // Reload everything for the newly selected church (church selector).
 watch(activeChurchId, () => {
@@ -121,6 +134,7 @@ watch(activeChurchId, () => {
   checkinToken.value = ''
   qrSvg.value = ''
   showQr.value = false
+  closeLinkModal()
   loadContext()
 })
 
@@ -312,6 +326,86 @@ async function handleRemove(row) {
 
   roster.value = roster.value.filter((entry) => entry.id !== row.id)
   showToast(`Removed ${label}.`)
+}
+
+function openLinkModal(row) {
+  linkModal.value = { open: true, saving: false, error: '', row, memberId: '' }
+}
+
+function closeLinkModal() {
+  linkModal.value = { open: false, saving: false, error: '', row: null, memberId: '' }
+}
+
+// Repoints a guest row at the member it was really meant to be. An UPDATE rather
+// than delete-and-re-add on purpose: 0019 grants only the three identity columns,
+// so source, created_at and recorded_by come through untouched and a corrected
+// self check-in keeps saying it was self-asserted. Delete-and-re-add would rewrite
+// all three and claim staff had verified the person.
+async function handleLinkMember() {
+  const row = linkModal.value.row
+  if (!row) return
+
+  const payload = buildGuestLinkPayload(linkModal.value.memberId)
+  if (!payload) {
+    linkModal.value.error = 'Choose a member from the list.'
+    return
+  }
+
+  linkModal.value.saving = true
+  const result = await supabase
+    .from('attendance')
+    .update(payload)
+    .eq('id', row.id)
+    .select(ATTENDANCE_COLUMNS)
+
+  // The member already has a row for this service, so attendance_service_member_key
+  // rejects the link. They are already counted — the guest row is the duplicate, and
+  // removing it is the correction the user asked for.
+  if (isDuplicateMemberConflict(result.error)) {
+    const removal = await supabase.from('attendance').delete().eq('id', row.id).select('id')
+    const removed = interpretMutation(removal, 'That duplicate entry could not be removed.')
+    linkModal.value.saving = false
+
+    if (!removed.ok) {
+      linkModal.value.error = removed.message
+      return
+    }
+
+    roster.value = roster.value.filter((entry) => entry.id !== row.id)
+    closeLinkModal()
+    showToast('Already recorded as a member — the duplicate guest entry was removed.')
+    return
+  }
+
+  linkModal.value.saving = false
+
+  // The policy rejects in two different ways and only one of them is an empty
+  // result. USING filters (member row, viewer, another church's row) and lands in
+  // interpretMutation below; WITH CHECK raises 42501, which would otherwise reach
+  // the user as "new row violates row-level security policy for table attendance".
+  // Confirmed against staging with the VERIFICATION.md §4.1 matrix.
+  if (isPolicyViolation(result.error)) {
+    linkModal.value.error =
+      'That member cannot be linked to this record. They may belong to another church, or their record may have been archived.'
+    return
+  }
+
+  // Same reason as handleAddAttendee: for the filtering half, RLS returns success
+  // with zero rows rather than an error.
+  const outcome = interpretMutation(
+    result,
+    'That record could not be linked. It may belong to another church, or the member may no longer be active.'
+  )
+
+  if (!outcome.ok) {
+    linkModal.value.error = outcome.message
+    return
+  }
+
+  const linked = result.data[0]
+  roster.value = roster.value.map((entry) => (entry.id === row.id ? linked : entry))
+  closeLinkModal()
+  showToast(`Linked to ${attendeeLabel(linked)}.`)
 }
 
 async function handleCloseNow() {
@@ -831,8 +925,25 @@ function formatRecordedAt(value) {
                     </span>
                   </td>
                   <td class="time-cell">{{ formatRecordedAt(row.created_at) }}</td>
+                  <!-- Correcting a row is the common case; deleting one is not. Link
+                       leads, and Remove is muted until it is actually being aimed at. -->
                   <td class="actions-cell">
-                    <button v-if="canManageAttendance" type="button" class="btn-link-danger" @click="handleRemove(row)">Remove</button>
+                    <button
+                      v-if="canManageAttendance && !row.member_id"
+                      type="button"
+                      class="btn-link"
+                      @click="openLinkModal(row)"
+                    >
+                      Link to member
+                    </button>
+                    <button
+                      v-if="canManageAttendance"
+                      type="button"
+                      class="btn-link-muted"
+                      @click="handleRemove(row)"
+                    >
+                      Remove
+                    </button>
                   </td>
                 </tr>
               </tbody>
@@ -917,6 +1028,37 @@ function formatRecordedAt(value) {
             <button type="button" class="btn-secondary" @click="adhocModal.open = false">Cancel</button>
             <button type="button" class="btn-primary" :disabled="adhocModal.saving" @click="saveAdhocService">
               {{ adhocModal.saving ? 'Creating…' : 'Create service' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="linkModal.open" class="modal-overlay" @click.self="closeLinkModal">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="link-modal-title">
+          <div class="modal-header">
+            <h3 id="link-modal-title">Link to a member</h3>
+            <button type="button" class="btn-close" aria-label="Close" @click="closeLinkModal">×</button>
+          </div>
+          <div class="modal-body">
+            <p class="card-note">
+              Recorded as guest “{{ attendeeLabel(linkModal.row) }}”. If that is a registered
+              member whose name was mistyped, choose them below — the time and how they were
+              recorded stay as they are.
+            </p>
+            <!-- A distinct input-id from the add-attendee picker: it drives the listbox id
+                 and aria-activedescendant, and duplicates break the combobox semantics. -->
+            <MemberAutocomplete
+              v-model="linkModal.memberId"
+              :members="members"
+              input-id="link-member"
+              label="Member"
+            />
+            <p v-if="linkModal.error" class="form-error">{{ linkModal.error }}</p>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn-secondary" @click="closeLinkModal">Cancel</button>
+            <button type="button" class="btn-primary" :disabled="linkModal.saving" @click="handleLinkMember">
+              {{ linkModal.saving ? 'Linking…' : 'Link' }}
             </button>
           </div>
         </div>
@@ -1408,6 +1550,13 @@ select:focus {
 
 .actions-cell {
   text-align: right;
+  white-space: nowrap;
+}
+
+/* The link buttons carry -6px side margins to widen their hit area, so adjacent
+   ones would otherwise touch. */
+.actions-cell .btn-link + .btn-link-muted {
+  margin-left: 10px;
 }
 
 /* ---- Schedule --------------------------------------------------------- */
@@ -1584,7 +1733,7 @@ select:focus {
 }
 
 .btn-link,
-.btn-link-danger,
+.btn-link-muted,
 .btn-caution-link {
   padding: 4px 6px;
   margin: -4px -6px;
@@ -1605,11 +1754,16 @@ select:focus {
   background: #eff6ff;
 }
 
-.btn-link-danger {
-  color: #b91c1c;
+/* Deleting attendance is still available, but it is not what a roster is for.
+   Muted at rest so it stops competing with "Link to member"; the destructive red
+   returns the moment it is hovered or focused, which is when it matters. */
+.btn-link-muted {
+  color: #64748b;
 }
 
-.btn-link-danger:hover {
+.btn-link-muted:hover,
+.btn-link-muted:focus-visible {
+  color: #b91c1c;
   background: #fef2f2;
 }
 

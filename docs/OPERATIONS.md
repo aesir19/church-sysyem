@@ -256,7 +256,7 @@ than as a white page that loads fine.
 |---|---|
 | O11 | **No backup beyond platform defaults.** Free-tier Supabase provides daily backups with short retention and no PITR (confirm current terms). No `pg_dump` runs anywhere, and no restore has ever been tested. |
 | O12 | **Clean-room rebuild is impossible.** Substantially narrowed — see below. |
-| O13 | **No seed or fixture path.** A fresh environment cannot reach a working state without hand-editing production-shaped data. Still open, but no longer blocking: [STAGING.md](STAGING.md) §2 documents the manual seed as a procedure, which is what standing up staging actually needed. |
+| O13 | **No seed or fixture path.** A fresh environment cannot reach a working state without hand-editing production-shaped data. Still open, but no longer blocking: [STAGING.md](STAGING.md) §2 documents the manual seed as a procedure, which is what standing up staging actually needed. Two scripted fixtures now exist on top of it — `seed-staging-rbac.sql` (roles, one-shot) and `seed-staging-attendance.sql` (services and rosters, idempotent, `npm run seed:attendance`). Neither covers collections or expenses, so a finance-shaped environment is still hand-built. |
 | O14 | **No retention or erasure policy.** Soft delete is forever; there is no hard-delete path and no documented subject-access or erasure procedure. Under the PH **Data Privacy Act (RA 10173)** the church is a personal information controller for this data, which makes retention an obligation rather than a preference. Cross-ref [SECURITY.md](SECURITY.md) §3.10. |
 
 **O12 in detail.** Two separately-documented facts combined into something worse than either:
