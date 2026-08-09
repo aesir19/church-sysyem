@@ -22,7 +22,7 @@
     "prisma:migrate:run:deploy": "npm run prisma:check:migrate && prisma migrate deploy",
     "seed:attendance": "node scripts/prisma/with-env-file.js .env.staging npm run seed:attendance:run",
     "seed:attendance:run": "node scripts/prisma/db-execute.js scripts/sql/seed-staging-attendance.sql",
-    "deploy:prod": "npx --yes netlify-cli@27.1.0 deploy --prod --dir=dist"
+    "deploy:prod": "npx --yes netlify-cli@27.1.0 deploy --prod --dir=dist --no-build"
   },
   "dependencies": {
     "@prisma/client": "^6.16.0",

@@ -150,7 +150,7 @@ The anon key is public by design and RLS is the access control
 ([ADR-0001](decisions/0001-rls-is-the-only-authz.md)). The key that must never appear in the
 frontend is `service_role`, which has no business in any build environment in the first place.
 
-### The sibling failure: Netlify *building* the site at all
+### The sibling failure: `netlify deploy` rebuilds by default
 
 Deleting those variables closed the masking bug and opened a second one, which took production down
 a second time. The two look alike from the outside — white screen, green deploy — and have opposite
@@ -178,20 +178,31 @@ work with** — no need to inspect Netlify's variables, they are not the problem
 curl -s https://<site>/assets/index-<hash>.js | grep -c 'Supabase Connection Error'
 ```
 
-**Cause.** `deploy` in [ci.yml](../.github/workflows/ci.yml) cannot produce an empty build —
-`scripts/ci/check-build-env.js` runs on the same env immediately before `npm run build` and exits 1.
-A Netlify-side build can, and does: it has no `VITE_*` variables, because the fix above removed
-them. So an empty-valued bundle means Netlify built and published over the artifact — git
-auto-deploy switched back on, or someone pressed **Retry deploy**.
+**Cause — `netlify deploy` runs `build.command` itself, and this was missed for a long time.**
+`--dir` does not mean "just upload this folder". Per `netlify deploy --help`, the CLI will *"Build
+your project (unless `--no-build` is specified)"*. So the `deploy` job was building **twice**:
 
-**Fix:** re-run the workflow on `main` to republish, then confirm Netlify is not building. The
-repo-side guard is the `[build] command` in [netlify.toml](../netlify.toml), which now exits 1 with
-an explanation: a Netlify build fails loudly instead of shipping a white screen. It does not affect
-`npm run build` or `npm run deploy:prod`, neither of which runs it.
+| Step | Environment | Result |
+|---|---|---|
+| `Build app` (ci.yml) | `VITE_*` from repository variables | correct `dist` |
+| `npm run deploy:prod` → `netlify deploy` | only `NETLIFY_AUTH_TOKEN`, `NETLIFY_SITE_ID` | **overwrote `dist`** with empty values, then uploaded it |
 
-**The general rule:** exactly one system may publish this site. Two publishers with different
-environments is the whole bug, and "Stopped builds" is a dashboard toggle that does not survive
-someone clicking a button — the guard has to live in the repo.
+`scripts/ci/check-build-env.js` guards the first build and passed, correctly. The bundle it
+validated was then thrown away by the second one. This is why the failure looked impossible: every
+gate was green and every gate was watching the wrong build.
+
+The tell in the deploy log is the path — `publish: /home/runner/work/...` is a **GitHub Actions
+runner**, not Netlify's builder (`/opt/build/repo`). A "build.command failed" message containing a
+runner path means the CLI is building, not Netlify.
+
+**Fix:** `npm run deploy:prod` passes `--no-build`. The `[build] command` in
+[netlify.toml](../netlify.toml) is now a tripwire that exits 1, so if `--no-build` is ever dropped —
+or if Netlify's own git builds are switched back on — the deploy **fails** instead of silently
+publishing a white screen. Neither affects `npm run build`, which is `vite build`.
+
+**The general rule:** exactly one system may compile this site, and a deploy tool that can also
+build is a second publisher hiding inside the first. Verifying build inputs is worthless unless the
+artifact that gets uploaded is the artifact that was verified.
 
 The manual commands remain, for recovery and for inspection. **The unqualified ones target
 staging** — production needs an explicit `:prod`, which reads `.env.production` and prints the
