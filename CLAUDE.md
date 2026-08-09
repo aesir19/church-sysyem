@@ -142,6 +142,7 @@ Read these when the task touches them. Do not read them all up front.
 | [docs/security/RESOLVED.md](docs/security/RESOLVED.md) | Closed security findings and why each fix took its shape | Before "improving" something that was already deliberately fixed |
 | [docs/DEFECTS.md](docs/DEFECTS.md) | Confirmed bugs, `D1`–`D16`, with reproductions | Picking up a fix, or before "improving" something already known-broken |
 | [docs/BACKLOG.md](docs/BACKLOG.md) | Deferred features, `B1`–`B25` — absent, not broken | Asked for a feature that may already be specced |
+| [docs/REDESIGN.md](docs/REDESIGN.md) | The phased frontend redesign — token layer, `ui/` components, per-view sequencing, and what the mockups do *not* cover | Touching presentation on any view, or picking up a redesign stage |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Free-tier budgets, deploy/rollback, backups, monitoring gaps `O1`–`O25` | Deploying, migrating, or asked why the site is down |
 | `prisma/schema.prisma` | The canonical table/column inventory | Any question about the data model — it is the source of truth, not the docs |
 
