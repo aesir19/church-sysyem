@@ -167,6 +167,25 @@ apart from which credentials you use.
    `UPDATE public.user_accounts SET member_id = ..., role = ... WHERE id = '<the auth uuid>'` — an
    `UPDATE`, not an `INSERT`, since the trigger already created the row.
 
+   **Attendance history is a separate, optional fixture.**
+   [scripts/sql/seed-staging-attendance.sql](../scripts/sql/seed-staging-attendance.sql) builds a
+   weekly Sunday schedule per church, materializes the past 8 Sundays, and fills each roster with
+   a staff/self provenance mix plus three deliberate populations of guest rows — mistyped members
+   whose member row is absent, mistyped members whose member row is present, and genuine visitors.
+   Those are the three branches the "Link to member" action (`0019_attendance_guest_link`) has to
+   handle, and the middle one is otherwise very hard to reach by hand.
+
+   ```bash
+   npm run seed:attendance   # .env.staging, prints the resolved host first
+   ```
+
+   Unlike the RBAC fixture this one **is** idempotent — re-run it and it adds the Sundays that
+   have happened since. It writes `source` directly, which only works because it runs as the table
+   owner: that column is withheld from the `authenticated` INSERT grant so no client can forge
+   provenance, which also means no anon-key script could produce a `self` row at all. It has no
+   `:prod` sibling by design. Knobs (weeks, attendance rate, guest counts) are at the top of the
+   file, and the cleanup deletes are at the bottom, commented out.
+
 5. **Verify end to end:** `npm run dev`, sign in as one of the seeded users, confirm the
    dashboard loads with the right church name and role-appropriate capabilities.
 
@@ -215,6 +234,13 @@ upload. The symptom is a bare `JSONHTTPError: Forbidden` from `netlify deploy --
 mention of the setting, from CI **and** from a laptop, and it survives rotating the auth token.
 Diagnose it by reading `prevent_non_git_prod_deploys` in
 `GET https://api.netlify.com/api/v1/sites/<site-id>`; the CLI never surfaces the real reason.
+
+**A third Netlify setting can break the site without breaking the deploy:** any environment
+variable marked "contains secret values" is redacted out of the uploaded bundle, so the build and
+deploy both report success and the served JavaScript is corrupt. This only bites because the build
+moved off Netlify. Full diagnosis and fix in [OPERATIONS.md](OPERATIONS.md) §2, *"Never mark a
+`VITE_*` value secret in Netlify"* — read it before setting any environment variable on the Netlify
+side of a rebuild.
 
 `netlify-cli` is deliberately not a project devDependency (it conflicts with vitest's peer
 dependencies via `@netlify/otel`) — both the CI step and `npm run deploy:prod` run it through `npx`
