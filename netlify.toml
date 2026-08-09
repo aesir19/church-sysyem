@@ -1,6 +1,23 @@
 # Netlify configuration
 [build]
-  command = "npm run build"
+  # THIS SITE IS NEVER BUILT BY NETLIFY. It is built and published exclusively by
+  # .github/workflows/ci.yml, whose `deploy` job compiles with the VITE_*
+  # repository variables and then uploads `dist` through the CLI.
+  #
+  # A Netlify-side build has no VITE_* variables — the fix for the masking
+  # incident (OPERATIONS.md §2) deleted them from Netlify on purpose. Vite bakes
+  # whatever it is given in at build time, so an env-less build inlines empty
+  # strings, `src/lib/supabase.js` throws "Missing environment variables" in the
+  # browser, and Netlify reports the deploy as a success. That has now taken
+  # production down once.
+  #
+  # Netlify's git auto-deploy is also switched off in the dashboard ("Stopped
+  # builds"), but that is a toggle someone can flip back — this line is the part
+  # that lives in the repo and fails closed. It does NOT affect `npm run build`
+  # locally or in CI, and it does not affect `npm run deploy:prod`, which uploads
+  # a prebuilt --dir and never runs this command. The redirects and headers below
+  # still apply to every deploy.
+  command = "echo 'Netlify must not build this site. Deploys come from .github/workflows/ci.yml — see OPERATIONS.md.' && exit 1"
   publish = "dist"
 
 [[redirects]]
