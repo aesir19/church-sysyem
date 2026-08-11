@@ -41,14 +41,16 @@
  * The four hand-rolled modals here are now `ui/Modal` call sites, and the local
  * toast implementation is gone in favour of the one queue in `useToast`.
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   listDirectory,
   listRecords,
   create as createMember,
   update as updateMember,
   archive as archiveMember,
+  MEMBER_PAGE_SIZE,
 } from '../lib/data/members'
+import { clampPage, pageCount, pageNumbers, rangeLabel } from '../utils/pagination'
 import { isMemberFormDirty, snapshotMemberForm } from '../utils/memberFormDirty'
 import { buildMemberPayload } from '../utils/memberPayload'
 import { useCurrentRole } from '../composables/useCurrentRole'
@@ -90,6 +92,23 @@ const isCompact = useMediaQuery('(max-width: 767px)')
 const members = ref([])
 const loading = ref(true)
 const error = ref('')
+
+// ── Paging and search (Amendment 13) ──────────────────────────────────────
+// The record path is paginated server-side. The directory path is not — its
+// RPC takes a limit but no offset, and adding one is a migration against a
+// SECURITY DEFINER function (Amendment 15). It caps honestly instead.
+const page = ref(1)
+const total = ref(0)
+const directoryCapped = ref(false)
+
+/**
+ * What is typed, and what has been asked for. They are separate because every
+ * keystroke would otherwise be a round trip — the search runs against Postgres
+ * now, not against an array already in the browser.
+ */
+const searchInput = ref('')
+const searchTerm = ref('')
+let searchTimer = null
 
 /** The row whose record fills the panel. Null is the panel's empty state. */
 const selectedMember = ref(null)
@@ -169,15 +188,39 @@ const pageTitle = computed(() =>
 // Names only, deliberately. See the header note.
 const { sort, toggleSort, ariaSortFor } = useSortState('last_name')
 
-const sortedMembers = computed(() => {
+/**
+ * The rows to render.
+ *
+ * The record path is ordered by Postgres — it has to be, because `.range()`
+ * over an unordered query can repeat a row on one page and skip it on the next,
+ * and no amount of client sorting fixes a page that was sliced wrong. Sorting
+ * it again here would also be a lie: it would order the fifty rows on screen,
+ * not the list.
+ *
+ * The directory path is different and is sorted here on purpose: it is not
+ * paginated, so the whole (capped) list is already in the browser and sorting
+ * it locally costs nothing and saves a round trip.
+ */
+const displayMembers = computed(() => {
+  if (!directoryMode.value) return members.value
+
   const key = sort.value?.key
   if (!key) return members.value
-
   const direction = sort.value.direction === 'descending' ? -1 : 1
   return [...members.value].sort(
     (a, b) => String(a[key] ?? '').localeCompare(String(b[key] ?? '')) * direction,
   )
 })
+
+const lastPage = computed(() => pageCount(total.value, MEMBER_PAGE_SIZE))
+const pagerSlots = computed(() => pageNumbers(page.value, total.value, MEMBER_PAGE_SIZE))
+const pagerLabel = computed(() => rangeLabel(page.value, MEMBER_PAGE_SIZE, total.value))
+const showPager = computed(() => !directoryMode.value && lastPage.value > 1)
+
+/** The header count: a real total on the record path, what is on screen on the directory path. */
+const countLabel = computed(() =>
+  directoryMode.value ? `${members.value.length} listed` : `${total.value} active`,
+)
 
 function fullName(member) {
   if (!member) return ''
@@ -216,13 +259,27 @@ async function fetchMembers() {
 
   const churchId = myChurchId.value
 
+  // Clamped against the total we already hold rather than re-queried: asking
+  // for page 9 of a one-page result and then correcting would be two round
+  // trips for one intent.
+  page.value = clampPage(page.value, total.value, MEMBER_PAGE_SIZE)
+
   // Two different reads, asked for by name. The directory is safe for every
   // role; the record list carries PII and refuses without canSeeMemberDetail.
   const result = directoryMode.value
-    ? await listDirectory(churchId)
-    : await listRecords({ churchId, canSeeDetail: canSeeMemberDetail.value })
+    ? await listDirectory(churchId, { query: searchTerm.value })
+    : await listRecords({
+      churchId,
+      canSeeDetail: canSeeMemberDetail.value,
+      page: page.value,
+      search: searchTerm.value,
+      sortKey: sort.value?.key,
+      sortDirection: sort.value?.direction,
+    })
 
   members.value = result.rows
+  total.value = directoryMode.value ? result.rows.length : (result.total ?? 0)
+  directoryCapped.value = directoryMode.value && !!result.capped
 
   // A church that has not resolved yet is not an error the user should see —
   // ensureLoaded() runs first on mount, and the watch re-fetches once it lands.
@@ -230,6 +287,42 @@ async function fetchMembers() {
 
   loading.value = false
 }
+
+/** Any change to what is being asked for starts at page 1. */
+function refetchFromFirstPage() {
+  page.value = 1
+  total.value = 0
+  fetchMembers()
+}
+
+function goToPage(next) {
+  const target = clampPage(next, total.value, MEMBER_PAGE_SIZE)
+  if (target === page.value) return
+  page.value = target
+  fetchMembers()
+}
+
+function onSort(key) {
+  toggleSort(key)
+  // The directory sorts in the browser and needs no round trip; the record path
+  // is ordered by Postgres, so a new order is a new query.
+  if (!directoryMode.value) refetchFromFirstPage()
+}
+
+// Debounced, because the search runs against Postgres now rather than against
+// an array already in the browser — a query per keystroke is egress spent on
+// results nobody read.
+watch(searchInput, (value) => {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    searchTerm.value = value
+    refetchFromFirstPage()
+  }, 300)
+})
+
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer)
+})
 
 // ── Selection ─────────────────────────────────────────────────────────────
 
@@ -387,8 +480,11 @@ function openArchive() {
 
 // Re-fetch whenever the active church changes (SuperAdmin / Head Pastor
 // switching churches in the selector).
+// Back to page 1, not to whichever page was open: page 3 of one church is not
+// page 3 of another, and landing there would show a stranger's records under a
+// pager that still reads "101–150".
 watch(activeChurchId, () => {
-  if (activeChurchId.value) fetchMembers()
+  if (activeChurchId.value) refetchFromFirstPage()
 })
 
 onMounted(async () => {
@@ -408,7 +504,7 @@ onMounted(async () => {
       </div>
       <div class="page-actions">
         <!-- The rarer second accent's one surface today (Amendment 17). -->
-        <Badge variant="accent-secondary">{{ members.length }} active</Badge>
+        <Badge variant="accent-secondary">{{ countLabel }}</Badge>
         <Button v-if="canWriteMembers" :disabled="!myChurchId" @click="openCreate">
           <Icon name="plus" :size="16" />
           Add member
@@ -418,12 +514,31 @@ onMounted(async () => {
 
     <div class="members-layout" :class="{ 'has-panel': isWide && canSeeMemberDetail }">
       <Card padding="none" class="list-card">
+        <!-- Search is what stops pagination being a downgrade: today the whole
+             list is on the page precisely because it is unbounded, so you can
+             Ctrl-F it. Fifty rows at a time without a search field would take
+             that away and give nothing back. -->
+        <div class="list-toolbar">
+          <Input
+            v-model="searchInput"
+            label="Search members"
+            type="search"
+            class="search-field"
+            placeholder="First or last name"
+            autocomplete="off"
+          />
+        </div>
+
         <div v-if="loading" class="state">
           <Spinner size="lg" />
           <p>Loading members…</p>
         </div>
 
         <p v-else-if="error" class="state state-error" role="alert">{{ error }}</p>
+
+        <p v-else-if="members.length === 0 && searchTerm" class="state">
+          No members match “{{ searchTerm }}”.
+        </p>
 
         <p v-else-if="members.length === 0" class="state">
           No members yet. Add the first one to get started.
@@ -432,7 +547,7 @@ onMounted(async () => {
         <!-- Cards below 768px. Amendment 12: a five-column table on a phone
              scrolls sideways, which is how a member gets missed. -->
         <ul v-else-if="isCompact" class="member-cards">
-          <li v-for="member in sortedMembers" :key="member.id">
+          <li v-for="member in displayMembers" :key="member.id">
             <!-- A real <button> where the card is selectable and a plain <div>
                  where it is not. A div with a click handler is invisible to a
                  keyboard, and a button that does nothing is a lie about what is
@@ -464,14 +579,14 @@ onMounted(async () => {
                 <TableSortHeader
                   sort-key="last_name"
                   :aria-sort="ariaSortFor('last_name')"
-                  @sort="toggleSort"
+                  @sort="onSort"
                 >
                   Last name
                 </TableSortHeader>
                 <TableSortHeader
                   sort-key="first_name"
                   :aria-sort="ariaSortFor('first_name')"
-                  @sort="toggleSort"
+                  @sort="onSort"
                 >
                   First name
                 </TableSortHeader>
@@ -490,7 +605,7 @@ onMounted(async () => {
             </thead>
             <tbody>
               <tr
-                v-for="member in sortedMembers"
+                v-for="member in displayMembers"
                 :key="member.id"
                 :class="{ 'is-selected': selectedMember?.id === member.id }"
               >
@@ -527,6 +642,54 @@ onMounted(async () => {
             </tbody>
           </table>
         </div>
+
+        <!-- Amendment 15: directory_search takes a limit but no offset, so this
+             path caps rather than pages. Saying so is the whole fix — the list
+             was already truncated at 200, silently, before this. -->
+        <p v-if="directoryCapped && !loading" class="list-note" role="status">
+          Showing the first {{ members.length }} members. Search to narrow the list.
+        </p>
+
+        <nav v-if="showPager && !loading" class="pager" aria-label="Member list pages">
+          <p class="pager-label" role="status">{{ pagerLabel }}</p>
+          <div class="pager-controls">
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Previous page"
+              :disabled="page <= 1"
+              @click="goToPage(page - 1)"
+            >
+              <Icon name="chevron-left" :size="16" />
+            </Button>
+
+            <template v-for="(slot, index) in pagerSlots" :key="`${slot}-${index}`">
+              <!-- An elided stretch is not a page and must not be a button —
+                   aria-hidden keeps it out of the count a screen reader reads. -->
+              <span v-if="slot === '…'" class="pager-gap" aria-hidden="true">…</span>
+              <Button
+                v-else
+                :variant="slot === page ? 'primary' : 'ghost'"
+                size="sm"
+                :aria-label="`Page ${slot}`"
+                :aria-current="slot === page ? 'page' : undefined"
+                @click="goToPage(slot)"
+              >
+                {{ slot }}
+              </Button>
+            </template>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Next page"
+              :disabled="page >= lastPage"
+              @click="goToPage(page + 1)"
+            >
+              <Icon name="chevron-right" :size="16" />
+            </Button>
+          </div>
+        </nav>
       </Card>
 
       <!-- Empty until a row is chosen, which is what keeps PII off the screen
@@ -723,6 +886,48 @@ onMounted(async () => {
 
 .list-card {
   overflow: hidden;
+}
+
+.list-toolbar {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.search-field {
+  max-width: 320px;
+}
+
+.list-note {
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.pager-label {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.pager-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.pager-gap {
+  padding: 0 var(--space-1);
+  color: var(--color-text-placeholder);
 }
 
 .state {

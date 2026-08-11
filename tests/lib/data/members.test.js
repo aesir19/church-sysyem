@@ -13,7 +13,10 @@ const builder = vi.hoisted(() => ({
   update: vi.fn(function (payload) { state.calls.push(['update', payload]); return this }),
   eq: vi.fn(function (col, val) { state.calls.push(['eq', col, val]); return this }),
   is: vi.fn(function (col, val) { state.calls.push(['is', col, val]); return this }),
-  select: vi.fn(function (columns) { state.calls.push(['select', columns]); return this }),
+  or: vi.fn(function (filter) { state.calls.push(['or', filter]); return this }),
+  order: vi.fn(function (col, options) { state.calls.push(['order', col, options]); return this }),
+  range: vi.fn(function (from, to) { state.calls.push(['range', from, to]); return this }),
+  select: vi.fn(function (columns, options) { state.calls.push(['select', columns, options]); return this }),
   then(onFulfilled, onRejected) {
     return Promise.resolve(state.result).then(onFulfilled, onRejected)
   },
@@ -37,6 +40,8 @@ const {
   archive,
   MEMBER_COLUMNS,
   MEMBER_MESSAGES,
+  MEMBER_PAGE_SIZE,
+  DIRECTORY_LIMIT,
 } = await import('../../../src/lib/data/members')
 
 const CHURCH = 'church-1'
@@ -59,8 +64,45 @@ describe('listDirectory', () => {
   it('reads through the directory_search RPC, not the members table', async () => {
     resolvesTo({ data: [], error: null })
     await listDirectory(CHURCH)
-    expect(calledWith('rpc')[0]).toEqual(['rpc', 'directory_search', { p_church_id: CHURCH }])
+    expect(calledWith('rpc')[0][1]).toBe('directory_search')
+    expect(calledWith('rpc')[0][2].p_church_id).toBe(CHURCH)
     expect(calledWith('from')).toHaveLength(0)
+  })
+
+  // REDESIGN.md Amendment 15. directory_search's p_limit DEFAULTS to 200 and
+  // this module used to leave it unsent — so a church over 200 members showed
+  // baseline users and Head Pastors a truncated list with NO indication it was
+  // truncated. Passing it explicitly is what makes the cap something the caller
+  // can report.
+  it('passes p_limit explicitly so the cap is knowable', async () => {
+    resolvesTo({ data: [], error: null })
+    await listDirectory(CHURCH)
+    expect(calledWith('rpc')[0][2].p_limit).toBe(DIRECTORY_LIMIT)
+  })
+
+  it('reports when the list came back capped, and when it did not', async () => {
+    resolvesTo({
+      data: Array.from({ length: DIRECTORY_LIMIT }, (_, i) => ({ member_id: `m${i}` })),
+      error: null,
+    })
+    expect((await listDirectory(CHURCH)).capped).toBe(true)
+
+    resolvesTo({ data: [{ member_id: 'm1' }], error: null })
+    expect((await listDirectory(CHURCH)).capped).toBe(false)
+  })
+
+  it('passes a sanitized search term through the RPC parameter', async () => {
+    resolvesTo({ data: [], error: null })
+    await listDirectory(CHURCH, { query: '  Dela%Cruz  ' })
+    // The % is stripped: directory_search wraps p_query in its own %…% and a
+    // stray one inside would widen the match rather than narrow it.
+    expect(calledWith('rpc')[0][2].p_query).toBe('Dela Cruz')
+  })
+
+  it('sends no query at all for a term too short to be one', async () => {
+    resolvesTo({ data: [], error: null })
+    await listDirectory(CHURCH, { query: 'a' })
+    expect(calledWith('rpc')[0][2].p_query).toBe(null)
   })
 
   it('flattens the RPC shape into member rows', async () => {
@@ -126,6 +168,110 @@ describe('listRecords', () => {
     expect(columns).toBe(MEMBER_COLUMNS)
     expect(columns).not.toContain('*')
     expect(columns).not.toContain('archived_reason')
+  })
+})
+
+// REDESIGN.md Amendment 13.
+describe('listRecords — pagination, ordering and search', () => {
+  it('asks for exactly one page', async () => {
+    resolvesTo({ data: [], error: null, count: 137 })
+    await listRecords({ churchId: CHURCH, canSeeDetail: true, page: 3 })
+    expect(calledWith('range')).toContainEqual(['range', 100, 149])
+  })
+
+  it('defaults to the documented page size of 50', async () => {
+    resolvesTo({ data: [], error: null, count: 0 })
+    await listRecords({ churchId: CHURCH, canSeeDetail: true })
+    expect(MEMBER_PAGE_SIZE).toBe(50)
+    expect(calledWith('range')).toContainEqual(['range', 0, 49])
+  })
+
+  // The bug this prevents: listRecords had NO .order() at all, so ordering was
+  // whatever Postgres returned. Harmless while the whole list was in the
+  // browser; the moment .range() arrives, range over an unordered query can
+  // repeat rows on one page and skip them on the next.
+  it('orders by the sort column AND by id, so pages cannot overlap or skip', async () => {
+    resolvesTo({ data: [], error: null, count: 0 })
+    await listRecords({ churchId: CHURCH, canSeeDetail: true })
+
+    const orders = calledWith('order')
+    expect(orders[0]).toEqual(['order', 'last_name', { ascending: true }])
+    // The tiebreaker is what stops shared surnames shuffling across a page
+    // boundary between one request and the next.
+    expect(orders[1]).toEqual(['order', 'id', { ascending: true }])
+  })
+
+  it('carries the direction to the sort column but never to the tiebreaker', async () => {
+    resolvesTo({ data: [], error: null, count: 0 })
+    await listRecords({
+      churchId: CHURCH,
+      canSeeDetail: true,
+      sortKey: 'first_name',
+      sortDirection: 'descending',
+    })
+
+    const orders = calledWith('order')
+    expect(orders[0]).toEqual(['order', 'first_name', { ascending: false }])
+    expect(orders[1]).toEqual(['order', 'id', { ascending: true }])
+  })
+
+  // A column name goes into the query as an identifier, so it is never taken
+  // from the caller unchecked — the same reason searchFilters.js exists.
+  it('falls back to last_name for any column outside the allowlist', async () => {
+    resolvesTo({ data: [], error: null, count: 0 })
+    await listRecords({ churchId: CHURCH, canSeeDetail: true, sortKey: 'address' })
+    expect(calledWith('order')[0]).toEqual(['order', 'last_name', { ascending: true }])
+  })
+
+  it('returns the total, so the caller can build a pager without a second query', async () => {
+    resolvesTo({ data: [{ id: 'm1' }], error: null, count: 137 })
+    const result = await listRecords({ churchId: CHURCH, canSeeDetail: true })
+    expect(result.total).toBe(137)
+  })
+
+  it('asks for the count on the same request as the rows', async () => {
+    resolvesTo({ data: [], error: null, count: 0 })
+    await listRecords({ churchId: CHURCH, canSeeDetail: true })
+    expect(calledWith('select')[0][2]).toEqual({ count: 'exact' })
+  })
+
+  it('searches through buildMemberNameOrFilter, never by interpolating the term', async () => {
+    resolvesTo({ data: [], error: null, count: 0 })
+    await listRecords({ churchId: CHURCH, canSeeDetail: true, search: 'Dela' })
+
+    const filter = calledWith('or')[0][1]
+    expect(filter).toBe('first_name.ilike.%dela%,last_name.ilike.%dela%')
+  })
+
+  it('neutralises a PostgREST filter breakout in the search term', async () => {
+    resolvesTo({ data: [], error: null, count: 0 })
+    await listRecords({
+      churchId: CHURCH,
+      canSeeDetail: true,
+      search: 'Jane),or(member_of.not.is.null)',
+    })
+
+    const filter = calledWith('or')[0][1]
+    expect(filter).not.toContain('),')
+    expect(filter).not.toContain('(')
+  })
+
+  it('does not filter at all on a term too short to mean anything', async () => {
+    resolvesTo({ data: [], error: null, count: 0 })
+    await listRecords({ churchId: CHURCH, canSeeDetail: true, search: 'a' })
+    expect(calledWith('or')).toHaveLength(0)
+  })
+
+  it('still filters archived rows when a search is running', async () => {
+    resolvesTo({ data: [], error: null, count: 0 })
+    await listRecords({ churchId: CHURCH, canSeeDetail: true, search: 'Dela' })
+    expect(calledWith('is')).toContainEqual(['is', 'archived_at', null])
+  })
+
+  it('reports a total of zero rather than null when the count is missing', async () => {
+    resolvesTo({ data: [], error: null, count: null })
+    const result = await listRecords({ churchId: CHURCH, canSeeDetail: true })
+    expect(result.total).toBe(0)
   })
 })
 

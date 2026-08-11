@@ -143,6 +143,32 @@ conditions. `src/utils/memberLink.js` is the scheme check and host allowlist, ap
 dialog steals focus with none of the guarantees ADR-0011's Dialog buys, and the in-dialog warning
 carries the discard action instead.
 
+**2b — pagination, ordering and search.** `listRecords()` takes `page` / `search` / `sortKey` /
+`sortDirection` and returns `total`; the count rides along on the same request via
+`count: 'exact'`, so the pager costs no second round trip. Page size **50**, a numbered pager, and
+the arithmetic in `src/utils/pagination.js` because off-by-one is the whole risk and it is
+invisible — PostgREST's `.range()` bounds are **inclusive**, so page 2 of 50 is rows 50–99.
+
+The ordering is the part that was a latent bug rather than a new feature: `listRecords()` had **no
+`.order()` at all**, which was harmless while the whole list sat in the browser and becomes wrong
+the moment `.range()` arrives, because range over an unordered query can repeat a row on one page
+and skip it on the next. It now orders by the sort column **and by `id`** — the tiebreaker is what
+stops shared surnames shuffling across a page boundary between requests. The sort column is
+allowlisted rather than passed through: a column name reaches the query as an identifier.
+
+Search finally uses `buildMemberNameOrFilter`, which was written, unit-tested against a
+`"Jane),or(member_of.not.is.null)"` breakout, and imported by nothing. It is what stops pagination
+being a downgrade — today the whole list is on the page precisely because it is unbounded, so you
+can Ctrl-F it. It is debounced at 300 ms, because the search now runs against Postgres rather than
+an array already in the browser.
+
+The directory path takes [Amendment 15](#amendment-15--the-directory-caps-honestly-rather-than-silently)'s
+cheap fix: `p_limit` is passed explicitly, `p_query` carries the same search, and the view says
+**"Showing the first 200 members. Search to narrow the list."** when the cap is hit. It does not say
+"of N" as A15's wording suggested — N is a second count query the baseline role has no access to
+make. Paginating it properly still needs `p_offset` on a `SECURITY DEFINER` function, which is a
+migration and a security review, and stays deferred.
+
 **Measured.** `CheckinView-*.js` is **6.68 kB, unchanged** — the gate holds. `Modal.vue` now has two
 call sites, so Rollup hoisted it and `reka-ui` into a **shared lazy chunk** (`Modal-*.js`, 31.7 kB /
 10.4 kB gzip) instead of inlining a copy per view: `MinistrySmallGroupView-*.js` fell from 51.4 kB

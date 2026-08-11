@@ -179,7 +179,7 @@ These follow from priority 1 and are binding unless the owner overrides them.
 
 | Signal | Threshold | Required response |
 |---|---|---|
-| Active members in one church | 300 | Add `.range()` pagination *before* the next list feature |
+| Active members in one church | 300 | ~~Add `.range()` pagination~~ — **done** for the Members list (page size 50, `listRecords()`); the **attendance roster** is the list nearest this now |
 | Routes registered | ≥ 3 | Convert `router/index.js` to `() => import(...)` lazy imports |
 | Supabase egress | 60 % of 5 GB/mo | Audit list queries; tighten column selection |
 | Netlify credits | 60 % of 300/mo | Check Usage tab (bandwidth + deploys share one pool); verify cache headers |

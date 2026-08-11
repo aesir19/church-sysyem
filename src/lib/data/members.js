@@ -21,6 +21,36 @@
 
 import { supabase } from '../supabase'
 import { write } from './write'
+import { rangeFor } from '../../utils/pagination'
+import { buildMemberNameOrFilter, sanitizeMemberSearchTerm } from '../../utils/searchFilters'
+
+/**
+ * REDESIGN.md Amendment 13. Client-side paging was rejected as theatre: the
+ * unbounded query still runs, so egress is unchanged and the CLAUDE.md
+ * threshold it is meant to answer stays breached.
+ */
+export const MEMBER_PAGE_SIZE = 50
+
+/**
+ * What `directory_search`'s `p_limit` is sent as. The function's own default is
+ * 200 and this module used to leave it unsent — so a church over 200 members
+ * showed baseline users and Head Pastors a truncated list with no indication it
+ * was truncated. Sending it explicitly is what lets a caller say so.
+ * Paginating that path properly needs a `p_offset` parameter on a SECURITY
+ * DEFINER function, which is a migration and a security review; Amendment 15
+ * defers it.
+ */
+export const DIRECTORY_LIMIT = 200
+
+/**
+ * The columns a caller may order by.
+ *
+ * A column name reaches the query as an IDENTIFIER, so it is never taken from
+ * the caller unchecked — the same reason `searchFilters.js` exists for the
+ * search term. Names only, deliberately: Amendment 13 records that age is
+ * computed in the browser and does not exist to order on.
+ */
+const SORTABLE_COLUMNS = Object.freeze(['last_name', 'first_name'])
 
 // Explicit projection: select only what we render. This is the constant
 // CLAUDE.md refers to — it used to live inside DashboardView.vue, where the
@@ -54,30 +84,48 @@ const MESSAGES = {
   archiveBlocked: 'That member could not be archived. They may belong to another church, or have been archived already.',
 }
 
-const ok = (rows) => ({ ok: true, message: '', rows, cause: null })
-const fail = (message, cause = null) => ({ ok: false, message, rows: [], cause })
+const ok = (rows, extra = {}) => ({ ok: true, message: '', rows, cause: null, ...extra })
+const fail = (message, cause = null, extra = {}) => ({ ok: false, message, rows: [], cause, ...extra })
 
 /**
  * Names and group membership for everyone in a church. Safe for every role —
  * the directory_search RPC returns no PII, and the base members table returns
  * baseline callers nothing at all under RLS.
  *
+ * Not paginated: the RPC takes a limit but no offset, and adding one is a
+ * migration against a SECURITY DEFINER function that is the only thing standing
+ * between baseline users and the `members` table. Amendment 15 defers that and
+ * caps honestly instead — `capped` is how the caller knows to say so.
+ *
  * @param {string} churchId
- * @returns {Promise<{ ok: boolean, message: string, rows: object[], cause: unknown }>}
+ * @param {{ query?: string, limit?: number }} [options]
+ * @returns {Promise<{ ok: boolean, message: string, rows: object[], capped: boolean, limit: number, cause: unknown }>}
  */
-export async function listDirectory(churchId) {
-  if (!churchId) return fail(MESSAGES.noChurch)
+export async function listDirectory(churchId, { query = '', limit = DIRECTORY_LIMIT } = {}) {
+  if (!churchId) return fail(MESSAGES.noChurch, null, { capped: false, limit })
 
-  const { data, error } = await supabase.rpc('directory_search', { p_church_id: churchId })
-  if (error) return fail(MESSAGES.loadFailed, error)
+  // Sanitized even though it travels as an RPC parameter and cannot break out
+  // of one: directory_search wraps p_query in its OWN `%…%`, so a stray `%`
+  // inside the term widens the match instead of narrowing it. The length bound
+  // comes along for free.
+  const safe = sanitizeMemberSearchTerm(query)
 
-  return ok((data || []).map((row) => ({
+  const { data, error } = await supabase.rpc('directory_search', {
+    p_query: safe.length >= 2 ? safe : null,
+    p_church_id: churchId,
+    p_limit: limit,
+  })
+  if (error) return fail(MESSAGES.loadFailed, error, { capped: false, limit })
+
+  const rows = (data || []).map((row) => ({
     id: row.member_id,
     first_name: row.first_name,
     last_name: row.last_name,
     ministries: row.ministries || [],
     small_groups: row.small_groups || [],
-  })))
+  }))
+
+  return ok(rows, { capped: rows.length >= limit, limit })
 }
 
 /**
@@ -89,23 +137,57 @@ export async function listDirectory(churchId) {
  * `canSeeDetail` is passed in rather than read from the role composable so this
  * stays testable without mounting anything.
  *
- * @param {{ churchId: string, canSeeDetail: boolean }} params
- * @returns {Promise<{ ok: boolean, message: string, rows: object[], cause: unknown }>}
+ * ONE PAGE, ONE ROUND TRIP. The `count: 'exact'` option rides along on the same
+ * request as the rows, so the pager's total costs nothing extra — which is what
+ * "one round-trip per intent" requires. The archived count the mockup also
+ * shows would need a second query and is out (Amendment 9).
+ *
+ * @param {{ churchId: string, canSeeDetail: boolean, page?: number, pageSize?: number,
+ *   search?: string, sortKey?: string, sortDirection?: 'ascending'|'descending' }} params
+ * @returns {Promise<{ ok: boolean, message: string, rows: object[], total: number, cause: unknown }>}
  */
-export async function listRecords({ churchId, canSeeDetail }) {
-  if (!canSeeDetail) return fail(MESSAGES.notPermitted)
-  if (!churchId) return fail(MESSAGES.noChurch)
+export async function listRecords({
+  churchId,
+  canSeeDetail,
+  page = 1,
+  pageSize = MEMBER_PAGE_SIZE,
+  search = '',
+  sortKey = 'last_name',
+  sortDirection = 'ascending',
+}) {
+  if (!canSeeDetail) return fail(MESSAGES.notPermitted, null, { total: 0 })
+  if (!churchId) return fail(MESSAGES.noChurch, null, { total: 0 })
+
+  const column = SORTABLE_COLUMNS.includes(sortKey) ? sortKey : 'last_name'
+  const ascending = sortDirection !== 'descending'
+  const { from, to } = rangeFor(page, pageSize)
 
   // Scoped to the active church explicitly: RLS returns every church to a
   // SuperAdmin, so without this their list would merge all of them.
-  const { data, error } = await supabase
+  let query = supabase
     .from('members')
-    .select(MEMBER_COLUMNS)
+    .select(MEMBER_COLUMNS, { count: 'exact' })
     .eq('member_of', churchId)
     .is('archived_at', null)
 
-  if (error) return fail(MESSAGES.loadFailed, error)
-  return ok(data || [])
+  // The term is turned into a filter by searchFilters.js, which strips the
+  // characters that would otherwise close PostgREST's `or(...)` and open a new
+  // condition. Never interpolated here.
+  const filter = buildMemberNameOrFilter(search)
+  if (filter) query = query.or(filter)
+
+  // Both orders matter. Without the first, `.range()` slices an unordered
+  // result and can repeat a row on one page and skip it on the next; without
+  // the `id` tiebreaker, shared surnames shuffle across a page boundary between
+  // one request and the next. The tiebreaker is always ascending — it exists to
+  // be stable, not to be meaningful.
+  const { data, error, count } = await query
+    .order(column, { ascending })
+    .order('id', { ascending: true })
+    .range(from, to)
+
+  if (error) return fail(MESSAGES.loadFailed, error, { total: 0 })
+  return ok(data || [], { total: count ?? 0 })
 }
 
 /**
