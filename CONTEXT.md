@@ -61,6 +61,31 @@ now lives inside `src/lib/data/members.js` rather than at each call site.
 
 _Avoid_: "delete", "deactivate", "soft-delete" as a noun.
 
+## Journey
+
+A member's discipleship progression through **four ordered stages**:
+
+1. **One-to-One**
+2. **Baptized**
+3. **Turning Point**
+4. **Membership Form**
+
+The order is the domain's, not an arbitrary display choice — it is the sequence a member actually
+moves through, and it is *not* the order the columns appear in on the member record.
+
+Load-bearing consequence: the stages are ordered, but the **record does not enforce that order**.
+Each stage is an independent flag, so a member can carry a later stage complete while an earlier
+one is not. Such a record is wrong, but it is representable and may already exist.
+
+The application therefore **shows the flags as they are** — a later stage reads complete, the
+skipped one reads incomplete — and never infers an earlier stage from a later one. Inferring would
+be the app fabricating a pastoral record. A member's **stage label** is the furthest *contiguous*
+stage completed, so a gap stays visible rather than being smoothed over. "Not started" and
+"Complete" are the labels for neither end.
+
+_Avoid_: "steps", "pipeline", "funnel". _Avoid_ describing it as a state machine in code or
+comments — the record permits states a state machine would not.
+
 ## Blocked write
 
 A write the database refused **by filtering rather than by raising**. PostgREST applies an RLS
@@ -103,3 +128,23 @@ verified the person. See ADR-0007.
 An attendance row not linked to a member. Either a genuine visitor, or a member whose self
 check-in name did not match. Linking a guest row to a member is an in-place `UPDATE`, never
 delete-and-re-add — see `src/utils/attendanceLink.js`.
+
+## Contribution
+
+Money received from a member or anonymously, of one of two kinds: **tithes** or **offering**. A
+contribution belongs to a church and a date; it may belong to no member, which is what
+*anonymous* means — see `docs/decisions/0003-nullable-collections-from.md`.
+
+**Contributor** is the person, when there is one. The **Contributors** list is a finance surface,
+restricted to those who may write finance, and it is where contributor identity legitimately
+appears.
+
+Load-bearing consequence: **a contribution never appears in a member context.** Not on a member
+profile, not in a member export, not as a locked or empty placeholder — the placeholder is the
+same disclosure promise as the figure. This is a privacy rule about *where* the information is
+shown, and it does not narrow who may see the Contributors list. The two rules are independent
+and both hold.
+
+_Avoid_: "giving" and "donation" as nouns for the record. "Giving" is the word to avoid most
+carefully — it is what the design mockups call a per-member view of exactly this data, which is
+the thing the rule above forbids.

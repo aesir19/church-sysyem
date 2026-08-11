@@ -24,6 +24,7 @@ supersede the record explicitly.
 | [0008](0008-sentry-alongside-in-stack-sink.md) | Sentry adopted alongside the in-stack sink, conditional on scrubbing | Accepted (residual risk) |
 | [0009](0009-vetted-runtime-dependency-candidates.md) | Three runtime dependencies are vetted but unjustified | Accepted (standing evaluation) |
 | [0010](0010-ai-features-need-an-edge-function.md) | AI features go through a Supabase Edge Function, or not at all | Accepted (constraint) |
+| [0011](0011-headless-primitives-for-accessibility.md) | Reka UI supplies interaction logic; everything else stays hand-rolled | Accepted |
 
 ## Format
 

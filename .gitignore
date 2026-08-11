@@ -19,6 +19,14 @@ dist
 # `git add .` stages them as an embedded-repo gitlink, not as files.
 .claude/worktrees/
 
+# Design mockups. Untracked deliberately — this repo is public, and the bundle is
+# ~600 KB of prototype HTML plus an unused second design system. Everything
+# load-bearing from it now lives in the repo as docs/REDESIGN.md amendments,
+# CONTEXT.md terms, and (later) src/styles/tokens.css.
+# See docs/REDESIGN.md — Amendment 16.
+UI mockups for form/
+UI mockups for form.zip
+
 /src/generated/prisma
 .xlsx
 # Local Netlify folder

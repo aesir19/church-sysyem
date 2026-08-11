@@ -13,19 +13,20 @@ with the original brief, the correction is flagged inline.
 
 | | |
 |---|---|
-| Branch | `redesign` (currently empty — no work started) |
-| Phase | Not started. **Phase 0 is blocked on two open decisions** — see below. |
-| Mockups | `UI mockups for form/` — untracked, see [Mockups](#mockups) |
+| Branch | `redesign` (no code written yet) |
+| Phase | **Phase 0 unblocked.** Both blocking decisions settled 2026-08-11 — see [Amendments 7 and 8](#amendment-7--dark-mode-resolved-in). |
+| Mockups | Leaving the repo — see [Amendment 16](#amendment-16--the-mockups-leave-the-repo) |
+| Scope | Existing features only. [Amendment 9](#amendment-9--scope-is-the-existing-feature-set-not-the-mockups-feature-set) is the boundary. |
 
-### Open decisions blocking Phase 0
+### Open decisions blocking Phase 0 — both now settled
 
-Both change what goes into `src/styles/tokens.css`, so both must be settled before that file is
-written. Deciding either one *after* the views are migrated means reopening all eleven.
+Both changed what goes into `src/styles/tokens.css`, so both had to be settled before that file
+was written. Deciding either one *after* the views were migrated would have meant reopening all
+eleven.
 
-1. **Dark mode — in or out?** The mockup ships a complete dark theme; this plan originally scoped
-   it out. See [Amendment 1](#amendment-1--dark-mode).
-2. **Typography — self-hosted Manrope or the system stack?** The mockup's Google Fonts link is
-   blocked by our own CSP and cannot ship as drawn. See [Amendment 2](#amendment-2--typography).
+1. ~~**Dark mode — in or out?**~~ **In.** [Amendment 7](#amendment-7--dark-mode-resolved-in).
+2. ~~**Typography — self-hosted Manrope or the system stack?**~~ **Self-hosted Manrope.**
+   [Amendment 8](#amendment-8--typography-resolved-self-hosted-manrope).
 
 ---
 
@@ -44,9 +45,16 @@ newsprint serif, no boxes or dividers, CMYK print treatments). It is linked from
 Broadsheet"* as an unexplored alternative. **The Modern direction is the one being built.**
 Broadsheet is recorded here only so nobody mistakes it for the target later.
 
-Housekeeping: the folder is untracked, sits beside a duplicate `UI mockups for form.zip`, and
-carries ~250 KB of unused design system. Decide whether it belongs in the repo or outside it
-before it gets committed by accident.
+A later handoff turn added `design_handoff_church_dashboard/` — the same design direction split
+across three files (screens, dialogs/alerts/states, detail views) plus a `README.md` stating the
+tokens, motion vocabulary and per-screen intent explicitly. **That README is the specification
+this redesign builds from**, and it is more precise than this section: it names every colour,
+type step, radius, shadow recipe and easing curve.
+
+Housekeeping: **the folder was never fully untracked** — the original `.dc.html`, `support.js`,
+`_ds/`, a `.pptx` and the duplicate `UI mockups for form.zip` are all committed; only the newer
+`design_handoff_church_dashboard/` was untracked. Resolved by
+[Amendment 16](#amendment-16--the-mockups-leave-the-repo).
 
 ### The mockup and this plan disagree
 
@@ -55,10 +63,12 @@ scope difference resolved by [Amendment 4](#amendment-4--new-screens-move-to-the
 
 | | This plan said | The mockup shows | Resolution |
 |---|---|---|---|
-| Dark mode | Explicitly out of scope | Full dark theme, 28 tokens, a toggle | [A1](#amendment-1--dark-mode) — decide before Phase 0 |
-| Typography | System stack *or* self-hosted, undecided | Manrope via Google Fonts (**CSP-blocked**) | [A2](#amendment-2--typography) — decide before Phase 0 |
-| Brand colour | `#1a56db` (per CLAUDE.md) | Cyan `#0088b0` + magenta | [A3](#amendment-3--brand-colour) — absorbed by §0.5 as-is |
-| Scope | 11 existing views, restyle only | + Overview, Statistics, roadmap, mobile layout | [A4](#amendment-4--new-screens-move-to-their-own-track) — separate track |
+| Dark mode | Explicitly out of scope | Full dark theme, 28 tokens, a toggle | **[A7](#amendment-7--dark-mode-resolved-in) — in** |
+| Typography | System stack *or* self-hosted, undecided | Manrope via Google Fonts (**CSP-blocked**) | **[A8](#amendment-8--typography-resolved-self-hosted-manrope) — self-hosted** |
+| Brand colour | `#1a56db` (per CLAUDE.md) | Cyan `#0088b0` + magenta | [A3](#amendment-3--brand-colour) — **confirmed**, absorbed by §0.5 as-is |
+| Scope | 11 existing views, restyle only | A whole target application | [A9](#amendment-9--scope-is-the-existing-feature-set-not-the-mockups-feature-set) — existing features only |
+| Roles | Seven capability predicates, RLS-backed | Three roles, "Pastor does everything" | [A10](#amendment-10--the-capability-model-wins-over-the-mockups-role-copy) — the code wins |
+| Public check-in | Six states, no match feedback (ADR-0007) | A "found — is this you?" state | [A11](#amendment-11--the-public-check-in-has-no-found-state) — not built, ever |
 
 ---
 
@@ -144,7 +154,7 @@ below should be read with it in mind.
 | In the mockup | Status today |
 |---|---|
 | **Overview / home** — "Good morning, Grace", attendance sparkline, "Needs attention" | No such route. `/dashboard` redirects to `/dashboard/members`. |
-| **Statistics Report** | [BACKLOG.md](BACKLOG.md) **B26**, unbuilt. Needs its own `src/utils/` aggregator. Its AI-narrative layer is blocked behind an unwritten ADR. |
+| **Statistics Report** | Unbuilt, and needs its own `src/utils/` aggregator. **Correction:** this cited `BACKLOG.md` **B26**, which is *AI integration* — now [ADR-0010](decisions/0010-ai-features-need-an-edge-function.md). The Statistics screen had **no backlog entry and no issue at all** until it was specced as [#56](https://github.com/aesir19/church-sysyem/issues/56). Its AI-narrative layer is blocked behind ADR-0010, which is written. |
 | **"What's to come" roadmap** + *Submit a request* form | Entirely new, and a **write path** — needs a table, RLS policies, and a security review. Not presentation-layer work under any reading. |
 | **Mobile** — sidebar → bottom bar, tables → cards | A per-view layout change, not a restyle. Never scoped in this plan. |
 
@@ -184,6 +194,287 @@ Two related notes now that the gate exists:
   during Phase 1, not at Stage 3.
 - The global `prefers-reduced-motion` block landing in Phase 0 (§0.1) helps here as well as being
   the right thing to do — the mockup animates a great deal more than the current app does.
+
+---
+
+> **Amendments 7–16 all date from the design review of 2026-08-11**, which worked through the
+> `design_handoff_church_dashboard/` bundle against the shipped code. They settle every decision
+> that was open, and reverse four earlier recommendations in this file. Where an amendment
+> reverses something, the superseded text is left in place with a pointer — the reasoning that was
+> right at the time is still worth reading.
+
+### Amendment 7 — dark mode: RESOLVED, in
+
+**Settled 2026-08-11.** Dark mode is **in**, from Phase 0, attached at the *semantic* token layer
+exactly as [Amendment 1](#amendment-1--dark-mode) describes. The handoff README supplies the full
+dark palette, so this is mostly transcription rather than design.
+
+The follow-ons Amendment 1 names are all binding: a dark shadow ramp (shadows tuned for a light
+ground read as smudges on a dark one), a `prefers-color-scheme` default, a persisted user choice
+under `localStorage` key `udfc.theme`, and **that key joins the do-not-clear list on sign-out**
+alongside `udfc.checkin.recorded` — a theme preference should outlive a session.
+
+One rule carried over verbatim from the handoff, because it records a bug they already fixed:
+**the selected member row is `#f4fcff` light / `#0e2b38` dark.** A light tint on a dark surface is
+what broke it the first time. Do not reintroduce it.
+
+### Amendment 8 — typography: RESOLVED, self-hosted Manrope
+
+**Settled 2026-08-11.** Option 1 of [Amendment 2](#amendment-2--typography):
+**`@fontsource-variable/manrope`**, served same-origin from `/assets/` under the existing
+immutable long-cache rule. **Zero CSP change** — which is the point. Editing
+`font-src` to allowlist a font CDN was considered and rejected: loosening a security header
+permanently to avoid an npm install is the wrong trade.
+
+The system stack was the other live option and would have cost nothing, but Manrope at weight 800
+carries most of the design's character; shipping the system stack means shipping something that
+is not the design that was approved.
+
+**The measurement in §0.2 applies to the font too:** a font file is bytes on `CheckinView`'s
+critical path, and `dist/assets/CheckinView-*.js` (6,675 B at the time of writing) is the one
+artifact that must not grow. Check it after the font lands, not at the end.
+
+### Amendment 9 — scope is the existing feature set, not the mockup's feature set
+
+**This is the boundary for the whole project.** The handoff bundle describes a *target
+application* — roughly 40 surfaces. This redesign applies its visual and interaction language to
+**the features that exist today**, and nothing else. Every feature the mockups add is deferred to
+a spec, untouched by this work.
+
+| In — restyled | Out — deferred to spec |
+|---|---|
+| Screens 2–7: Members, Groups, Attendance, Collections, Expenses, Funds | Screens 1, 8, 9: Overview, Statistics, What's next |
+| Auth family (sign in, set password, account pending, 404) | All nine detail views (file 3) |
+| Public check-in — see [A11](#amendment-11--the-public-check-in-has-no-found-state) | All five admin pages (users & roles, churches, profile, settings, audit log) |
+| Modals 01–09, 12, 13, 15 | Modals 10 (close the month), 11 (invite user), 14 (export) |
+| Toasts, and the empty / error / skeleton / no-access state vocabulary | Bulk selection bar, notification panel, offline banner + sync queue |
+| Dark mode; responsive layouts for every view | The mobile bottom tab bar — see [A12](#amendment-12--mobile-lands-now-the-tab-bar-does-not) |
+| | The Expenses **category** chart — there is no `category` column on `expenses` |
+
+This supersedes [Amendment 4](#amendment-4--new-screens-move-to-their-own-track), which drew the
+same line around a smaller set. A4's reasoning stands and is worth reading; its list is simply
+incomplete now that the full bundle is in hand.
+
+**The governing rule for anything in between:** when the mockup renders a datum the schema does
+not carry, **omit the element**. The layout closes up and nothing is promised. The mockup's own
+em-dash placeholder (`#b9c0cc`) is for a *row* that legitimately has no value — an expense with no
+note — never for a feature that was not built; using it there ships blanks that look permanent.
+The single exception is a datum that is one cheap addition to a query already being made, and
+even then **"one round-trip per intent" is binding**: the header's "39 archived" costs a second
+count query against `members` and is therefore out, while the active count rides along free on
+the paginated request (see [A13](#amendment-13--members-stops-being-a-restyle)).
+
+Two consequences worth stating plainly:
+
+- **No chart library is being added.** There are zero charts in the app today — no `<canvas>`, no
+  chart code — and after dropping the Expenses category chart the only chart-shaped element left
+  in scope is the Funds five-segment allocation bar, which is a CSS bar over numbers
+  [collectivesReport.js](../src/utils/collectivesReport.js) already computes.
+- **Icons stay local.** Consolidate the drifted hand-drawn glyphs into `src/components/ui/icons/`
+  as §0.3 already proposes. `lucide-vue-next` was considered and rejected: unlike Reka UI, which
+  buys a tested focus trap, an icon package buys convenience, and priority 1 is binding. While the
+  shell is open, `AppSidebar`'s `v-html` icon injection becomes a real inline `<svg>` render from
+  a **static module constant** — that removes a latent sink SECURITY.md already flags, for free.
+
+### Amendment 10 — the capability model wins over the mockup's role copy
+
+The handoff README describes three roles — Pastor / Finance / Secretariat — and says *"Pastor
+(everything + approvals + closing the month)"*. **That is not this application's authorization
+model**, and rendering it literally would ship a UI promising access RLS will refuse.
+
+The real model is seven predicates in [capabilities.js](../src/utils/capabilities.js), mirroring
+the SQL composites in `0014`–`0017`. Two of them are deliberately counter-intuitive and are the
+ones the mockup gets wrong:
+
+- **Pastor is see-only.** `canWriteMembers` is Secretariat + SuperAdmin. A Pastor sees member
+  detail and cannot edit it.
+- **Head Pastor deliberately cannot see member PII.** It reads the Directory, never the Member
+  record — `can_see_member_detail()` excludes it on purpose.
+
+**Every role-gated surface in the mockup is re-derived from `deriveCapabilities()`**, and the
+mockup's role names are treated as placeholder copy. This follows ADR-0001: capabilities are
+presentation, RLS is enforcement. A screen offering an action the policy will filter produces
+exactly the `{ error: null, data: [] }` false success that
+[write.js](../src/lib/data/write.js) exists to catch.
+
+**Related, and settled the same way:** the mockup's member profile carries a role-gated **Giving**
+card. It is not built — not gated, not locked, not empty. Per-member giving does not appear in a
+member context at all, on privacy grounds. This does **not** touch the *Contributors* table on
+the Funds screen, which is a finance surface, already `canWriteFinance`-gated, and stays as it is.
+"Do not show giving on a person's profile" and "finance staff may see who gave" are different
+rules and both hold. Recorded in [CONTEXT.md](../CONTEXT.md) under **Contribution**.
+
+### Amendment 11 — the public check-in has no "found" state
+
+The mockup draws the public check-in in four states: idle, **searching**, **found**, confirmed.
+**The "found" state must never be built.** It is the directory oracle that
+[ADR-0007](decisions/0007-public-checkin-endpoint.md) and
+[CheckinView.vue](../src/views/CheckinView.vue)'s three opening rules exist to deny: a screen that
+confirms "found — is this you, *«name»*?" lets anyone who photographs the poster test names
+against the church roll.
+
+The real states are `loading / bad-link / closed / open / already / done`, and `already` is read
+from **this device's own localStorage**, never from the server. All six get restyled in the
+mockup's visual language and none of them gain match feedback.
+
+A **pending indicator** while the submit is in flight is fine and is the honest half of
+"searching" — it reveals nothing. A *found* state is not, at any fidelity.
+
+Re-run [VERIFICATION.md](security/VERIFICATION.md) §4.1's response-uniformity and
+already-checked-in rows after this view is touched, exactly as
+[Security-load-bearing behaviour](#security-load-bearing-behaviour--anchored-to-the-exact-touch-point)
+already requires. This amendment exists so that a future contributor comparing the app to the
+mockup reads "unfinished" as "deliberate".
+
+### Amendment 12 — mobile lands now; the tab bar does not
+
+Reverses the mobile half of [Amendment 4](#amendment-4--new-screens-move-to-their-own-track).
+Since this redesign covers the existing feature set, the mobile treatment **of those same views**
+lands with them rather than being visited twice: tables become cards, 44px minimum targets, 14px
+minimum body text, and the sidebar collapses to a drawer.
+
+**The bottom tab bar is not built.** The mockup's is five tabs — Home / People / Check in / Funds
+/ More — and **two of them point at nothing that exists**: Home is the unbuilt Overview, More is
+profile/settings pages that do not exist. A five-tab bar with two dead ends is worse than the
+drawer. It belongs to the deferred track, with the screens that fill it.
+
+`/checkin` is the exception that needs no debate: it is *already* a phone screen, opened on church
+wifi at every service, and its mobile treatment was always part of restyling it.
+
+### Amendment 13 — Members stops being a restyle
+
+`DashboardView.vue` is no longer a repaint. Five changes land in it, and together they make it the
+riskiest file in the project:
+
+1. **Server-side pagination.** `.range()`, page size **50**, a numbered pager. Client-side paging
+   was rejected as theatre: the unbounded query still runs, so egress is unchanged and the
+   CLAUDE.md threshold it is meant to answer stays breached.
+2. **A stable sort in the query.** `listRecords()` has **no `.order()` at all** today — ordering is
+   whatever Postgres returns, then `sortedMembers` sorts client-side. That is harmless while the
+   whole list is in the browser and becomes a bug the moment `.range()` arrives: **range over an
+   unordered query can repeat rows on one page and skip them on the next.** Order by
+   `last_name, id` — the `id` tiebreaker is what stops shared surnames shuffling across page
+   boundaries.
+3. **Server-side search**, finally using `buildMemberNameOrFilter` from
+   [searchFilters.js](../src/utils/searchFilters.js) — written, unit-tested against a
+   `"Jane),or(member_of.not.is.null)"` breakout, and imported by **nothing in `src/`**. There is no
+   search field on Members today; adding one is what stops pagination from being a downgrade,
+   since today you can Ctrl-F the whole list precisely because the whole list is on the page.
+4. **The detail modal becomes a right panel** that fills only on selection and is empty until
+   then — which is what the mockup actually shows. PII still appears only after a deliberate
+   click, rather than sitting on screen by default. On mobile the row navigates instead.
+5. **`facebook_link` becomes clickable** — see
+   [A14](#amendment-14--facebook_link-becomes-a-link-under-conditions).
+
+Sequencing, and the reason this amendment exists: **split the stage in two.** Restyle first, then
+pagination + search as a separate commit with its own `code-reviewer` pass. Landing a data-flow
+change and a repaint in one diff makes both unreviewable.
+
+Decisions inside this that were made deliberately and should not be re-opened as bugs:
+
+- **The two capability-split column sets stay split.** Today the table shows Age + Gender to
+  `canSeeMemberDetail` holders and Ministries + Small Groups to everyone else. The mockup shows
+  one table with Member / Age / Groups / Journey. Merging needs group membership on the detail
+  path, which `listRecords()` does not fetch — groups come from the `directory_search` RPC — so
+  every version of the merge costs a second round-trip. Deferred to spec. Note also that a Journey
+  column **cannot render for baseline users at all**: `directory_search` returns names and groups
+  only, no journey flags. The mockup's four-column table is a detail-user view no matter what.
+- **Sorting is names-only.** Age and Gender are sortable today; they will not be after this. Age
+  is `computeAge(member.birthdate)` in the browser and does not exist to order on — it would have
+  to become `birthdate` descending, which is correct but inverted and easy to get backwards. This
+  is an accepted regression, chosen with that trade in view. **Do not "restore" it without
+  re-deciding it.**
+- **Selection clears on any refetch** — page change, sort change, search change. It is the only
+  behaviour where what is on screen always matches the table, and it means a member's address
+  never lingers in a panel beside results it has nothing to do with.
+- **The filter pills are not built.** The mockup shows four and defines none of them. One of the
+  likely candidates, "Archived", is not a filter at all — it inverts the mandatory
+  `.is('archived_at', null)` read rule and needs its own deliberate path.
+
+**Sizing, recorded 2026-08-11:** the largest church holds ~150 active members. So pagination here
+is correctness-and-cost work rather than an emergency, and the `directory_search` 200-row cap
+([A15](#amendment-15--the-directory-caps-honestly-rather-than-silently)) is not yet biting. The
+list actually nearest a threshold is **the attendance roster, which can reach ~300** — that is
+where to look next, not Members.
+
+### Amendment 14 — `facebook_link` becomes a link, under conditions
+
+Reverses this file's own default recommendation under
+[Security-load-bearing behaviour](#security-load-bearing-behaviour--anchored-to-the-exact-touch-point),
+which was "don't add link behaviour at all". The owner wants it clickable. It ships **only** with
+all four of these:
+
+1. **Validated at render**, not just on write. Render-time validation is the half that actually
+   protects, because it covers rows already in the database — and nobody knows what is in that
+   column today. Write-time validation goes in too, but it only ever buys a better error message.
+2. **Host-allowlisted** to `facebook.com` / `fb.com` / `m.facebook.com`, `https:` only. The field
+   is *named* `facebook_link`; a member-editable field accepting arbitrary URLs and rendered as a
+   clickable link inside a staff dashboard is a phishing pivot, and requiring it to be what it
+   claims costs nothing.
+3. **`target="_blank"` + `rel="noopener noreferrer"`.**
+4. **Anything failing validation renders as plain text**, never as a broken or stripped link.
+   Silently dropping it would hide bad data instead of showing it.
+
+This converts a documented-safe pattern into an active sink, so it is the one change in the
+redesign that takes **`/security-review`** in addition to the mandatory `code-reviewer` pass.
+
+### Amendment 15 — the directory caps honestly rather than silently
+
+`directory_search(p_query, p_church_id, p_limit DEFAULT 200)` — and
+[listDirectory()](../src/lib/data/members.js) passes only `p_church_id`. A church over 200 members
+therefore **already shows baseline users and Head Pastors a truncated list with no indication it
+was truncated.** That is live today, independent of any redesign.
+
+Fixed here the cheap way: pass `p_limit` explicitly and render an honest **"Showing 200 of N —
+refine your search"** note. Paginating that path properly needs a `p_offset` parameter on the RPC
+— a migration, schema-before-SPA deploy ordering, and a security review of a `SECURITY DEFINER`
+function that is the only thing standing between baseline users and the `members` table. **That is
+not work to fold into a restyle**, and it is deferred to spec. At ~150 members the cap is not
+biting yet, which is what makes deferring it safe rather than merely convenient.
+
+### Amendment 16 — the mockups leave the repo
+
+The design bundle does not belong in a **public** repository. Removed from tracking and ignored:
+`UI mockups for form.zip`, `UI mockups for form/` in full — including the ~250 KB
+`_ds/broadsheet-…` design system that is not the target, the `.pptx`, and the untracked
+`design_handoff_church_dashboard/`.
+
+Nothing load-bearing is lost. The tokens become `src/styles/tokens.css`, the decisions become
+these amendments, and the vocabulary becomes [CONTEXT.md](../CONTEXT.md) — all of which are
+reviewable and diffable in a way a 158 KB prototype never was.
+
+### Amendment 17 — smaller reversals and confirmations, in one place
+
+- **Brand colour: confirmed.** Cyan `#0088b0` + magenta `#d6006c`, applied exactly as §0.5
+  sequences it — build on the current blue as a placeholder, sign off the *mechanics* on the
+  style-guide route, then repoint the palette in `tokens.css` alone. CLAUDE.md's palette line is
+  updated **when the rebrand lands**, not before, per [A3](#amendment-3--brand-colour).
+- **Nine nav slots ship now**, with Overview / Statistics / What's next carrying the mockup's own
+  "Soon" badge and no route. The IA lands once and the sidebar stops churning. The nav label
+  becomes **Groups**; the route path `/dashboard/ministry` is unchanged.
+- **The church switcher becomes modal 12.** This reverses §0.2's "reskin `ChurchSelector`, do not
+  replace the native `<select>`". That objection was to a styled *listbox* reimplementing a select
+  — it does not reach a real dialog, which `ui/Modal.vue` makes keyboard- and screen-reader-correct
+  by construction. Switching church is a consequential context change, not a form field, and the
+  cards carry the "records never move" reassurance a `<select>` cannot. Only the two cross-church
+  roles ever see it.
+- **A capability-denied route shows the no-access state** instead of silently redirecting to
+  `/dashboard/members`, which is what the router does today. The mockup's rule — *never hide a
+  permission failure silently* — is right, and this is a UX fix to existing behaviour. The
+  "Request access" button on that screen is **not** built; there is nothing behind it.
+- **The headless-primitives ADR is `0011`, not `0009`.**
+  [Amendment 5](#amendment-5--adr-number-correction) moved it from 0008 to 0009; **0009 and 0010
+  were both taken since**. It is now
+  [0011-headless-primitives-for-accessibility.md](decisions/0011-headless-primitives-for-accessibility.md),
+  and it is **written** — §0.6 can treat that step as done. Note that
+  [ADR-0009](decisions/0009-vetted-runtime-dependency-candidates.md) pre-vets three runtime
+  dependencies and **Reka UI is not one of them**, so 0011 makes the full CLAUDE.md case from
+  scratch rather than citing 0009's sizing.
+- **Skeletons for pages and lists, inline spinners on buttons.** The handoff's "no spinner" rule
+  is about page and list loading, where a skeleton communicates shape. A submit button mid-flight
+  still needs an indicator — on the screens that write money and attendance, no pending state
+  invites double submits. `CollectionsInputView` and `ExpensesInputView` have **no loading state
+  at all** today and gain one either way.
 
 ---
 
@@ -559,11 +850,72 @@ sign-out code path's reason to exist at all, rather than just making two paths a
 
 ## Explicitly out of scope
 
-- **The mockup's new screens** — Overview, Statistics Report, the roadmap/request page, and the
-  mobile layout. Separate track, see
-  [Amendment 4](#amendment-4--new-screens-move-to-their-own-track).
+- **The mockup's new screens** — superseded and widened by
+  [Amendment 9](#amendment-9--scope-is-the-existing-feature-set-not-the-mockups-feature-set); the
+  full list is the handoff below. Mobile is the exception that came *back* into scope, see
+  [Amendment 12](#amendment-12--mobile-lands-now-the-tab-bar-does-not).
 - **D5/D6/D7** (stale role-based nav state), **D14** (formatMoney/date/name duplication), any router
-  restructuring, and all Prisma/RLS/backend logic. Nothing above touches any of these.
+  restructuring, and all Prisma/RLS/backend logic. Nothing above touches any of these — with two
+  named exceptions the amendments introduce deliberately: the router renders a no-access state
+  instead of redirecting ([A17](#amendment-17--smaller-reversals-and-confirmations-in-one-place)),
+  and `listRecords()` gains `.range()`/`.order()`/search
+  ([A13](#amendment-13--members-stops-being-a-restyle)).
+
+### Deferred work — the spec handoff list
+
+Everything below was cut from this redesign **by decision, not by oversight**, on 2026-08-11. Each
+needs a spec before it needs a ticket. Grouped by why it was cut, because that determines how much
+design work each one still needs.
+
+**Whole surfaces from the mockups — need a spec each.**
+Overview / home · ~~Statistics~~ **specced: [#56](https://github.com/aesir19/church-sysyem/issues/56)** · What's next (roadmap + submit-a-request, which is a *write* path
+needing a table and policies) · the nine detail views in file 3 (group detail, member profile page,
+service detail, count sheet, report builder, approval queue, follow-up worklist, the mobile
+screens) · the five admin pages (users & roles, churches, my profile, settings, audit log) ·
+modal 11 invite user · modal 14 export · the bulk selection bar · the notification panel · the
+offline banner and pending-sync queue · the mobile bottom tab bar.
+
+**Contradict an accepted ADR — each opens with an ADR amendment, not just a spec.**
+
+- **Fund allocation editor** (mockup 3.3). Makes allocation *data*: sliders, a percent input, a
+  computed peso column, allocation history. [ADR-0004](decisions/0004-view-aggregates-but-does-not-allocate.md)
+  puts the 10/5/5/50-50 rules in `collectivesReport.js` and **nowhere in SQL**. Extending that is
+  anticipated; it still needs the record amended, and the ADR's warning about a second source of
+  truth that "reconciles most months" is the exact failure to design against.
+- **Closing the month** (modal 10, plus locked banners, "Request reopen", and the approval and
+  audit trail behind it). ADR-0004 is blunt: *"There is no close step and nothing is ever frozen."*
+  A close step reintroduces a stored balance that drifts the moment a correction lands behind it,
+  and drags in two unbuilt subsystems (approvals, audit) to serve one modal. **This needs its own
+  ADR arguing the reversal on its merits** — it should not arrive as a consequence of a redesign.
+
+**Blocked on data the schema does not carry.**
+Expense **categories** (the Expenses category chart and the Settings category chips) · member
+**notes** · **mentors** and "assign a mentor" · **approvals** as a concept · per-group meeting
+attendance.
+
+**Small, well-understood, and cut for scope discipline.**
+
+- `directory_search` **`p_offset`** — proper pagination for the directory path, replacing the
+  honest cap in [A15](#amendment-15--the-directory-caps-honestly-rather-than-silently). A
+  migration touching a `SECURITY DEFINER` function; needs a security review.
+- **Age + Groups in one member table** — needs group membership on the detail path, which costs a
+  second round-trip however it is done. See [A13](#amendment-13--members-stops-being-a-restyle).
+- **The four filter pills** on Members — the mockup shows four and defines none. "Archived" among
+  them is not a filter but an inversion of the mandatory archived-row read rule, and needs its own
+  path.
+- **The "Personal detail" field tier.** The owner distinguishes personal details — address,
+  contact number, facebook link, which stay with the Secretariat ministry — from the rest of a
+  member record, with a view to letting Head Pastor see the latter. Today
+  `can_see_member_detail()` is all-or-nothing: a caller gets all seventeen columns or the
+  Directory. Splitting it is a change to the authorization model and needs its own ADR and
+  security review. [#56](https://github.com/aesir19/church-sysyem/issues/56) deliberately needs
+  none of it, because it ships only counts.
+- **The archived count** in the Members header — a second count query against `members`.
+- **Attendance roster pagination.** At ~150 active members the member list is comfortable; the
+  roster can reach **~300**, which makes it the list actually nearest a threshold. Look here next.
+
+**Already filed, not deferred:** enforcing the Journey stage order in the schema —
+[issue #55](https://github.com/aesir19/church-sysyem/issues/55).
 
 ### Critical files for implementation
 

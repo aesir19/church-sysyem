@@ -1,6 +1,7 @@
 # UDFC Church Dashboard — working rules
 
-A Vue 3 SPA (Vite, no TypeScript, no state library, no UI kit) served as static files from
+A Vue 3 SPA (Vite, no TypeScript, no state library, no styled UI kit — see
+[ADR-0011](docs/decisions/0011-headless-primitives-for-accessibility.md)) served as static files from
 Netlify, talking directly to Supabase — Postgres + Auth + PostgREST. There is no application
 server. Business logic lives in the SPA; **authorization lives entirely in Postgres RLS.**
 Prisma is schema/migration tooling only and never runs in the browser.
@@ -136,6 +137,16 @@ See [docs/agents/domain.md](docs/agents/domain.md).
 - `<style scoped>` per SFC; only truly global rules go in [src/style.css](src/style.css).
 - Palette: primary `#1a56db`, slate neutrals (`#f8fafc`, `#e2e8f0`, `#1e293b`, `#64748b`),
   error `#dc2626`. Cards use a `12px` radius.
+  > **This line is scheduled to change.** The redesign rebrands to cyan `#0088b0` with magenta
+  > `#d6006c` as a second accent. It is updated **when the rebrand actually lands** — not before,
+  > so this file never describes a state that is not shipped. See
+  > [REDESIGN.md Amendment 3](docs/REDESIGN.md).
+- **Interaction logic for dialogs comes from Reka UI** (`reka-ui`), not from a fifth hand-rolled
+  focus trap. It is scoped to `Dialog` and optionally `Toast`; buttons, cards, inputs, badges,
+  tables, spinners and icons stay hand-rolled against the project's tokens, and combobox/tabs/
+  select stay as they are. The boundary and the bundle gate are in
+  [ADR-0011](docs/decisions/0011-headless-primitives-for-accessibility.md) — read it before
+  reaching for the library a second time.
 - Surface failures as a **message from the data module**, not as `error.message`. Postgres
   constraint violations quote the offending row verbatim — `Key (first_name, last_name)=(Juan,
   Dela Cruz) already exists` — which is member PII;
