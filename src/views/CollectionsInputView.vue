@@ -238,7 +238,7 @@ import { supabase } from '../lib/supabase'
 import { getDefaultServiceDate, isWithinEditWindow } from '../utils/collectionsDate'
 import FundsTabs from '../components/FundsTabs.vue'
 import { defaultMonthKey, getMonthRange, monthKeyFromDate } from '../utils/expensesMonth'
-import { interpretMutation } from '../utils/mutationResult'
+import { write } from '../lib/data/write'
 import { buildCollectionPayload, contributorLabel, isAnonymousRow } from '../utils/collectionPayload'
 import { useActiveChurch } from '../composables/useActiveChurch'
 
@@ -471,20 +471,22 @@ async function handleSubmit() {
   }
 
   saving.value = true
-  const { data, error } = await supabase
-    .from('collections')
-    .insert(buildCollectionPayload(form.value, myChurchId.value))
-    .select(COLLECTION_SELECT)
-    .single()
+  const result = await write(
+    supabase.from('collections').insert(buildCollectionPayload(form.value, myChurchId.value)),
+    {
+      columns: COLLECTION_SELECT,
+      messages: { blocked: 'That contribution could not be saved. It may belong to another church.' },
+    }
+  )
 
   saving.value = false
 
-  if (error) {
-    formError.value = error.message
+  if (!result.ok) {
+    formError.value = result.message
     return
   }
 
-  const insertedEntry = normalizeEntry(data)
+  const insertedEntry = normalizeEntry(result.rows[0])
   const insertedMonth = monthKeyFromDate(insertedEntry.date)
   if (insertedMonth === selectedMonth.value) {
     entries.value.unshift(insertedEntry)
@@ -536,19 +538,17 @@ async function saveEdit() {
   }
 
   editSaving.value = true
-  // `.select()` is required: RLS enforces the 3-hour window by filtering the row
-  // out, which PostgREST reports as success with zero rows. See mutationResult.js.
-  const result = await supabase
-    .from('collections')
-    .update({ amount: editAmount.value })
-    .eq('id', selectedEntry.value.id)
-    .select()
+  // RLS enforces the 3-hour window by filtering the row out, which PostgREST
+  // reports as success with zero rows. `write` is what catches that.
+  const result = await write(
+    supabase.from('collections').update({ amount: editAmount.value }).eq('id', selectedEntry.value.id),
+    { messages: { blocked: EDIT_WINDOW_CLOSED_MESSAGE } }
+  )
 
   editSaving.value = false
 
-  const outcome = interpretMutation(result, EDIT_WINDOW_CLOSED_MESSAGE)
-  if (!outcome.ok) {
-    editError.value = outcome.message
+  if (!result.ok) {
+    editError.value = result.message
     return
   }
 
@@ -563,15 +563,13 @@ async function saveEdit() {
 async function handleDelete() {
   if (!window.confirm('Are you sure you want to delete this entry?')) return
 
-  const result = await supabase
-    .from('collections')
-    .delete()
-    .eq('id', selectedEntry.value.id)
-    .select()
+  const result = await write(
+    supabase.from('collections').delete().eq('id', selectedEntry.value.id),
+    { messages: { blocked: EDIT_WINDOW_CLOSED_MESSAGE } }
+  )
 
-  const outcome = interpretMutation(result, EDIT_WINDOW_CLOSED_MESSAGE)
-  if (!outcome.ok) {
-    editError.value = outcome.message
+  if (!result.ok) {
+    editError.value = result.message
     return
   }
 

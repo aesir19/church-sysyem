@@ -2,8 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '../lib/supabase'
 import MemberAutocomplete from '../components/MemberAutocomplete.vue'
-import { interpretMutation } from '../utils/mutationResult'
-import { buildGuestLinkPayload, isDuplicateMemberConflict, isPolicyViolation } from '../utils/attendanceLink'
+import { write } from '../lib/data/write'
+import { buildGuestLinkPayload, isDuplicateMemberConflict } from '../utils/attendanceLink'
 import { buildStaffAttendancePayload, validateCheckinContact, validateCheckinName } from '../utils/checkinPayload'
 import {
   attendeeLabel,
@@ -291,22 +291,23 @@ async function handleAddAttendee() {
   })
 
   savingAttendee.value = true
-  const result = await supabase.from('attendance').insert(payload).select(ATTENDANCE_COLUMNS)
+  const result = await write(
+    supabase.from('attendance').insert(payload),
+    {
+      columns: ATTENDANCE_COLUMNS,
+      messages: {
+        blocked: 'That attendance could not be saved. It may already be recorded, or the service may belong to another church.',
+      },
+    }
+  )
   savingAttendee.value = false
 
-  // PostgREST enforces RLS by filtering, so a blocked insert returns success with
-  // zero rows. Without this the UI would report a rejected write as saved.
-  const outcome = interpretMutation(
-    result,
-    'That attendance could not be saved. It may already be recorded, or the service may belong to another church.'
-  )
-
-  if (!outcome.ok) {
-    attendeeError.value = outcome.message
+  if (!result.ok) {
+    attendeeError.value = result.message
     return
   }
 
-  roster.value = [result.data[0], ...roster.value]
+  roster.value = [result.rows[0], ...roster.value]
   attendeeForm.value = { memberId: '', guestName: '', guestContact: '' }
   memberPicker.value?.reset()
   showToast('Attendance recorded.')
@@ -316,11 +317,13 @@ async function handleRemove(row) {
   const label = attendeeLabel(row)
   if (!window.confirm(`Remove ${label} from this service's attendance?`)) return
 
-  const result = await supabase.from('attendance').delete().eq('id', row.id).select('id')
-  const outcome = interpretMutation(result, 'That record could not be removed.')
+  const result = await write(
+    supabase.from('attendance').delete().eq('id', row.id),
+    { columns: 'id', messages: { blocked: 'That record could not be removed.' } }
+  )
 
-  if (!outcome.ok) {
-    showToast(outcome.message, 'error')
+  if (!result.ok) {
+    showToast(result.message, 'error')
     return
   }
 
@@ -352,22 +355,36 @@ async function handleLinkMember() {
   }
 
   linkModal.value.saving = true
-  const result = await supabase
-    .from('attendance')
-    .update(payload)
-    .eq('id', row.id)
-    .select(ATTENDANCE_COLUMNS)
+  // The policy rejects in two different ways: USING filters (member row, viewer,
+  // another church's row) and returns zero rows; WITH CHECK raises 42501. `write`
+  // classifies both — `blocked` and `denied` respectively — so neither reaches the
+  // user as raw Postgres text. Confirmed against staging with the
+  // VERIFICATION.md §4.1 matrix.
+  const result = await write(
+    supabase.from('attendance').update(payload).eq('id', row.id),
+    {
+      columns: ATTENDANCE_COLUMNS,
+      messages: {
+        blocked: 'That record could not be linked. It may belong to another church, or the member may no longer be active.',
+        denied: 'That member cannot be linked to this record. They may belong to another church, or their record may have been archived.',
+      },
+    }
+  )
 
   // The member already has a row for this service, so attendance_service_member_key
   // rejects the link. They are already counted — the guest row is the duplicate, and
-  // removing it is the correction the user asked for.
-  if (isDuplicateMemberConflict(result.error)) {
-    const removal = await supabase.from('attendance').delete().eq('id', row.id).select('id')
-    const removed = interpretMutation(removal, 'That duplicate entry could not be removed.')
+  // removing it is the correction the user asked for. This one is checked against
+  // `cause` rather than the classification because it drives a different ACTION,
+  // not merely a different message.
+  if (isDuplicateMemberConflict(result.cause)) {
+    const removal = await write(
+      supabase.from('attendance').delete().eq('id', row.id),
+      { columns: 'id', messages: { blocked: 'That duplicate entry could not be removed.' } }
+    )
     linkModal.value.saving = false
 
-    if (!removed.ok) {
-      linkModal.value.error = removed.message
+    if (!removal.ok) {
+      linkModal.value.error = removal.message
       return
     }
 
@@ -379,30 +396,12 @@ async function handleLinkMember() {
 
   linkModal.value.saving = false
 
-  // The policy rejects in two different ways and only one of them is an empty
-  // result. USING filters (member row, viewer, another church's row) and lands in
-  // interpretMutation below; WITH CHECK raises 42501, which would otherwise reach
-  // the user as "new row violates row-level security policy for table attendance".
-  // Confirmed against staging with the VERIFICATION.md §4.1 matrix.
-  if (isPolicyViolation(result.error)) {
-    linkModal.value.error =
-      'That member cannot be linked to this record. They may belong to another church, or their record may have been archived.'
+  if (!result.ok) {
+    linkModal.value.error = result.message
     return
   }
 
-  // Same reason as handleAddAttendee: for the filtering half, RLS returns success
-  // with zero rows rather than an error.
-  const outcome = interpretMutation(
-    result,
-    'That record could not be linked. It may belong to another church, or the member may no longer be active.'
-  )
-
-  if (!outcome.ok) {
-    linkModal.value.error = outcome.message
-    return
-  }
-
-  const linked = result.data[0]
+  const linked = result.rows[0]
   roster.value = roster.value.map((entry) => (entry.id === row.id ? linked : entry))
   closeLinkModal()
   showToast(`Linked to ${attendeeLabel(linked)}.`)
@@ -506,22 +505,24 @@ async function saveSchedule() {
   }
 
   scheduleModal.value.saving = true
-  const result = await supabase
-    .from('service_schedules')
-    .insert(buildSchedulePayload(scheduleModal.value.form, myChurchId.value))
-    .select(SCHEDULE_COLUMNS)
+  const result = await write(
+    supabase.from('service_schedules').insert(buildSchedulePayload(scheduleModal.value.form, myChurchId.value)),
+    {
+      columns: SCHEDULE_COLUMNS,
+      messages: {
+        blocked: 'That schedule could not be saved. A slot may already exist for that day and time.',
+        conflict: 'A slot already exists for that day and time.',
+      },
+    }
+  )
   scheduleModal.value.saving = false
 
-  const outcome = interpretMutation(
-    result,
-    'That schedule could not be saved. A slot may already exist for that day and time.'
-  )
-  if (!outcome.ok) {
-    scheduleModal.value.error = outcome.message
+  if (!result.ok) {
+    scheduleModal.value.error = result.message
     return
   }
 
-  schedules.value = [...schedules.value, result.data[0]].sort(
+  schedules.value = [...schedules.value, result.rows[0]].sort(
     (a, b) => a.weekday - b.weekday || String(a.starts_at).localeCompare(String(b.starts_at))
   )
   scheduleModal.value.open = false
@@ -529,20 +530,19 @@ async function saveSchedule() {
 }
 
 async function toggleSchedule(schedule) {
-  const result = await supabase
-    .from('service_schedules')
-    .update({ is_active: !schedule.is_active })
-    .eq('id', schedule.id)
-    .select(SCHEDULE_COLUMNS)
+  const result = await write(
+    supabase.from('service_schedules').update({ is_active: !schedule.is_active }).eq('id', schedule.id),
+    { columns: SCHEDULE_COLUMNS, messages: { blocked: 'That schedule could not be updated.' } }
+  )
 
-  const outcome = interpretMutation(result, 'That schedule could not be updated.')
-  if (!outcome.ok) {
-    showToast(outcome.message, 'error')
+  if (!result.ok) {
+    showToast(result.message, 'error')
     return
   }
 
-  schedules.value = schedules.value.map((row) => (row.id === schedule.id ? result.data[0] : row))
-  showToast(result.data[0].is_active ? 'Schedule resumed.' : 'Schedule paused.')
+  const saved = result.rows[0]
+  schedules.value = schedules.value.map((row) => (row.id === schedule.id ? saved : row))
+  showToast(saved.is_active ? 'Schedule resumed.' : 'Schedule paused.')
 }
 
 function openAdhocModal() {
@@ -564,23 +564,26 @@ async function saveAdhocService() {
   }
 
   adhocModal.value.saving = true
-  const result = await supabase
-    .from('services')
-    .insert(buildAdhocServicePayload(adhocModal.value.form, myChurchId.value))
-    .select(SERVICE_COLUMNS)
+  const result = await write(
+    supabase.from('services').insert(buildAdhocServicePayload(adhocModal.value.form, myChurchId.value)),
+    {
+      columns: SERVICE_COLUMNS,
+      messages: {
+        blocked: 'That service could not be created. One with the same name may already exist on that date.',
+        conflict: 'A service with that name already exists on that date.',
+      },
+    }
+  )
   adhocModal.value.saving = false
 
-  const outcome = interpretMutation(
-    result,
-    'That service could not be created. One with the same name may already exist on that date.'
-  )
-  if (!outcome.ok) {
-    adhocModal.value.error = outcome.message
+  if (!result.ok) {
+    adhocModal.value.error = result.message
     return
   }
 
-  services.value = [result.data[0], ...services.value]
-  selectedServiceId.value = result.data[0].id
+  const created = result.rows[0]
+  services.value = [created, ...services.value]
+  selectedServiceId.value = created.id
   adhocModal.value.open = false
   // A one-off exists to be recorded against, so follow the chain to its output
   // rather than leaving the user on the setup tab wondering where it went.

@@ -36,13 +36,33 @@ describe('affectedRowCount', () => {
 })
 
 describe('classifyWriteError', () => {
-  it('classifies a WITH CHECK violation by SQLSTATE as denied', () => {
+  it('classifies a bare 42501 as denied when there is no message to read', () => {
     expect(classifyWriteError({ code: '42501' })).toBe('denied')
   })
 
+  // A missing GRANT is a deployment fault, not a permission decision. Telling the
+  // user they lack permission would send them to the wrong person.
+  it('does not treat a missing grant as denied, even though it is also 42501', () => {
+    expect(classifyWriteError({ code: '42501', message: 'permission denied for table attendance' }))
+      .toBe('failed')
+  })
+
+  // Verbatim from running the VERIFICATION.md §4.1 matrix against staging: the
+  // WITH CHECK half of attendance_update_link_guest RAISES rather than filtering,
+  // so this is what a cross-church link attempt actually produces. The USING half
+  // filters to zero rows and never reaches here.
   it('classifies a WITH CHECK violation by message as denied', () => {
     expect(classifyWriteError({ message: 'new row violates row-level security policy for table "attendance"' }))
       .toBe('denied')
+  })
+
+  it('is case-insensitive about the message', () => {
+    expect(classifyWriteError({ message: 'New Row Violates Row-Level Security Policy' })).toBe('denied')
+  })
+
+  it('does not claim unrelated failures as denied', () => {
+    expect(classifyWriteError({})).toBe('failed')
+    expect(classifyWriteError({ code: '23514', message: 'attendance_identity_check' })).toBe('failed')
   })
 
   it('classifies a unique violation as conflict', () => {

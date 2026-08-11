@@ -78,9 +78,13 @@ export function classifyWriteError(error) {
 
   const text = `${error.message || ''} ${error.details || ''}`
 
-  if (error.code === INSUFFICIENT_PRIVILEGE || /row-level security policy/i.test(text)) {
-    return 'denied'
-  }
+  if (/row-level security policy/i.test(text)) return 'denied'
+  // The SQLSTATE alone only when there is no message to read. 42501 also covers a
+  // plain missing GRANT, which is a deployment fault rather than a permission
+  // decision, and telling a user they lack permission would send them to the
+  // wrong person. That distinction was verified against staging — see
+  // isPolicyViolation's history in src/utils/attendanceLink.js.
+  if (!error.message && error.code === INSUFFICIENT_PRIVILEGE) return 'denied'
   if (error.code === UNIQUE_VIOLATION || /duplicate key value|already exists/i.test(text)) {
     return 'conflict'
   }
