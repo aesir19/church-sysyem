@@ -411,9 +411,6 @@ function showToast(message, type = 'success') {
 // localStorage cache for the user's church name — lets the page title render
 // pre-fetch on cold open. docs/ARCHITECTURE.md §12.5 #5.
 const CHURCH_NAME_KEY = 'udfc.myChurchName'
-function readCachedChurchName() {
-  try { return localStorage.getItem(CHURCH_NAME_KEY) } catch { return null }
-}
 function writeCachedChurchName(name) {
   try {
     if (name) localStorage.setItem(CHURCH_NAME_KEY, name)

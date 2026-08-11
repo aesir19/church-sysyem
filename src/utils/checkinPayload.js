@@ -41,7 +41,7 @@ export function readCheckinToken(hash) {
   const query = raw.startsWith('#') ? raw.slice(1) : raw
   if (!query) return ''
 
-  let value = ''
+  let value
   try {
     value = new URLSearchParams(query).get('t') || ''
   } catch {
