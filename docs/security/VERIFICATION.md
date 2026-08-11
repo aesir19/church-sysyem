@@ -141,6 +141,22 @@ The anonymous rows need no JWT at all — call the RPC with the `anon` key, or r
 | Church A staff INSERT attendance for a **church B** `member_id` | RLS rejection via `is_member_in_my_church()`. |
 | Church A staff INSERT attendance with `source = 'self'` or `recorded_by = <anything>` | `42501` — both columns are withheld from the INSERT grant. This is what makes provenance unforgeable. |
 | Church A staff INSERT a service referencing a **church B** `schedule_id` | Foreign-key violation. |
+| Church A staff UPDATE a **guest** attendance row, setting `member_id` to an A member and nulling `guest_name` / `guest_contact` | Succeeds — this is the one permitted UPDATE (`attendance_update_link_guest`, `0019`). |
+| ⚠ Re-read that row afterwards | `source`, `created_at` and `recorded_by` are **unchanged**. A corrected `source = 'self'` row still reads as self-asserted. If any of the three moved, the column-scoped grant has been widened and provenance is no longer trustworthy. |
+| Church A staff UPDATE a **member** attendance row (any of the three columns) | Zero rows affected — `USING` requires `guest_name IS NOT NULL`, so member rows are not updatable and one member's attendance cannot be repointed at another. |
+| ⚠ Church A staff UPDATE a guest row, setting `member_id` to a **church B** member | **`42501 new row violates row-level security policy`** — an error, *not* zero rows. `WITH CHECK` calls `is_member_in_church(member_id, church_id)` against the attendance row's own church, not the caller's. |
+| ⚠ Church A staff UPDATE a guest row to a different `guest_name`, leaving `member_id` NULL | Same `42501` raise — `WITH CHECK` requires the result to be a member row, so this is not a guest-renaming tool. |
+| Church A staff UPDATE `attendance.source`, `recorded_by`, `created_at`, `church_id` or `service_id` | `42501` — all five are withheld from the UPDATE grant. |
+| Church A **viewer** (Pastor / Church Leader, `can_manage_attendance()` false) attempts the guest link | Zero rows affected. The absent Link button is presentation; this is the enforcement. |
+
+**The two halves of an UPDATE policy fail differently, and the rows above are marked accordingly.**
+`USING` *filters* — an excluded row is invisible to the statement, so PostgREST returns success with
+zero rows and only `interpretMutation` catches it. `WITH CHECK` *raises* `42501`. Any UI that
+handles only the first case will show a volunteer the raw
+`new row violates row-level security policy for table "attendance"`; `AttendanceView`'s
+`isPolicyViolation` guard exists solely because running this matrix caught exactly that. Both rows
+here were originally documented as "zero rows affected" and were wrong until the matrix was run —
+do not re-derive these expectations by reading the policy, run them.
 | Church A staff UPDATE `services.closes_at` directly | `42501` — there is no UPDATE grant. `closes_at` moves only through `close_service_now()`. |
 | Two anon callers submit simultaneously as the window opens | Exactly **one** `services` row exists; both return `'recorded'`. Verifies the double-checked advisory lock. |
 | ⚠ Materialize today's service, close it early, then call `checkin_session_status` | Zero rows. The materialized row wins — the schedule fallback must **not** re-open it. |

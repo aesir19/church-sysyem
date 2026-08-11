@@ -72,5 +72,5 @@ holds the `service_role` key would make every policy in `0004`–`0012` decorati
 ## References
 
 - [SECURITY.md](../SECURITY.md) §3.2, §3.3, §3.11 — the findings that produced `0007`–`0009`
-- [DEFECTS.md](../DEFECTS.md) D4 — finance authorization keyed on a mutable display name
+- ~~D4 — finance authorization keyed on a mutable display name.~~ **Resolved** by `0014_rbac_predicates`, which keys on the system-managed `groups.ministry_key` slug. See [security/RESOLVED.md](../security/RESOLVED.md) §3.14.
 - `prisma/migrations/0006_baseline_rls` — the transcription of pre-migration live state

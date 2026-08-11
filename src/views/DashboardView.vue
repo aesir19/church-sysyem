@@ -327,6 +327,13 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { supabase } from '../lib/supabase'
+import {
+  listDirectory,
+  listRecords,
+  create as createMember,
+  update as updateMember,
+  archive as archiveMember,
+} from '../lib/data/members'
 import { isMemberFormDirty, snapshotMemberForm } from '../utils/memberFormDirty'
 import { buildMemberPayload } from '../utils/memberPayload'
 import { useCurrentRole } from '../composables/useCurrentRole'
@@ -398,35 +405,12 @@ function showToast(message, type = 'success') {
   }, 3000)
 }
 
-// Caller's church (resolved via RPC; required for create)
-// Shared explicit column list — used by fetchMembers, handleCreate, handleUpdate.
-// docs/ARCHITECTURE.md §12.3 rule 1: select only what we render.
-const MEMBER_COLUMNS = `
-  id,
-  first_name,
-  last_name,
-  middle_name,
-  birthdate,
-  gender,
-  address,
-  contact_number,
-  email,
-  date_joined,
-  member_of,
-  marital_status,
-  wedding_anniversarry,
-  facebook_link,
-  is_one_to_one_completed,
-  is_turning_point_completed,
-  is_baptized
-`
+// The column list, the archived-row filter and the church scoping all live in
+// src/lib/data/members.js now — this view names intent, not tables.
 
 // localStorage cache for the user's church name — lets the page title render
 // pre-fetch on cold open. docs/ARCHITECTURE.md §12.5 #5.
 const CHURCH_NAME_KEY = 'udfc.myChurchName'
-function readCachedChurchName() {
-  try { return localStorage.getItem(CHURCH_NAME_KEY) } catch { return null }
-}
 function writeCachedChurchName(name) {
   try {
     if (name) localStorage.setItem(CHURCH_NAME_KEY, name)
@@ -470,48 +454,18 @@ async function fetchMembers() {
   error.value = ''
 
   const churchId = myChurchId.value
-  if (!churchId) {
-    members.value = []
-    loading.value = false
-    return
-  }
 
-  // Directory path (baseline / Head Pastor): safe columns only, via the RPC, scoped
-  // to the active church. The base members table returns them nothing under RLS.
-  if (directoryMode.value) {
-    const { data, error: dirError } = await supabase.rpc('directory_search', { p_church_id: churchId })
-    if (dirError) {
-      error.value = `Failed to load members: ${dirError.message}`
-    } else {
-      members.value = (data || []).map((r) => ({
-        id: r.member_id,
-        first_name: r.first_name,
-        last_name: r.last_name,
-        ministries: r.ministries || [],
-        small_groups: r.small_groups || [],
-      }))
-    }
-    loading.value = false
-    return
-  }
+  // Two different reads, asked for by name. The directory is safe for every
+  // role; the record list carries PII and refuses without canSeeMemberDetail.
+  const result = directoryMode.value
+    ? await listDirectory(churchId)
+    : await listRecords({ churchId, canSeeDetail: canSeeMemberDetail.value })
 
-  // Detail path (privileged): RLS already filters to the caller's church.
-  // Detail path (privileged): scope to the active church explicitly. RLS returns
-  // every church to a SuperAdmin, so without this filter their list would merge all
-  // churches; a single-church user's active church is simply their own.
-  const { data, error: fetchError } = await supabase
-    .from('members')
-    .select(MEMBER_COLUMNS)
-    .eq('member_of', churchId)
-    // Required since 0010_members_select_allow_archived: RLS no longer excludes
-    // archived rows, because doing so made archiving itself impossible.
-    .is('archived_at', null)
+  members.value = result.rows
 
-  if (fetchError) {
-    error.value = `Failed to load members: ${fetchError.message}`
-  } else {
-    members.value = data || []
-  }
+  // A church that has not resolved yet is not an error the user should see —
+  // ensureLoaded() runs first on mount, and the watch re-fetches once it lands.
+  if (!result.ok && churchId) error.value = result.message
 
   loading.value = false
 }
@@ -691,25 +645,16 @@ async function handleCreate() {
   formError.value = ''
   formSaving.value = true
 
-  const payload = {
-    ...buildPayload(),
-    member_of: myChurchId.value, // RLS will reject any other value anyway
-  }
-
-  const { data, error: insertError } = await supabase
-    .from('members')
-    .insert(payload)
-    .select(MEMBER_COLUMNS)
-    .single()
+  const result = await createMember({ payload: buildPayload(), churchId: myChurchId.value })
 
   formSaving.value = false
 
-  if (insertError) {
-    formError.value = insertError.message
+  if (!result.ok) {
+    formError.value = result.message
     showToast('Failed to create member.', 'error')
     return
   }
-  members.value = [data, ...members.value]
+  members.value = [result.rows[0], ...members.value]
   closeModal()
   showToast('Member created successfully.', 'success')
 }
@@ -719,23 +664,19 @@ async function handleUpdate() {
   formError.value = ''
   formSaving.value = true
 
-  const { data, error: updateError } = await supabase
-    .from('members')
-    .update(buildPayload())
-    .eq('id', selectedMember.value.id)
-    .select(MEMBER_COLUMNS)
-    .single()
+  const result = await updateMember({ id: selectedMember.value.id, payload: buildPayload() })
 
   formSaving.value = false
 
-  if (updateError) {
-    formError.value = updateError.message
+  if (!result.ok) {
+    formError.value = result.message
     showToast('Failed to update member.', 'error')
     return
   }
-  const idx = members.value.findIndex(m => m.id === data.id)
-  if (idx !== -1) members.value.splice(idx, 1, data)
-  selectedMember.value = data
+  const saved = result.rows[0]
+  const idx = members.value.findIndex(m => m.id === saved.id)
+  if (idx !== -1) members.value.splice(idx, 1, saved)
+  selectedMember.value = saved
   modalMode.value = 'view'
   showToast('Member updated successfully.', 'success')
 }
@@ -745,22 +686,19 @@ async function handleArchive() {
   formError.value = ''
   formSaving.value = true
 
-  const { error: archiveError } = await supabase
-    .from('members')
-    .update({
-      archived_at: new Date().toISOString(),
-      archived_reason: archiveReason.value.trim() || null,
-    })
-    .eq('id', selectedMember.value.id)
+  const result = await archiveMember({ id: selectedMember.value.id, reason: archiveReason.value })
 
   formSaving.value = false
 
-  if (archiveError) {
-    formError.value = archiveError.message
+  // This used to drop the member from the list unconditionally. RLS refuses an
+  // archive by filtering, so a refusal arrived as success and the row vanished
+  // until the next reload brought it back. `rows` is empty whenever ok is false,
+  // so the list can only be patched from a write the database actually accepted.
+  if (!result.ok) {
+    formError.value = result.message
     showToast('Failed to archive member.', 'error')
     return
   }
-  // Drop from local list — RLS will hide it on next reload too.
   members.value = members.value.filter(m => m.id !== selectedMember.value.id)
   closeModal()
   showToast('Member archived successfully.', 'success')

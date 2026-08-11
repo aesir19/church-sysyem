@@ -2,7 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '../lib/supabase'
 import MemberAutocomplete from '../components/MemberAutocomplete.vue'
-import { interpretMutation } from '../utils/mutationResult'
+import { write, writeRpc } from '../lib/data/write'
+import { buildGuestLinkPayload, isDuplicateMemberConflict } from '../utils/attendanceLink'
 import { buildStaffAttendancePayload, validateCheckinContact, validateCheckinName } from '../utils/checkinPayload'
 import {
   attendeeLabel,
@@ -77,6 +78,10 @@ const qrError = ref('')
 const scheduleModal = ref({ open: false, saving: false, error: '', form: null })
 const adhocModal = ref({ open: false, saving: false, error: '', form: null })
 
+// Correcting a guest row that is really a member. `row` is the roster entry being
+// corrected, kept so the modal can name the guest it is about to replace.
+const linkModal = ref({ open: false, saving: false, error: '', row: null, memberId: '' })
+
 // Guards against out-of-order roster responses when the service select is
 // changed quickly — the slower earlier request must not overwrite the newer one.
 let rosterRequestId = 0
@@ -112,7 +117,15 @@ onMounted(async () => {
   loadContext()
 })
 
-watch(selectedServiceId, loadRoster)
+// The link modal holds a roster row and is backed by the member list, and both are
+// replaced underneath it when the service or church changes. Leaving it open would
+// show a row from the old context over a picker listing the new one — the write
+// still fails closed on the policy, but the message would make no sense. Close it
+// with the context it belongs to.
+watch(selectedServiceId, () => {
+  closeLinkModal()
+  loadRoster()
+})
 
 // Reload everything for the newly selected church (church selector).
 watch(activeChurchId, () => {
@@ -121,6 +134,7 @@ watch(activeChurchId, () => {
   checkinToken.value = ''
   qrSvg.value = ''
   showQr.value = false
+  closeLinkModal()
   loadContext()
 })
 
@@ -277,22 +291,23 @@ async function handleAddAttendee() {
   })
 
   savingAttendee.value = true
-  const result = await supabase.from('attendance').insert(payload).select(ATTENDANCE_COLUMNS)
+  const result = await write(
+    supabase.from('attendance').insert(payload),
+    {
+      columns: ATTENDANCE_COLUMNS,
+      messages: {
+        blocked: 'That attendance could not be saved. It may already be recorded, or the service may belong to another church.',
+      },
+    }
+  )
   savingAttendee.value = false
 
-  // PostgREST enforces RLS by filtering, so a blocked insert returns success with
-  // zero rows. Without this the UI would report a rejected write as saved.
-  const outcome = interpretMutation(
-    result,
-    'That attendance could not be saved. It may already be recorded, or the service may belong to another church.'
-  )
-
-  if (!outcome.ok) {
-    attendeeError.value = outcome.message
+  if (!result.ok) {
+    attendeeError.value = result.message
     return
   }
 
-  roster.value = [result.data[0], ...roster.value]
+  roster.value = [result.rows[0], ...roster.value]
   attendeeForm.value = { memberId: '', guestName: '', guestContact: '' }
   memberPicker.value?.reset()
   showToast('Attendance recorded.')
@@ -302,16 +317,94 @@ async function handleRemove(row) {
   const label = attendeeLabel(row)
   if (!window.confirm(`Remove ${label} from this service's attendance?`)) return
 
-  const result = await supabase.from('attendance').delete().eq('id', row.id).select('id')
-  const outcome = interpretMutation(result, 'That record could not be removed.')
+  const result = await write(
+    supabase.from('attendance').delete().eq('id', row.id),
+    { columns: 'id', messages: { blocked: 'That record could not be removed.' } }
+  )
 
-  if (!outcome.ok) {
-    showToast(outcome.message, 'error')
+  if (!result.ok) {
+    showToast(result.message, 'error')
     return
   }
 
   roster.value = roster.value.filter((entry) => entry.id !== row.id)
   showToast(`Removed ${label}.`)
+}
+
+function openLinkModal(row) {
+  linkModal.value = { open: true, saving: false, error: '', row, memberId: '' }
+}
+
+function closeLinkModal() {
+  linkModal.value = { open: false, saving: false, error: '', row: null, memberId: '' }
+}
+
+// Repoints a guest row at the member it was really meant to be. An UPDATE rather
+// than delete-and-re-add on purpose: 0019 grants only the three identity columns,
+// so source, created_at and recorded_by come through untouched and a corrected
+// self check-in keeps saying it was self-asserted. Delete-and-re-add would rewrite
+// all three and claim staff had verified the person.
+async function handleLinkMember() {
+  const row = linkModal.value.row
+  if (!row) return
+
+  const payload = buildGuestLinkPayload(linkModal.value.memberId)
+  if (!payload) {
+    linkModal.value.error = 'Choose a member from the list.'
+    return
+  }
+
+  linkModal.value.saving = true
+  // The policy rejects in two different ways: USING filters (member row, viewer,
+  // another church's row) and returns zero rows; WITH CHECK raises 42501. `write`
+  // classifies both — `blocked` and `denied` respectively — so neither reaches the
+  // user as raw Postgres text. Confirmed against staging with the
+  // VERIFICATION.md §4.1 matrix.
+  const result = await write(
+    supabase.from('attendance').update(payload).eq('id', row.id),
+    {
+      columns: ATTENDANCE_COLUMNS,
+      messages: {
+        blocked: 'That record could not be linked. It may belong to another church, or the member may no longer be active.',
+        denied: 'That member cannot be linked to this record. They may belong to another church, or their record may have been archived.',
+      },
+    }
+  )
+
+  // The member already has a row for this service, so attendance_service_member_key
+  // rejects the link. They are already counted — the guest row is the duplicate, and
+  // removing it is the correction the user asked for. This one is checked against
+  // `cause` rather than the classification because it drives a different ACTION,
+  // not merely a different message.
+  if (isDuplicateMemberConflict(result.cause)) {
+    const removal = await write(
+      supabase.from('attendance').delete().eq('id', row.id),
+      { columns: 'id', messages: { blocked: 'That duplicate entry could not be removed.' } }
+    )
+    linkModal.value.saving = false
+
+    if (!removal.ok) {
+      linkModal.value.error = removal.message
+      return
+    }
+
+    roster.value = roster.value.filter((entry) => entry.id !== row.id)
+    closeLinkModal()
+    showToast('Already recorded as a member — the duplicate guest entry was removed.')
+    return
+  }
+
+  linkModal.value.saving = false
+
+  if (!result.ok) {
+    linkModal.value.error = result.message
+    return
+  }
+
+  const linked = result.rows[0]
+  roster.value = roster.value.map((entry) => (entry.id === row.id ? linked : entry))
+  closeLinkModal()
+  showToast(`Linked to ${attendeeLabel(linked)}.`)
 }
 
 async function handleCloseNow() {
@@ -322,11 +415,14 @@ async function handleCloseNow() {
   }
 
   closingService.value = true
-  const { error } = await supabase.rpc('close_service_now', { p_service_id: target.id })
+  const result = await writeRpc(
+    supabase.rpc('close_service_now', { p_service_id: target.id }),
+    { messages: { denied: 'You cannot close that service. It may belong to another church.' } }
+  )
   closingService.value = false
 
-  if (error) {
-    showToast(error.message, 'error')
+  if (!result.ok) {
+    showToast(result.message, 'error')
     return
   }
 
@@ -379,15 +475,18 @@ async function handleRotateToken() {
   }
 
   rotatingToken.value = true
-  const { data, error } = await supabase.rpc('rotate_checkin_token', { p_church_id: myChurchId.value })
+  const result = await writeRpc(
+    supabase.rpc('rotate_checkin_token', { p_church_id: myChurchId.value }),
+    { messages: { denied: 'You cannot rotate the check-in link for that church.' } }
+  )
   rotatingToken.value = false
 
-  if (error) {
-    showToast(error.message, 'error')
+  if (!result.ok) {
+    showToast(result.message, 'error')
     return
   }
 
-  checkinToken.value = data || ''
+  checkinToken.value = result.rows[0] || ''
   qrSvg.value = ''
   showQr.value = false
   showToast('New check-in link generated. Reprint the QR code.')
@@ -412,22 +511,24 @@ async function saveSchedule() {
   }
 
   scheduleModal.value.saving = true
-  const result = await supabase
-    .from('service_schedules')
-    .insert(buildSchedulePayload(scheduleModal.value.form, myChurchId.value))
-    .select(SCHEDULE_COLUMNS)
+  const result = await write(
+    supabase.from('service_schedules').insert(buildSchedulePayload(scheduleModal.value.form, myChurchId.value)),
+    {
+      columns: SCHEDULE_COLUMNS,
+      messages: {
+        blocked: 'That schedule could not be saved. A slot may already exist for that day and time.',
+        conflict: 'A slot already exists for that day and time.',
+      },
+    }
+  )
   scheduleModal.value.saving = false
 
-  const outcome = interpretMutation(
-    result,
-    'That schedule could not be saved. A slot may already exist for that day and time.'
-  )
-  if (!outcome.ok) {
-    scheduleModal.value.error = outcome.message
+  if (!result.ok) {
+    scheduleModal.value.error = result.message
     return
   }
 
-  schedules.value = [...schedules.value, result.data[0]].sort(
+  schedules.value = [...schedules.value, result.rows[0]].sort(
     (a, b) => a.weekday - b.weekday || String(a.starts_at).localeCompare(String(b.starts_at))
   )
   scheduleModal.value.open = false
@@ -435,20 +536,19 @@ async function saveSchedule() {
 }
 
 async function toggleSchedule(schedule) {
-  const result = await supabase
-    .from('service_schedules')
-    .update({ is_active: !schedule.is_active })
-    .eq('id', schedule.id)
-    .select(SCHEDULE_COLUMNS)
+  const result = await write(
+    supabase.from('service_schedules').update({ is_active: !schedule.is_active }).eq('id', schedule.id),
+    { columns: SCHEDULE_COLUMNS, messages: { blocked: 'That schedule could not be updated.' } }
+  )
 
-  const outcome = interpretMutation(result, 'That schedule could not be updated.')
-  if (!outcome.ok) {
-    showToast(outcome.message, 'error')
+  if (!result.ok) {
+    showToast(result.message, 'error')
     return
   }
 
-  schedules.value = schedules.value.map((row) => (row.id === schedule.id ? result.data[0] : row))
-  showToast(result.data[0].is_active ? 'Schedule resumed.' : 'Schedule paused.')
+  const saved = result.rows[0]
+  schedules.value = schedules.value.map((row) => (row.id === schedule.id ? saved : row))
+  showToast(saved.is_active ? 'Schedule resumed.' : 'Schedule paused.')
 }
 
 function openAdhocModal() {
@@ -470,23 +570,26 @@ async function saveAdhocService() {
   }
 
   adhocModal.value.saving = true
-  const result = await supabase
-    .from('services')
-    .insert(buildAdhocServicePayload(adhocModal.value.form, myChurchId.value))
-    .select(SERVICE_COLUMNS)
+  const result = await write(
+    supabase.from('services').insert(buildAdhocServicePayload(adhocModal.value.form, myChurchId.value)),
+    {
+      columns: SERVICE_COLUMNS,
+      messages: {
+        blocked: 'That service could not be created. One with the same name may already exist on that date.',
+        conflict: 'A service with that name already exists on that date.',
+      },
+    }
+  )
   adhocModal.value.saving = false
 
-  const outcome = interpretMutation(
-    result,
-    'That service could not be created. One with the same name may already exist on that date.'
-  )
-  if (!outcome.ok) {
-    adhocModal.value.error = outcome.message
+  if (!result.ok) {
+    adhocModal.value.error = result.message
     return
   }
 
-  services.value = [result.data[0], ...services.value]
-  selectedServiceId.value = result.data[0].id
+  const created = result.rows[0]
+  services.value = [created, ...services.value]
+  selectedServiceId.value = created.id
   adhocModal.value.open = false
   // A one-off exists to be recorded against, so follow the chain to its output
   // rather than leaving the user on the setup tab wondering where it went.
@@ -831,8 +934,25 @@ function formatRecordedAt(value) {
                     </span>
                   </td>
                   <td class="time-cell">{{ formatRecordedAt(row.created_at) }}</td>
+                  <!-- Correcting a row is the common case; deleting one is not. Link
+                       leads, and Remove is muted until it is actually being aimed at. -->
                   <td class="actions-cell">
-                    <button v-if="canManageAttendance" type="button" class="btn-link-danger" @click="handleRemove(row)">Remove</button>
+                    <button
+                      v-if="canManageAttendance && !row.member_id"
+                      type="button"
+                      class="btn-link"
+                      @click="openLinkModal(row)"
+                    >
+                      Link to member
+                    </button>
+                    <button
+                      v-if="canManageAttendance"
+                      type="button"
+                      class="btn-link-muted"
+                      @click="handleRemove(row)"
+                    >
+                      Remove
+                    </button>
                   </td>
                 </tr>
               </tbody>
@@ -917,6 +1037,37 @@ function formatRecordedAt(value) {
             <button type="button" class="btn-secondary" @click="adhocModal.open = false">Cancel</button>
             <button type="button" class="btn-primary" :disabled="adhocModal.saving" @click="saveAdhocService">
               {{ adhocModal.saving ? 'Creating…' : 'Create service' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="linkModal.open" class="modal-overlay" @click.self="closeLinkModal">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="link-modal-title">
+          <div class="modal-header">
+            <h3 id="link-modal-title">Link to a member</h3>
+            <button type="button" class="btn-close" aria-label="Close" @click="closeLinkModal">×</button>
+          </div>
+          <div class="modal-body">
+            <p class="card-note">
+              Recorded as guest “{{ attendeeLabel(linkModal.row) }}”. If that is a registered
+              member whose name was mistyped, choose them below — the time and how they were
+              recorded stay as they are.
+            </p>
+            <!-- A distinct input-id from the add-attendee picker: it drives the listbox id
+                 and aria-activedescendant, and duplicates break the combobox semantics. -->
+            <MemberAutocomplete
+              v-model="linkModal.memberId"
+              :members="members"
+              input-id="link-member"
+              label="Member"
+            />
+            <p v-if="linkModal.error" class="form-error">{{ linkModal.error }}</p>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn-secondary" @click="closeLinkModal">Cancel</button>
+            <button type="button" class="btn-primary" :disabled="linkModal.saving" @click="handleLinkMember">
+              {{ linkModal.saving ? 'Linking…' : 'Link' }}
             </button>
           </div>
         </div>
@@ -1408,6 +1559,13 @@ select:focus {
 
 .actions-cell {
   text-align: right;
+  white-space: nowrap;
+}
+
+/* The link buttons carry -6px side margins to widen their hit area, so adjacent
+   ones would otherwise touch. */
+.actions-cell .btn-link + .btn-link-muted {
+  margin-left: 10px;
 }
 
 /* ---- Schedule --------------------------------------------------------- */
@@ -1584,7 +1742,7 @@ select:focus {
 }
 
 .btn-link,
-.btn-link-danger,
+.btn-link-muted,
 .btn-caution-link {
   padding: 4px 6px;
   margin: -4px -6px;
@@ -1605,11 +1763,16 @@ select:focus {
   background: #eff6ff;
 }
 
-.btn-link-danger {
-  color: #b91c1c;
+/* Deleting attendance is still available, but it is not what a roster is for.
+   Muted at rest so it stops competing with "Link to member"; the destructive red
+   returns the moment it is hovered or focused, which is when it matters. */
+.btn-link-muted {
+  color: #64748b;
 }
 
-.btn-link-danger:hover {
+.btn-link-muted:hover,
+.btn-link-muted:focus-visible {
+  color: #b91c1c;
   background: #fef2f2;
 }
 

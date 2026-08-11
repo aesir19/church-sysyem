@@ -59,8 +59,8 @@ This README is for the people who use the dashboard. Technical documentation liv
 | [docs/decisions/](docs/decisions/) | Why the load-bearing choices were made |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Deploying, migrations and their caveats, backups, free-tier budgets |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, findings, verification steps |
-| [docs/DEFECTS.md](docs/DEFECTS.md) | Known bugs |
-| [docs/BACKLOG.md](docs/BACKLOG.md) | Deferred features |
+| [Issues](https://github.com/aesir19/church-sysyem/issues) | Known bugs (`defect`) and deferred features (`feature`) |
+| [CONTEXT.md](CONTEXT.md) | Domain glossary — what the words mean here |
 
 Quick start:
 
@@ -68,6 +68,7 @@ Quick start:
 npm install
 npm run dev      # always the STAGING database — see docs/STAGING.md for the .env.staging it needs
 npm test
+npm run lint     # fails only on the write-seam rule; the rest report as warnings
 ```
 
 `npm run dev` cannot reach production: production credentials live in `.env.production`, which Vite

@@ -33,7 +33,7 @@ The compensating controls, all free and all currently in place except where note
 3. **Keep the access-token lifetime short.** Leave Supabase at the 1-hour default; do not raise it.
 4. **Sign-out must clear state.** Verify the SDK wipes its own keys, and that app caches
    (`udfc.myChurchName`, `udfc.myUserName`) are cleared on every sign-out path — they are not
-   today, see [DEFECTS.md](../DEFECTS.md) D12.
+   today, see [issue #35](https://github.com/aesir19/church-sysyem/issues/35).
 
 ## Consequences
 

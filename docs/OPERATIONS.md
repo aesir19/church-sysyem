@@ -150,6 +150,60 @@ The anon key is public by design and RLS is the access control
 ([ADR-0001](decisions/0001-rls-is-the-only-authz.md)). The key that must never appear in the
 frontend is `service_role`, which has no business in any build environment in the first place.
 
+### The sibling failure: `netlify deploy` rebuilds by default
+
+Deleting those variables closed the masking bug and opened a second one, which took production down
+a second time. The two look alike from the outside — white screen, green deploy — and have opposite
+causes, so **read the error text before doing anything else**:
+
+| Browser error | What it means |
+|---|---|
+| `Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL` | Built **correctly**, then Netlify masked the values in the uploaded file. The variable is marked "contains secret values". |
+| `Supabase Connection Error: Missing environment variables` | Built **with the values empty**. Something other than the `deploy` job compiled the bundle. |
+
+**Telling them apart from the bundle, not from a guess.** `src/lib/supabase.js` guards with
+`if (!supabaseUrl || !supabaseAnonKey)`, and Vite inlines `import.meta.env.VITE_*` as literals
+before minification. So the guard is its own tracer:
+
+- Valid values → the condition folds to `false` and the minifier **deletes the throw**. The string
+  `Supabase Connection Error` does not appear in the bundle at all.
+- Empty values → the condition folds to `true` and the throw **survives**.
+
+Masking happens after compilation, so a masked bundle was built from good values and cannot contain
+that string. **If the browser prints `Supabase Connection Error`, the compile step had nothing to
+work with** — no need to inspect Netlify's variables, they are not the problem.
+
+```bash
+# 1 = built empty. 0 = built with real values (whatever happened after).
+curl -s https://<site>/assets/index-<hash>.js | grep -c 'Supabase Connection Error'
+```
+
+**Cause — `netlify deploy` runs `build.command` itself, and this was missed for a long time.**
+`--dir` does not mean "just upload this folder". Per `netlify deploy --help`, the CLI will *"Build
+your project (unless `--no-build` is specified)"*. So the `deploy` job was building **twice**:
+
+| Step | Environment | Result |
+|---|---|---|
+| `Build app` (ci.yml) | `VITE_*` from repository variables | correct `dist` |
+| `npm run deploy:prod` → `netlify deploy` | only `NETLIFY_AUTH_TOKEN`, `NETLIFY_SITE_ID` | **overwrote `dist`** with empty values, then uploaded it |
+
+`scripts/ci/check-build-env.js` guards the first build and passed, correctly. The bundle it
+validated was then thrown away by the second one. This is why the failure looked impossible: every
+gate was green and every gate was watching the wrong build.
+
+The tell in the deploy log is the path — `publish: /home/runner/work/...` is a **GitHub Actions
+runner**, not Netlify's builder (`/opt/build/repo`). A "build.command failed" message containing a
+runner path means the CLI is building, not Netlify.
+
+**Fix:** `npm run deploy:prod` passes `--no-build`. The `[build] command` in
+[netlify.toml](../netlify.toml) is now a tripwire that exits 1, so if `--no-build` is ever dropped —
+or if Netlify's own git builds are switched back on — the deploy **fails** instead of silently
+publishing a white screen. Neither affects `npm run build`, which is `vite build`.
+
+**The general rule:** exactly one system may compile this site, and a deploy tool that can also
+build is a second publisher hiding inside the first. Verifying build inputs is worthless unless the
+artifact that gets uploaded is the artifact that was verified.
+
 The manual commands remain, for recovery and for inspection. **The unqualified ones target
 staging** — production needs an explicit `:prod`, which reads `.env.production` and prints the
 resolved host before it does anything:
@@ -231,9 +285,9 @@ diff against the migrations to detect drift.
 scopes the audit-trail gap to `members`. But `collections` enforces a 3-hour edit window, permits
 in-window `UPDATE` and `DELETE`, and records **no `created_by` at all** (`expenses` does). The
 system cannot answer *"who changed this amount, from what, to what, and when"* for the one table
-where that question is guaranteed to be asked, and [BACKLOG.md](BACKLOG.md) B15 has nothing to
+where that question is guaranteed to be asked, and [issue #46](https://github.com/aesir19/church-sysyem/issues/46) has nothing to
 build on until it can. A trigger-written, append-only `collections_history` costs one migration.
-**Fix [DEFECTS.md](DEFECTS.md) D1 first**, or the history records drifting float values.
+**Fix [issue #27](https://github.com/aesir19/church-sysyem/issues/27) first**, or the history records drifting float values.
 
 ## 4. Availability — nothing detects failure
 
@@ -256,7 +310,7 @@ than as a white page that loads fine.
 |---|---|
 | O11 | **No backup beyond platform defaults.** Free-tier Supabase provides daily backups with short retention and no PITR (confirm current terms). No `pg_dump` runs anywhere, and no restore has ever been tested. |
 | O12 | **Clean-room rebuild is impossible.** Substantially narrowed — see below. |
-| O13 | **No seed or fixture path.** A fresh environment cannot reach a working state without hand-editing production-shaped data. Still open, but no longer blocking: [STAGING.md](STAGING.md) §2 documents the manual seed as a procedure, which is what standing up staging actually needed. |
+| O13 | **No seed or fixture path.** A fresh environment cannot reach a working state without hand-editing production-shaped data. Still open, but no longer blocking: [STAGING.md](STAGING.md) §2 documents the manual seed as a procedure, which is what standing up staging actually needed. Two scripted fixtures now exist on top of it — `seed-staging-rbac.sql` (roles, one-shot) and `seed-staging-attendance.sql` (services and rosters, idempotent, `npm run seed:attendance`). Neither covers collections or expenses, so a finance-shaped environment is still hand-built. |
 | O14 | **No retention or erasure policy.** Soft delete is forever; there is no hard-delete path and no documented subject-access or erasure procedure. Under the PH **Data Privacy Act (RA 10173)** the church is a personal information controller for this data, which makes retention an obligation rather than a preference. Cross-ref [SECURITY.md](SECURITY.md) §3.10. |
 
 **O12 in detail.** Two separately-documented facts combined into something worse than either:
@@ -327,10 +381,10 @@ surface, but not the data.
 
 | ID | Gap |
 |---|---|
-| O23 | **No linter or formatter.** `eslint-plugin-vue` catches a class of template bug — unused refs, missing `:key`, unresolved components, typo'd bindings — that Vitest structurally cannot, because those files are never mounted. Prettier is the natural pairing (removes formatting bikeshedding from review), and a Husky + `lint-staged` pre-commit hook makes both self-enforcing instead of advisory. All three are devDependencies — zero runtime/bundle impact. |
+| O23 | ~~**No linter.**~~ **Closed 2026-08-11.** ESLint + `eslint-plugin-vue` run in CI via `npm run lint`. Note the severity split: the recommended sets report at `warn` (a 1,433-finding backlog across code that had never been linted) and exactly one rule fails the build — `write-seam/writes-through-seam`, a local rule in [eslint.config.js](../eslint.config.js). Promote the rest with `flat/recommended-error` once the backlog is worked. **Still open:** no formatter (Prettier) and no pre-commit hook (Husky + `lint-staged`), so lint is CI-enforced but not local. |
 | O24 | **Interaction tests are impossible today.** [vitest.config.js](../vitest.config.js) sets `environment: 'node'` and `@vue/test-utils` is not installed, so nothing can click, type, or open a modal. Coverage is inverted against risk: pure date helpers are well tested; the archive flow, the modal state machine, the 3-hour lock, and finance gating have none. **Partially narrowed** — `vue/server-renderer` needs no new dependency, and [tests/views/churchFundsView.test.js](../tests/views/churchFundsView.test.js) uses it to assert a view's `setup()` runs, queries the right tables, and renders the right initial state. It caught a real crash that `npm run build` passed. Worth copying to the other views. A separate, complementary gap: none of this exercises a real browser — Playwright is the closer-to-industry-standard tool for true end-to-end coverage (real clicks, real navigation, runs against a built preview) and would run on its own free CI-minutes budget independently of whether jsdom is ever added here. |
-| O25 | **No type checking.** Cross-ref [BACKLOG.md](BACKLOG.md) B7. Noted because O23/O24 partially compensate and are cheaper. |
-| O26 | **No performance/accessibility budget in CI.** Nothing catches a bundle-size or accessibility regression before it ships — the D9/CLAUDE.md route-count threshold (§ thresholds table) is checked by memory, not tooling. Lighthouse CI (or the `netlify-plugin-lighthouse` build plugin) is the standard fit: dev/CI-time only, no runtime dependency, runs against Netlify preview deploys for free. Only has teeth if wired into [ci.yml](../.github/workflows/ci.yml) or the Netlify build — a manual local Lighthouse run is easy to skip. |
+| O25 | **No type checking.** Cross-ref [issue #53](https://github.com/aesir19/church-sysyem/issues/53). Noted because O23/O24 partially compensate and are cheaper. |
+| O26 | ~~**No performance/accessibility budget in CI.**~~ **Closed.** A `lighthouse` job in [ci.yml](../.github/workflows/ci.yml) runs `lhci autorun` against thresholds in [lighthouserc.json](../lighthouserc.json), and `deploy` has `needs: [test, lighthouse, migrate]` so a regression blocks the release rather than merely reporting. The CI build uses a placeholder anon key, so it carries no Sentry weight and measures the DSN-less bundle. |
 
 **O24's two traps** for anyone copying that SSR test: SSR skips `onMounted`, and Vue routes
 watcher failures to `app.config.errorHandler` rather than rejecting the render — so a test that
@@ -339,8 +393,7 @@ does not collect from that handler will pass straight over a thrown exception.
 The fix is `npm i -D jsdom @vue/test-utils` plus `environment: 'jsdom'`. First three tests worth
 writing, in order: archive removes the row and closes the modal; an out-of-window edit surfaces
 `EDIT_WINDOW_CLOSED_MESSAGE` rather than silently succeeding (the
-[mutationResult.js](../src/utils/mutationResult.js) contract, currently only unit-tested in
-isolation); a non-finance user does not see `FundsTabs` links.
+[write.js](../src/lib/data/write.js) contract, currently only unit-tested in isolation); a non-finance user does not see `FundsTabs` links.
 
 ---
 
@@ -351,12 +404,16 @@ If only a subset is done, do these — ordered by consequence-if-skipped, all $0
 1. **O12 + O11** — bootstrap script for the out-of-schema triggers, a scheduled `pg_dump`, one
    dated restore drill. Without this every other item is moot, because a bad day ends the project.
 2. **O5 (ledger audit)** — `collections_history`, trigger-written. Cheapest now, impossible to
-   backfill later. Do [DEFECTS.md](DEFECTS.md) D1 first.
+   backfill later. Do [issue #27](https://github.com/aesir19/church-sysyem/issues/27) first.
 3. **O7** — external uptime check. Turns "a volunteer noticed on Sunday" into "we knew on Thursday".
 4. **O4 + O2 / O3** — the in-stack error sink plus global handlers. Ends learning about failures socially.
-5. **O15** — a second free Supabase project as staging, which also gives O13 somewhere to matter.
-6. **O20 + O17** — Dependabot, `npm audit` in CI, and gate the Netlify deploy on a green build.
-7. **O23 + O24** — ESLint and a jsdom test environment, so the fixes above stay fixed.
+5. ~~**O15**~~ — **done.** Staging is a second Supabase project ([STAGING.md](STAGING.md)); both
+   free project slots are now in use.
+6. **O20** — Dependabot and `npm audit --audit-level=high` in CI. Still open: there is no
+   `.github/dependabot.yml` and no audit step. ~~O17~~ is **done** — `deploy` has
+   `needs: [test, lighthouse, migrate]`, so an unbuildable or unmigrated commit cannot publish.
+7. **O24** — a jsdom test environment. ~~O23~~ (ESLint) is **done**; the remaining half of that
+   item is a formatter and a pre-commit hook.
 
 None of this conflicts with priority 1. O2, O6, and O22 actively *protect* the cost line by making
 budget-breaching regressions visible before they arrive as a bill.

@@ -335,10 +335,15 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { supabase } from '../lib/supabase'
+import { write } from '../lib/data/write'
 import { getGroupAccentStyle } from '../utils/groupPresentation'
 import { buildSmallGroupCreatePayload, buildSmallGroupUpdatePayload } from '../utils/groupPayload'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { useActiveChurch } from '../composables/useActiveChurch'
+
+// Explicit projections — select only what the cards and the detail modal render.
+const GROUP_COLUMNS = 'id, name, type, church_id, color_slot'
+const GROUP_MEMBER_COLUMNS = 'id, member_id, members!inner(first_name, last_name, member_of)'
 
 // RBAC (presentation; RLS enforces). canManageSmallGroups → create/edit/delete small
 // groups. Membership management is group-specific: the Finance ministry is Pastor-only.
@@ -581,45 +586,52 @@ async function handleGroupFormSubmit() {
 
   if (groupFormModal.value.mode === 'create') {
     const payload = buildSmallGroupCreatePayload(groupForm.value, myChurchId.value)
-    const { data, error: insertError } = await supabase
-      .from('groups')
-      .insert(payload)
-      .select('id, name, type, church_id, color_slot')
-      .single()
+    const result = await write(
+      supabase.from('groups').insert(payload),
+      {
+        columns: GROUP_COLUMNS,
+        messages: { blocked: 'That group could not be created. It may belong to another church.' },
+      }
+    )
 
     formSaving.value = false
-    if (insertError) {
-      formError.value = insertError.message
+    if (!result.ok) {
+      formError.value = result.message
       showToast('Failed to create group.', 'error')
       return
     }
-    groups.value = [{ ...data, member_count: 0 }, ...groups.value]
+    groups.value = [{ ...result.rows[0], member_count: 0 }, ...groups.value]
     closeGroupFormModal()
     showToast('Small group created successfully.')
   } else {
     const payload = buildSmallGroupUpdatePayload(groupForm.value)
-    const { data, error: updateError } = await supabase
-      .from('groups')
-      .update(payload)
-      .eq('id', groupFormModal.value.groupId)
-      .eq('church_id', myChurchId.value)
-      .eq('type', 'Small Group')
-      .select('id, name, type, church_id, color_slot')
-      .single()
+    const result = await write(
+      supabase
+        .from('groups')
+        .update(payload)
+        .eq('id', groupFormModal.value.groupId)
+        .eq('church_id', myChurchId.value)
+        .eq('type', 'Small Group'),
+      {
+        columns: GROUP_COLUMNS,
+        messages: { blocked: 'That group could not be updated. It may belong to another church.' },
+      }
+    )
 
     formSaving.value = false
-    if (updateError) {
-      formError.value = updateError.message
+    if (!result.ok) {
+      formError.value = result.message
       showToast('Failed to update group.', 'error')
       return
     }
-    const idx = groups.value.findIndex(g => g.id === data.id)
+    const saved = result.rows[0]
+    const idx = groups.value.findIndex(g => g.id === saved.id)
     if (idx !== -1) {
-      groups.value.splice(idx, 1, { ...data, member_count: groups.value[idx].member_count })
+      groups.value.splice(idx, 1, { ...saved, member_count: groups.value[idx].member_count })
     }
     // Sync detail modal if open
-    if (detailModal.open && detailModal.group?.id === data.id) {
-      detailModal.group = { ...detailModal.group, ...data }
+    if (detailModal.open && detailModal.group?.id === saved.id) {
+      detailModal.group = { ...detailModal.group, ...saved }
     }
     closeGroupFormModal()
     showToast('Small group updated successfully.')
@@ -672,16 +684,21 @@ async function handleDeleteGroup() {
   formError.value = ''
   formSaving.value = true
 
-  const { error: delError } = await supabase
-    .from('groups')
-    .delete()
-    .eq('id', deleteModal.group.id)
-    .eq('church_id', myChurchId.value)
-    .eq('type', 'Small Group')
+  // Previously issued with no `.select()`, so a delete RLS refused came back as
+  // success and the group vanished from the list until the next reload.
+  const result = await write(
+    supabase
+      .from('groups')
+      .delete()
+      .eq('id', deleteModal.group.id)
+      .eq('church_id', myChurchId.value)
+      .eq('type', 'Small Group'),
+    { columns: 'id', messages: { blocked: 'That group could not be deleted. It may belong to another church.' } }
+  )
 
   formSaving.value = false
-  if (delError) {
-    formError.value = delError.message
+  if (!result.ok) {
+    formError.value = result.message
     showToast('Failed to delete group.', 'error')
     return
   }
@@ -701,18 +718,23 @@ async function addMemberToGroup(member) {
     !targetGroup ||
     !allMembers.value.some(candidate => candidate.id === member.id)
   ) return
-  const { data, error: insertError } = await supabase
-    .from('group_members')
-    .insert({ group_id: detailModal.group.id, member_id: member.id })
-    .select('id, member_id, members!inner(first_name, last_name, member_of)')
-    .single()
+  const result = await write(
+    supabase.from('group_members').insert({ group_id: detailModal.group.id, member_id: member.id }),
+    {
+      columns: GROUP_MEMBER_COLUMNS,
+      messages: {
+        blocked: 'That member could not be added to this group.',
+        conflict: 'That member is already in this group.',
+      },
+    }
+  )
 
-  if (insertError) {
-    showToast(`Failed to add member: ${insertError.message}`, 'error')
+  if (!result.ok) {
+    showToast(result.message, 'error')
     return
   }
 
-  detailModal.members.push({ ...data, confirmRemove: false })
+  detailModal.members.push({ ...result.rows[0], confirmRemove: false })
   // Update count in card
   const g = groups.value.find(g => g.id === detailModal.group.id)
   if (g) g.member_count++
@@ -721,15 +743,20 @@ async function addMemberToGroup(member) {
 }
 
 async function removeMemberFromGroup(gm) {
-  const { error: delError } = await supabase
-    .from('group_members')
-    .delete()
-    .eq('id', gm.id)
-    .eq('group_id', detailModal.group.id)
-    .eq('member_id', gm.member_id)
+  // Also previously issued with no `.select()` — a refused removal reported
+  // success and dropped the member from the modal list.
+  const result = await write(
+    supabase
+      .from('group_members')
+      .delete()
+      .eq('id', gm.id)
+      .eq('group_id', detailModal.group.id)
+      .eq('member_id', gm.member_id),
+    { columns: 'id', messages: { blocked: 'That member could not be removed from this group.' } }
+  )
 
-  if (delError) {
-    showToast(`Failed to remove member: ${delError.message}`, 'error')
+  if (!result.ok) {
+    showToast(result.message, 'error')
     return
   }
 

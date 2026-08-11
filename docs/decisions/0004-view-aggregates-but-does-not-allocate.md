@@ -57,9 +57,9 @@ fire on every new object in `public`, and `GRANT` is additive.
 
 **It casts `amount::numeric` before summing**, which removes the accumulation error from adding
 hundreds of `real` values. It does **not** recover precision already lost at write time — see
-[DEFECTS.md](../DEFECTS.md) D1, which is still the actual fix.
+[issue #27](https://github.com/aesir19/church-sysyem/issues/27), which is still the actual fix.
 
-**It groups the whole `collections` table on every page load, unindexed** — [DEFECTS.md](../DEFECTS.md) D2.
+**It groups the whole `collections` table on every page load, unindexed** — [issue #28](https://github.com/aesir19/church-sysyem/issues/28).
 
 ---
 
@@ -95,4 +95,4 @@ above 40 %. The label describes the rule, not one month's rounding.
 
 Two report lines are computed but can never be non-zero, because nothing can write to them —
 `others` (designated giving) and the per-service personal draw. Both are hidden while zero rather
-than shown as a permanent ₱0.00. See [BACKLOG.md](../BACKLOG.md) B25.
+than shown as a permanent ₱0.00. See [issue #50](https://github.com/aesir19/church-sysyem/issues/50).

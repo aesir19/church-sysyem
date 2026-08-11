@@ -129,6 +129,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '../lib/supabase'
+import { write } from '../lib/data/write'
 import FundsTabs from '../components/FundsTabs.vue'
 import { defaultMonthKey, getMonthRange, monthKeyFromDate } from '../utils/expensesMonth'
 import { useActiveChurch } from '../composables/useActiveChurch'
@@ -274,25 +275,28 @@ async function handleSubmit() {
     created_by: currentUserId.value || null,
   }
 
-  const { data, error } = await supabase
-    .from('expenses')
-    .insert(payload)
-    .select(EXPENSE_COLUMNS)
-    .single()
+  const result = await write(
+    supabase.from('expenses').insert(payload),
+    {
+      columns: EXPENSE_COLUMNS,
+      messages: { blocked: 'That expense could not be saved. It may belong to another church.' },
+    }
+  )
 
   saving.value = false
 
-  if (error) {
-    formError.value = error.message
+  if (!result.ok) {
+    formError.value = result.message
     return
   }
 
-  const insertedMonth = monthKeyFromDate(data.spent_on)
+  const inserted = result.rows[0]
+  const insertedMonth = monthKeyFromDate(inserted.spent_on)
   if (insertedMonth === selectedMonth.value) {
-    entries.value.unshift(data)
+    entries.value.unshift(inserted)
   }
 
-  formSuccess.value = `Added expense: ${data.description}.`
+  formSuccess.value = `Added expense: ${inserted.description}.`
   form.value.amount = null
   form.value.notes = ''
 
