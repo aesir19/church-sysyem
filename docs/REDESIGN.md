@@ -14,7 +14,7 @@ with the original brief, the correction is flagged inline.
 | | |
 |---|---|
 | Branch | `redesign` |
-| Phase | **Phase 0 built (2026-08-11).** §0.1–§0.5 landed; §0.6 was already done. **Phase 1 is gated on the §0.5 step-3 sign-off**, which is a human call on the style-guide route — see below. |
+| Phase | **Phase 1 built (2026-08-11)** — 1a and 1b together. Phase 0 landed §0.1–§0.5 the same day. Note that Phase 1 was built **without** the §0.5 step-3 mechanics sign-off, at the owner's instruction; that sign-off and the step-4 rebrand are still outstanding and are now the gate on Stage 2, not on Phase 1. |
 | Mockups | Leaving the repo — see [Amendment 16](#amendment-16--the-mockups-leave-the-repo) |
 | Scope | Existing features only. [Amendment 9](#amendment-9--scope-is-the-existing-feature-set-not-the-mockups-feature-set) is the boundary. |
 
@@ -26,11 +26,10 @@ TableSortHeader, the local icon set), `AppLogo.vue` and a real favicon, the
 `theme`/`toast`/`sortState` utils and composables, and the dev-only style-guide route at
 **`/dev/style-guide`** — which is where the sign-off happens.
 
-**Not done, on purpose, because they belong to later phases:** no view was migrated; `<ToastHost />`
-is *not* yet mounted in `App.vue` (Phase 1b owns that, and mounting it early would add entry-chunk
-bytes for nothing); the sidebar still injects its icons with `v-html` (Stage 1b); the Lighthouse
-accessibility threshold is still 0.85 (Amendment 6 raises it at the *end* of Phase 1 — measured
-headroom exists already: login 0.91, checkin 1.0, 404 1.0).
+**Not done in Phase 0, on purpose, because they belonged to later phases** — and **all four are now
+done, in Phase 1** (see below): no view was migrated; `<ToastHost />` was not yet mounted in
+`App.vue`; the sidebar still injected its icons with `v-html`; the Lighthouse accessibility
+threshold was still 0.85 against measured headroom of login 0.91, checkin 1.0, 404 1.0.
 
 Two decisions were made during the build that amend records above, both written up where they
 belong rather than only here:
@@ -43,6 +42,49 @@ belong rather than only here:
   not yet paid for.** Nothing in a production route imports `Modal.vue` yet, so `reka-ui` is absent
   from the production build entirely. Its real weight lands in Phase 1b and must be diffed then.
   Full measurement table in ADR-0011.
+
+### What Phase 1 landed
+
+**1a — the auth family.** `LoginView`, `SetPasswordView`, `AccountPendingView` and `NotFoundView`
+now share one `AuthShell.vue` (gradient ground, card, mark, heading, footer note) and consume
+`Card` / `Button` / `Input` / `Spinner` / `AppLogo` / the new `ui/Alert.vue`. Three copies of the
+chrome became one; the auth family's own CSS fell from 6,681 B across four chunks to 913 B, with
+the remainder now shared. `Input.vue` gained `inheritAttrs: false` plus `v-bind="$attrs"` on the
+control — without it `autocomplete` and `minlength` were landing on the wrapper `<div>`, where the
+browser ignores them and a password manager quietly stops filling the form.
+
+**1b — the shell.** `AppSidebar` is on tokens: the `v-html` icon injection is gone (real `<path>`
+elements from the frozen `iconPaths.js` constant, closing the latent sink SECURITY.md §4.1 flags),
+the active-item background is `var(--color-accent)` rather than the stray Tailwind `#3b82f6`, all
+nine nav slots ship with Overview / Statistics / What's next rendered as **disabled buttons** badged
+"Soon" — a disabled `<button>`, not an `<a aria-disabled>`, which a keyboard user can still follow
+— and the theme toggle sits in the footer where the design puts it. `DashboardLayout` gained the
+mobile drawer (Amendment 12; no bottom tab bar) — with focus moved into the drawer on open,
+returned to the trigger on close, and everything behind it marked `inert`, which is a real focus
+trap from the platform rather than the hand-rolled Tab cycle ADR-0011 exists to avoid. `<ToastHost />` is mounted in `App.vue`, and the
+style-guide route's own host was removed so the module-scoped queue is not rendered twice.
+`MinistrySmallGroupView`'s delete-confirmation is the first `ui/Modal` call site.
+
+**D12 is fixed at the root.** `src/utils/sessionCleanup.js` holds the one key list — cleared:
+`udfc.myChurchName`, `udfc.myUserName`; deliberately surviving: `udfc.checkin.recorded`,
+`udfc.theme` — and `src/composables/useSession.js` is the one `signOut()`. All three call sites
+(sidebar, `DashboardView`, `AccountPendingView`) go through it. Deleting DashboardView's duplicate
+header, which is *why* there were two, remains Stage 2 work.
+
+**Measured, not assumed.** `CheckinView-*.js` is 6,675 B before and after — byte-identical with
+`reka-ui` genuinely in the production build for the first time. The Dialog costs +9,961 B gzip on
+the one lazy chunk that imports it; `ToastHost` costs +2,645 B gzip on the shared entry chunk that
+every `/checkin` visitor downloads. Full table in
+[ADR-0011](decisions/0011-headless-primitives-for-accessibility.md).
+
+**The gate moved to 0.9 and the score cleared it with room:** Lighthouse accessibility is **1.00**
+on `/login`, `/checkin` and the 404 (from 0.91 / 1.0 / 1.0), performance 1.00 on all three.
+
+Not verified visually: **dark mode**. Lighthouse forces its own `prefers-color-scheme` during
+emulation, so the screenshot path this repo uses for rendered pixels cannot show the dark palette.
+The mechanism is verified another way — the `data-theme` blocks are present in the built CSS and
+`theme.js` is unit-tested — but nobody has *looked* at a dark page yet. Do that at the §0.5
+sign-off, where both themes are signed off together.
 
 ### Open decisions blocking Phase 0 — both now settled
 

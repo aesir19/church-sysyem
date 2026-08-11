@@ -114,6 +114,33 @@ are never emitted, and `/assets/` is immutable-cached so it is one download per 
 If that trade is later judged wrong, the cheapest reversal is pointing `--font-sans` at the system
 stack — one token, no other file.
 
+### The dependency, paid for — Phase 1b, 2026-08-11
+
+The first production call site landed: `MinistrySmallGroupView`'s delete-confirmation dialog, the
+simplest modal in the inventory, chosen so the focus trap could be proved somewhere cheap. This is
+the build the section above deferred to.
+
+| Artifact | Before | After | Δ raw | Δ gzip |
+|---|---|---|---|---|
+| `CheckinView-*.js` | 6,675 B | **6,675 B** | **0** | 0 |
+| `MinistrySmallGroupView-*.js` | 20,260 B | 51,429 B | +31,169 B | +9,961 B |
+| `index-*.js` (shared entry) | 443,137 B | 453,913 B | +10,776 B | +4,228 B |
+
+**The gate holds a second time, and this time it means something**: `reka-ui` is now genuinely in
+the production build, and `CheckinView-*.js` is still byte-identical. The library is confined to
+the one lazy chunk that imports `Modal.vue`, exactly as the router's lazy loading intends.
+
+**≈10 KB gzip is what the Dialog costs**, on a chunk only signed-in staff on a dashboard route ever
+fetch. That is the number to weigh before the second and third call sites — it does not repeat per
+modal (the module is shared), so migrating the remaining six call sites in Stages 2–5 adds their
+markup and nothing else.
+
+**The entry chunk's +4.2 KB gzip is NOT this dependency.** It is `<ToastHost />` mounting in
+`App.vue`, which pulls Vue's `TransitionGroup` runtime into the shared chunk — measured separately
+by building with the host removed: 138,260 B gzip without it against 140,905 B with. Every
+`/checkin` visitor pays it. It is the cost this ADR's "Reka UI's Toast was declined" decision was
+weighing, and declining that library there is why the number is 2.6 KB rather than another 10.
+
 ## Consequences
 
 - CLAUDE.md's opening line ("no UI kit") is narrowed to point here. It is no longer a total

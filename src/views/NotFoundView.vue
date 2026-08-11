@@ -8,64 +8,60 @@
  * posters. A mistyped, truncated, or retired QR link is now the most likely way
  * anyone reaches an unknown path, and a blank page gives an attendee standing in
  * a service no idea whether the link is wrong or the site is broken.
+ *
+ * Migrated with the auth family (REDESIGN.md Phase 1a), which is where it
+ * belongs visually: it is the fourth signed-out page, and it is reached from a
+ * phone in a pew far more often than from a desk.
  */
+import AuthShell from '../components/AuthShell.vue'
 </script>
 
 <template>
-  <main class="not-found-page">
-    <div class="not-found-card">
-      <h1>Page not found</h1>
-      <p class="detail">
-        The link you followed doesn't lead anywhere. If you scanned a QR code to check in,
-        scan it again or ask a volunteer for help.
-      </p>
-      <router-link class="btn-primary" to="/login">Go to sign in</router-link>
-    </div>
-  </main>
+  <AuthShell
+    centered
+    title="Page not found"
+    subtitle="The link you followed doesn't lead anywhere. If you scanned a QR code to check in, scan it again or ask a volunteer for help."
+  >
+    <router-link class="not-found-action" to="/login">Go to sign in</router-link>
+
+    <!-- The shell's default footer names the staff dashboard. Whoever is
+         reading this page most likely scanned a poster, so it says something
+         useful to them instead. -->
+    <template #footer>
+      <p>United Door of Faith Church</p>
+    </template>
+  </AuthShell>
 </template>
 
 <style scoped>
-.not-found-page {
-  min-height: 100vh;
-  display: flex;
+/**
+ * A link, not a `ui/Button`. It navigates, so it has to be an <a> — and
+ * Button.vue renders a <button>, which would need a click handler and a
+ * router push to do what an href does natively. Styled to match the primary
+ * variant deliberately, since it is the same affordance.
+ */
+.not-found-action {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 24px 16px;
-  background: #f8fafc;
-}
-
-.not-found-card {
-  width: 100%;
-  max-width: 420px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 32px 24px;
-  text-align: center;
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
-}
-
-h1 {
-  margin: 0 0 12px;
-  font-size: 1.375rem;
-  color: #1e293b;
-}
-
-.detail {
-  margin: 0 0 24px;
-  font-size: 0.9375rem;
-  line-height: 1.6;
-  color: #64748b;
-}
-
-.btn-primary {
-  display: inline-block;
-  padding: 12px 22px;
-  font-size: 0.9375rem;
-  font-weight: 600;
-  color: #ffffff;
-  background: #1a56db;
-  border-radius: 8px;
+  min-height: 44px;
+  padding: 0 var(--space-6);
+  background: var(--color-accent);
+  color: var(--color-text-on-accent);
+  border-radius: var(--radius-md);
+  font-size: var(--text-base);
+  font-weight: var(--font-weight-semibold);
   text-decoration: none;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.not-found-action:hover {
+  background: var(--color-accent-hover);
+}
+
+.not-found-action:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: var(--shadow-focus-ring);
 }
 </style>

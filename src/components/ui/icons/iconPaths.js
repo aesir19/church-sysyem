@@ -55,6 +55,57 @@ export const ICON_PATHS = Object.freeze({
 
   search: Object.freeze(['M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0', 'M21 21l-4.35-4.35']),
 
+  clock: Object.freeze(['M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0', 'M12 6v6l4 2']),
+
+  /* ── The sidebar's nav set ────────────────────────────────────────────────
+   * Carried across from AppSidebar's `v-html` strings unchanged, so retiring
+   * that sink (SECURITY.md §4.1) is a deduplication and not a restyle: the
+   * icons a user has been looking at are the same ones. */
+
+  users: Object.freeze([
+    'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2',
+    'M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
+    'M23 21v-2a4 4 0 0 0-3-3.87',
+    'M16 3.13a4 4 0 0 1 0 7.75',
+  ]),
+
+  layers: Object.freeze(['M12 2 2 7l10 5 10-5-10-5z', 'M2 17l10 5 10-5', 'M2 12l10 5 10-5']),
+
+  'check-square': Object.freeze([
+    'M9 11l3 3L22 4',
+    'M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',
+  ]),
+
+  'dollar-sign': Object.freeze([
+    'M12 1v22',
+    'M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6',
+  ]),
+
+  receipt: Object.freeze(['M6 2h12v20l-3-2-3 2-3-2-3 2V2z', 'M9.5 7.5h5', 'M9.5 12h5']),
+
+  'pie-chart': Object.freeze(['M21.21 15.89A10 10 0 1 1 8 2.83', 'M22 12A10 10 0 0 0 12 2v10z']),
+
+  menu: Object.freeze(['M3 6h18', 'M3 12h18', 'M3 18h18']),
+
+  'log-out': Object.freeze([
+    'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4',
+    'M16 17l5-5-5-5',
+    'M21 12H9',
+  ]),
+
+  user: Object.freeze([
+    'M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',
+    'M8 14s1.5 2 4 2 4-2 4-2',
+    'M9 9h.01',
+    'M15 9h.01',
+  ]),
+
+  /* The three nav slots that carry a "Soon" badge and no route (Amendment 17):
+   * the IA lands once and the sidebar stops churning as those screens arrive. */
+  home: Object.freeze(['M3 10.5 12 3l9 7.5', 'M5.5 9.5V20h13V9.5']),
+  'bar-chart': Object.freeze(['M4 20V11', 'M10 20V4', 'M16 20v-6', 'M3 20h18']),
+  flag: Object.freeze(['M4 21V4', 'M4 4h13l-2.5 4L17 12H4']),
+
   sun: Object.freeze([
     'M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
     'M12 2v2',

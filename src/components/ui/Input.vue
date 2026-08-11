@@ -31,6 +31,17 @@ const props = defineProps({
 
 const model = defineModel({ type: [String, Number], default: '' })
 
+/**
+ * Attributes belong on the control, not on the wrapper `<div>`.
+ *
+ * Without this, `autocomplete="current-password"` and `minlength="8"` land on
+ * the field's container, where the browser ignores them silently — no warning,
+ * no visual difference, and a password manager that quietly stops filling the
+ * form. Every prop this component does not name explicitly is passed straight
+ * through to the input/textarea/select below.
+ */
+defineOptions({ inheritAttrs: false })
+
 const uid = useId()
 const controlId = computed(() => `field-${uid}`)
 const hintId = computed(() => `${controlId.value}-hint`)
@@ -67,6 +78,7 @@ const describedBy = computed(() => {
       v-if="as === 'textarea'"
       :id="controlId"
       v-model="model"
+      v-bind="$attrs"
       class="field-control"
       :required="required"
       :disabled="disabled"
@@ -78,6 +90,7 @@ const describedBy = computed(() => {
       v-else-if="as === 'select'"
       :id="controlId"
       v-model="model"
+      v-bind="$attrs"
       class="field-control"
       :required="required"
       :disabled="disabled"
@@ -90,6 +103,7 @@ const describedBy = computed(() => {
       v-else
       :id="controlId"
       v-model="model"
+      v-bind="$attrs"
       class="field-control"
       :type="type"
       :required="required"

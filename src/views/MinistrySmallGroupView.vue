@@ -263,34 +263,27 @@
     </div>
 
     <!-- ─── Delete Group Confirmation Modal ─── -->
-    <div v-if="deleteModal.open" class="modal-overlay" @click.self="closeDeleteModal">
-      <div class="modal" role="dialog" aria-modal="true">
-        <div class="modal-header">
-          <h3>Delete Small Group</h3>
-          <button @click="closeDeleteModal" class="btn-close" aria-label="Close">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-        <div class="modal-body">
-          <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
-          <h4 class="archive-heading">Delete "{{ deleteModal.group?.name }}"?</h4>
-          <p class="archive-description">
-            This will permanently remove the small group and all its member associations. Individual member records will not be affected.
-          </p>
-        </div>
-        <div class="modal-footer">
-          <div class="modal-footer-left"></div>
-          <div class="modal-footer-right">
-            <button type="button" class="btn-secondary" @click="closeDeleteModal" :disabled="formSaving">Cancel</button>
-            <button type="button" class="btn-danger" @click="handleDeleteGroup" :disabled="formSaving">
-              {{ formSaving ? 'Deleting…' : 'Confirm Delete' }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- Every dismissal path — backdrop, Escape, the close button — comes back
+         through `closeDeleteModal`, so none of them can leave `deleteModal.group`
+         or a stale error behind. -->
+    <Modal
+      :open="deleteModal.open"
+      title="Delete Small Group"
+      @update:open="(value) => { if (!value) closeDeleteModal() }"
+    >
+      <Alert v-if="formError" tone="error" class="delete-error">{{ formError }}</Alert>
+      <h4 class="archive-heading">Delete "{{ deleteModal.group?.name }}"?</h4>
+      <p class="archive-description">
+        This will permanently remove the small group and all its member associations. Individual member records will not be affected.
+      </p>
+
+      <template #footer>
+        <Button variant="secondary" :disabled="formSaving" @click="closeDeleteModal">Cancel</Button>
+        <Button variant="danger" :loading="formSaving" @click="handleDeleteGroup">
+          {{ formSaving ? 'Deleting…' : 'Confirm Delete' }}
+        </Button>
+      </template>
+    </Modal>
 
     <!-- ─── Create / Edit Group Modal ─── -->
     <div v-if="groupFormModal.open" class="modal-overlay" @click.self="closeGroupFormModal">
@@ -340,6 +333,14 @@ import { getGroupAccentStyle } from '../utils/groupPresentation'
 import { buildSmallGroupCreatePayload, buildSmallGroupUpdatePayload } from '../utils/groupPayload'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { useActiveChurch } from '../composables/useActiveChurch'
+// The first real call site of ui/Modal (REDESIGN.md Phase 1b). Deliberately the
+// simplest modal in the inventory — title, warning, two buttons — so that the
+// focus trap, Escape and return-focus are proved end-to-end here before
+// Modal.vue is applied to the form and detail dialogs in Stages 2–5. The other
+// two modals in this file stay hand-rolled until Stage 3.
+import Modal from '../components/ui/Modal.vue'
+import Alert from '../components/ui/Alert.vue'
+import Button from '../components/ui/Button.vue'
 
 // Explicit projections — select only what the cards and the detail modal render.
 const GROUP_COLUMNS = 'id, name, type, church_id, color_slot'
@@ -770,7 +771,10 @@ async function removeMemberFromGroup(gm) {
 
 function handleEsc(e) {
   if (e.key !== 'Escape') return
-  if (deleteModal.open) { closeDeleteModal(); return }
+  // The delete dialog is deliberately absent from this chain: it is a
+  // ui/Modal now, and Reka UI's Dialog owns its own Escape. Handling it here
+  // as well would close the dialog underneath it in the same keypress.
+  if (deleteModal.open) return
   if (groupFormModal.value.open) { closeGroupFormModal(); return }
   if (detailModal.open) { closeDetailModal(); return }
 }
@@ -1612,19 +1616,25 @@ onUnmounted(() => {
   border-top: 1px solid #e2e8f0;
 }
 
-/* Archive / delete confirmation */
+/* Delete confirmation. On tokens because this dialog is a ui/Modal now — the
+ * rest of this file is Stage 3. These rules still reach the dialog's content
+ * even though it is Teleported: slot content is compiled in THIS component's
+ * scope and carries its scope attribute wherever it lands. */
+.delete-error {
+  margin-bottom: var(--space-4);
+}
+
 .archive-heading {
-  font-size: 1rem;
-  color: #1e293b;
-  font-weight: 700;
-  margin-bottom: 0.4rem;
+  font-size: var(--text-lg);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-bold);
+  margin-bottom: var(--space-2);
 }
 
 .archive-description {
-  font-size: 0.88rem;
-  color: #64748b;
-  line-height: 1.45;
-  margin-bottom: 1rem;
+  font-size: var(--text-base);
+  color: var(--color-text-secondary);
+  line-height: var(--leading-normal);
 }
 
 /* Toast Notification */

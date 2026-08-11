@@ -35,7 +35,7 @@ import Modal from '../../components/ui/Modal.vue'
 import Spinner from '../../components/ui/Spinner.vue'
 import TableSortHeader from '../../components/ui/TableSortHeader.vue'
 import Toast from '../../components/ui/Toast.vue'
-import ToastHost from '../../components/ui/ToastHost.vue'
+import Alert from '../../components/ui/Alert.vue'
 
 const { theme, toggleTheme } = useTheme()
 const { showToast } = useToast()
@@ -57,6 +57,7 @@ const ROWS = [
 
 const VARIANTS = ['primary', 'secondary', 'tertiary', 'danger', 'ghost']
 const BADGES = ['neutral', 'accent', 'success', 'warning', 'danger']
+const TONES = ['info', 'success', 'warning', 'error']
 
 const SEMANTIC_TOKENS = [
   '--color-bg-page',
@@ -79,7 +80,9 @@ const SEMANTIC_TOKENS = [
 
 <template>
   <div class="guide">
-    <ToastHost />
+    <!-- No <ToastHost /> here. App.vue mounts the one host for the whole app
+         now (Phase 1b), and the queue is module-scoped — a second host would
+         render every toast twice on this route only. -->
 
     <header class="guide-header">
       <div class="guide-title">
@@ -148,6 +151,19 @@ const SEMANTIC_TOKENS = [
       <h2>Badges</h2>
       <div class="row">
         <Badge v-for="variant in BADGES" :key="variant" :variant="variant">{{ variant }}</Badge>
+      </div>
+    </section>
+
+    <section>
+      <h2>Alerts</h2>
+      <p class="muted">
+        The standing, in-page half of the state vocabulary. A toast reports what just
+        happened and leaves; an alert reports the state the page is in and stays.
+      </p>
+      <div class="stack">
+        <Alert v-for="tone in TONES" :key="tone" :tone="tone">
+          {{ tone }} — a message classified by the data module, never `error.message`.
+        </Alert>
       </div>
     </section>
 
@@ -350,6 +366,13 @@ section {
 
 .row.narrow {
   max-width: 280px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 520px;
 }
 
 .row.cards > * {

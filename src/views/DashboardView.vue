@@ -325,8 +325,6 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { supabase } from '../lib/supabase'
 import {
   listDirectory,
   listRecords,
@@ -338,6 +336,7 @@ import { isMemberFormDirty, snapshotMemberForm } from '../utils/memberFormDirty'
 import { buildMemberPayload } from '../utils/memberPayload'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { useActiveChurch } from '../composables/useActiveChurch'
+import { useSession } from '../composables/useSession'
 
 // RBAC. canSeeMemberDetail → the full PII table + clickable detail. Everyone else
 // (baseline, Head Pastor) gets the safe name/group DIRECTORY via directory_search
@@ -351,7 +350,11 @@ const directoryMode = computed(() => !canSeeMemberDetail.value)
 // filtered by this id explicitly, since RLS returns all churches to those roles.
 const { activeChurchId, activeChurchName, ensureLoaded } = useActiveChurch()
 
-const router = useRouter()
+// D12: the one sign-out. This view used to clear only the church-name cache
+// while DashboardLayout cleared that AND the user name, so which keys survived
+// depended on which of the two Sign Out buttons was pressed. Deleting this
+// view's duplicate header — the second reason there are two — is Stage 2 work.
+const { signOut } = useSession()
 
 const members = ref([])
 const loading = ref(true)
@@ -408,15 +411,10 @@ function showToast(message, type = 'success') {
 // The column list, the archived-row filter and the church scoping all live in
 // src/lib/data/members.js now — this view names intent, not tables.
 
-// localStorage cache for the user's church name — lets the page title render
-// pre-fetch on cold open. docs/ARCHITECTURE.md §12.5 #5.
-const CHURCH_NAME_KEY = 'udfc.myChurchName'
-function writeCachedChurchName(name) {
-  try {
-    if (name) localStorage.setItem(CHURCH_NAME_KEY, name)
-    else localStorage.removeItem(CHURCH_NAME_KEY)
-  } catch { /* localStorage unavailable (e.g. private mode) — no-op */ }
-}
+// The localStorage church-name cache is WRITTEN by useActiveChurch.js and
+// CLEARED by sessionCleanup.js. This view's own copy of both halves is gone:
+// the write was already redundant, and the clear is what D12 consolidated.
+// docs/ARCHITECTURE.md §12.5 #5.
 
 // Aliases to the shared active-church state so the rest of the view is unchanged.
 const myChurchId = activeChurchId
@@ -709,11 +707,9 @@ function handleEsc(e) {
 }
 
 async function handleLogout() {
-  // Clear the localStorage church-name cache so a different user signing in
-  // on the same browser doesn't briefly see the previous church's title.
-  writeCachedChurchName(null)
-  await supabase.auth.signOut()
-  router.push('/login')
+  // The church-name cache is cleared by sessionCleanup.js's key list, along
+  // with the user name this path used to leave behind.
+  await signOut()
 }
 
 // Re-fetch whenever the active church changes (SuperAdmin / Head Pastor switching
