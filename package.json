@@ -8,6 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "lint": "eslint src tests",
+    "lint:fix": "eslint src tests --fix",
     "lighthouse": "lhci autorun",
     "prisma:check:pull": "node scripts/prisma/check-env.js pull",
     "prisma:check:migrate": "node scripts/prisma/check-env.js migrate",
@@ -33,9 +35,13 @@
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@lhci/cli": "^0.15.1",
     "@vitejs/plugin-vue": "^5.2.3",
     "dotenv": "^16.6.1",
+    "eslint": "^10.8.1",
+    "eslint-plugin-vue": "^10.10.0",
+    "globals": "^17.9.0",
     "prisma": "^6.16.0",
     "vite": "^6.3.5",
     "vitest": "^4.1.9"

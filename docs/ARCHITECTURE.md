@@ -6,7 +6,7 @@ structure, not policy and not plans.
 - Rules that bind a change → [CLAUDE.md](../CLAUDE.md)
 - *Why* a load-bearing choice was made → [decisions/](decisions/)
 - Threat model and security findings → [SECURITY.md](SECURITY.md)
-- Bugs → [DEFECTS.md](DEFECTS.md) · Deferred features → [BACKLOG.md](BACKLOG.md) · Running it → [OPERATIONS.md](OPERATIONS.md)
+- Bugs and deferred features → the [issue tracker](https://github.com/aesir19/church-sysyem/issues) · Running it → [OPERATIONS.md](OPERATIONS.md)
 - Tables, columns, policies, grants, functions → `prisma/schema.prisma` and `prisma/migrations/`,
   which are the source of truth. This document does not transcribe them.
 
@@ -43,93 +43,45 @@ schema/migration tooling run from Node; it never executes in the browser.
 | Users | Authorized church staff; one user maps to exactly one church |
 | Hosting | Netlify (static) + Supabase (free tiers) |
 
-## 2. Stack
-
-| Layer | Choice |
-|---|---|
-| UI | Vue 3, Composition API, `<script setup>` |
-| Routing | Vue Router 4 |
-| Build | Vite 6 |
-| Tests | Vitest (`environment: 'node'`) |
-| Backend SDK | `@supabase/supabase-js` v2 |
-| Schema tooling | Prisma CLI + migrations (Node only) |
-| Database | Supabase Postgres + Auth |
-| Modules | ESM |
-
-Deliberately absent: TypeScript, a linter, a state library, a UI component kit, a data-access
-layer. Versions live in [package.json](../package.json) — not repeated here.
-
-## 3. Where things live
-
-Directory purposes, not a file inventory (`ls src/` gives you that).
-
-| Path | Holds |
-|---|---|
-| `src/views/` | One SFC per screen. Each **owns its own Supabase queries inline** — there is no API layer (see [DEFECTS.md](DEFECTS.md) D16) |
-| `src/layouts/` | `DashboardLayout.vue` — sidebar shell wrapping every `/dashboard/*` child |
-| `src/components/` | `AppSidebar.vue` (nav), `FundsTabs.vue` (finance-gated Funds sub-nav) |
-| `src/composables/` | `useFinanceMember.js` — resolves the caller's Finance Team membership |
-| `src/utils/` | **Pure functions, no I/O.** Every file here has a matching test in `tests/utils/` |
-| `src/lib/` | `supabase.js` — the single client instance |
-| `src/router/` | Routes plus the global `beforeEach` guard |
-| `prisma/` | `schema.prisma` and numbered SQL migrations, each with an operational `rollback.sql` |
-| `scripts/prisma/` | Env preflight checks that gate the Prisma npm scripts |
-| `scripts/sql/` | `capture-security-state.sql` — read-only audit of live policies, grants, functions, views |
-| `tests/` | Vitest suites, mirroring `src/` |
-
-The `src/utils/` split is structural, not stylistic: it is the only reason any business logic in
-this project is testable without mounting a view.
-
 ## 4. Frontend
 
 ### 4.1 Bootstrap
 
 [main.js](../src/main.js) mounts `App.vue` (a bare `<router-view />`) with the router and global
-styles. `app.config.errorHandler` is **unset** — see [OPERATIONS.md](OPERATIONS.md) O2.
-
-### 4.2 Routes
-
-Defined in [src/router/index.js](../src/router/index.js).
-
-| Path | Name | Component | Meta |
-|---|---|---|---|
-| `/` | — | redirect → `/login` | — |
-| `/login` | `Login` | `LoginView` | — |
-| `/set-password` | `SetPassword` | `SetPasswordView` | `requiresAuth` |
-| `/account-pending` | `AccountPending` | `AccountPendingView` | `requiresAuth` |
-| `/dashboard` | — | `DashboardLayout` | `requiresAuth` |
-| `/dashboard` (index) | — | redirect → `/dashboard/members` | inherited |
-| `/dashboard/members` | `Members` | `DashboardView` | inherited |
-| `/dashboard/ministry` | `Ministry` | `MinistrySmallGroupView` | inherited |
-| `/dashboard/funds` | — | redirect → `/dashboard/funds/reports` | inherited |
-| `/dashboard/funds/reports` | `ChurchFunds` | `ChurchFundsView` | inherited |
-| `/dashboard/funds/collections` | `Collections` | `CollectionsInputView` | `+ requiresFinance` |
-| `/dashboard/funds/expenses` | `Expenses` | `ExpensesInputView` | `+ requiresFinance` |
-
-All components are **eagerly imported**; there is no lazy loading and no catch-all route
-([DEFECTS.md](DEFECTS.md) D9, D13).
+styles. `Sentry.init({ app })` installs `app.config.errorHandler`, but **only when
+`VITE_SENTRY_DSN` is set** — Vite inlines that at build time, so a DSN-less build tree-shakes
+`@sentry/vue` out entirely and has no global handler at all. See
+[ADR-0008](decisions/0008-sentry-alongside-in-stack-sink.md).
 
 ### 4.3 The navigation guard
 
-`router.beforeEach` runs on every navigation and can issue up to three sequential queries:
+`router.beforeEach` runs on every navigation and can issue up to three sequential queries.
+
+**`/checkin` short-circuits before any of them.** It is reached by attendees with no account at
+all, so the public page never costs an auth round-trip, and a staff member who scans the QR on
+their own phone is not bounced to the dashboard by the signed-in redirect. See
+[ADR-0007](decisions/0007-public-checkin-endpoint.md).
+
+Otherwise:
 
 1. `supabase.auth.getSession()` — always. No session on a `requiresAuth` route → `/login`.
 2. `isAccountLinked()` — reads `user_accounts` by `auth.uid()`. An authenticated user with no
    linked row is sent to `/account-pending`. This is how invited-but-unlinked staff are held.
-3. `hasFinanceRole()` — on `requiresFinance` routes only: `user_accounts → member_id`, then
-   `group_members` joined to a group literally **named `'Finance Team'`**. Failure sends the
-   user to `/dashboard/funds/reports`.
+3. `fetchCapabilities()` — on routes carrying `meta.requiresCapability` only. One
+   `get_my_permissions()` RPC, passed through `deriveCapabilities()` and `routeAllowed()` in
+   `src/utils/capabilities.js`. A caller lacking the capability is sent to `/dashboard/members`,
+   which is the safe fallback because it is reachable by every role.
 
 Two things about this that matter:
 
-- **The guard is UX, not security.** A user who defeats it still hits RLS. Finance writes are
-  gated server-side by `is_finance_member()` (`0008_funds_write_policies`).
-- **It is the project's main per-navigation cost.** The serial round-trips are
-  [DEFECTS.md](DEFECTS.md) D7; keying finance on a mutable display name is D4.
+- **The guard is UX, not security.** A user who defeats it still hits RLS. Authorization is
+  enforced server-side by the RBAC predicates from `0014`–`0017`.
+- **It is the project's main per-navigation cost.** The serial round-trips are still open —
+  `useCurrentRole` already caches permissions per session, and the guard does not use that cache.
 
 A separate `onAuthStateChange` listener handles only `PASSWORD_RECOVERY`; an invite or recovery
-token in the URL hash sets `pendingPasswordSet`, which diverts to `/set-password`. Nothing
-handles session expiry (D6).
+token in the URL hash sets `pendingPasswordSet`, which diverts to `/set-password`. **Nothing
+handles session expiry** — on refresh-token failure the user sees a raw `JWT expired` string.
 
 ### 4.4 Supabase client
 
@@ -137,54 +89,6 @@ handles session expiry (D6).
 `VITE_SUPABASE_ANON_KEY` from `import.meta.env` and **throws at startup** if either is missing,
 so a misconfigured deploy fails closed rather than silently unauthenticated. It exports one
 shared client. Do not construct another.
-
-### 4.5 Views
-
-Each view fetches its own data on mount and mutates pessimistically — local state changes only
-after Supabase confirms.
-
-| View | Screen | Tables it touches |
-|---|---|---|
-| `LoginView` | Email/password sign-in | `auth` only |
-| `SetPasswordView` | Invite/recovery password set | `auth` only |
-| `AccountPendingView` | Holding page for an unlinked account | `auth` only |
-| `DashboardView` | Member list, sortable, with a tri-mode modal (view/create/edit/archive-confirm) | `members`, `get_my_church()` |
-| `MinistrySmallGroupView` | Ministry catalog (read-only) + church-owned small groups | `groups`, `group_members`, `members` |
-| `ChurchFundsView` | Monthly collectives report, print-to-PDF | `collectives_service_totals`, `collections`, `expenses` |
-| `CollectionsInputView` | Tithes/offering entry, 3-hour edit window | `collections`, `members`, `get_my_church()` |
-| `ExpensesInputView` | Month-scoped expense entry | `expenses`, `get_my_church()` |
-
-Two views carry logic worth knowing before editing them:
-
-**`ChurchFundsView`** renders a monthly report modeled on the paper "DFC Summary Report"
-workbook. It issues three live reads — the `collectives_service_totals` view once on mount (for
-the opening balance, replayed by `openingBalanceForMonth()`), then `collections` and `expenses`
-range-scoped per month, with a request-id guard discarding out-of-order responses from fast
-prev/next clicking. **All allocation math lives in
-[collectivesReport.js](../src/utils/collectivesReport.js)**, never in the view and never in SQL
-— see [ADR-0004](decisions/0004-view-aggregates-but-does-not-allocate.md), which also explains
-the two-denominator problem the allocation panel exists to avoid re-introducing.
-
-**`MinistrySmallGroupView`** works against one `groups` table where a `Ministry` has
-`church_id IS NULL` and a `Small Group` has a required `church_id`. Ministries are read-only in
-the app; only small groups can be created, renamed, or deleted. Group colors are assigned by a
-Postgres trigger from a 3,240-slot space with a global unique constraint — there is no color
-picker, and `color_slot` is not in the app's column grants.
-
-### 4.6 Pure logic layer
-
-`src/utils/` holds thirteen I/O-free modules, each with a test. The ones that encode a rule
-rather than a helper:
-
-| Module | Encodes |
-|---|---|
-| `collectivesReport.js` | The whole allocation model — the single source of truth for it |
-| `collectivesSource.js` | Live rows → calculator shapes; opening-balance replay |
-| `reportExpenseMerge.js` | Folds expenses into per-service weeks; a date with expenses but no service becomes its own week |
-| `collectionPayload.js` | Insert payload + `contributorLabel()`, which keeps "Anonymous" (`from IS NULL`) distinct from "Unknown" (unreadable member) — see [ADR-0003](decisions/0003-nullable-collections-from.md) |
-| `collectionsDate.js` | Service-date auto-selection and the 3-hour edit-window check |
-| `mutationResult.js` | Shared mutation outcome contract, incl. `EDIT_WINDOW_CLOSED_MESSAGE` |
-| `expensesMonth.js` | Month parsing and range bounds for month-scoped queries |
 
 ### 4.7 Styling
 
@@ -207,8 +111,10 @@ reads `members` itself — without that, the policy on `members` would recurse.
 
 **The migrations are the source of truth for every policy and grant.** `0006_baseline_rls`
 transcribes policies that had only ever existed in the Supabase dashboard; `0007`–`0009` fix the
-defects that baseline exposed. Re-run `scripts/sql/capture-security-state.sql` to check live
-state against them.
+defects that baseline exposed; `0014`–`0017` replace the original name-based finance check with
+role and ministry predicates, keyed on the system-managed `groups.ministry_key` slug rather than
+the editable `groups.name`. Re-run `scripts/sql/capture-security-state.sql` to check live state
+against them.
 
 The shape, in one paragraph: reads are church-scoped, writes on the funds tables are
 additionally finance-gated. `members` has no DELETE policy at all — archiving is the only
@@ -226,20 +132,20 @@ Three consequences that bite in application code, all in
    policy because Postgres evaluates SELECT against the *new* row during an UPDATE, which made
    archiving impossible. Filtering is now the application's job on every read.
 2. **`collections INSERT` deliberately does not validate the contributor's church.** Visiting
-   members give at other churches' services. Do not add `is_member_in_my_church()` there — see
-   [BACKLOG.md](BACKLOG.md) B17 first.
+   members give at other churches' services. Do not add `is_member_in_my_church()` there — read
+   [ADR-0003](decisions/0003-nullable-collections-from.md) first.
 3. **Funds `SELECT` is not finance-gated.** The reports page is not a finance-only route, so
    gating reads would break it for everyone else.
 
-> **Stale comment warning.** [DashboardView.vue:457](../src/views/DashboardView.vue#L457) still
-> claims RLS filters `archived_at`. It does not, and has not since `0010`. The query below it is
-> correct because it filters explicitly; the comment is not.
+> **RLS does not filter `archived_at`, and has not since `0010`.** The filter is the
+> application's job on every read — see [CONTEXT.md](../CONTEXT.md) *Archive*. It now lives inside
+> `listRecords()` in `src/lib/data/members.js` rather than being repeated at each call site.
 
 ### 5.2 Archiving
 
 Members are never hard-deleted. `archived_at` (`NULL` = active) plus an optional
 `archived_reason`, with an active-only partial index so filtering stays fast as archived rows
-accumulate. Un-archiving is a manual SQL operation — no UI ([BACKLOG.md](BACKLOG.md) B1).
+accumulate. Un-archiving is a manual SQL operation — no UI (issue #39).
 
 ### 5.3 Authentication
 
@@ -309,3 +215,28 @@ filtered out client-side. Subsequent reloads exclude it **because the query says
 **Monthly report →** `collectives_service_totals` once for the opening balance, then
 `collections` + `expenses` scoped to the month → reshaped by `collectivesSource.js` and
 `reportExpenseMerge.js` → `computeMonthlyReport()` does all allocation → view renders.
+
+---
+
+## What this document deliberately does not contain
+
+Sections 2, 3, 4.2, 4.5 and 4.6 were removed on 2026-08-11. They transcribed the stack, the
+directory tree, the route table, the view inventory and the utils list — all of which the code
+already states, and all of which had drifted (§3 still described `useFinanceMember.js`, deleted
+months earlier).
+
+Numbering is left with gaps on purpose, so existing `§5.1`-style references still resolve.
+
+Read the code for structure:
+
+| Question | Read |
+|---|---|
+| What is the stack, at what version? | `package.json` |
+| What lives where? | `ls src/` |
+| What routes exist, and which are guarded? | `src/router/index.js` |
+| What does a view do? | the SFC |
+| What pure logic exists? | `src/utils/`, each with a matching test |
+| What tables, columns, policies, grants? | `prisma/schema.prisma`, `prisma/migrations/` |
+
+What stays here is the part the code does not state: how the tiers fit together, why the anon key
+is safe to ship, how authorization is meant to work, and how data flows through a request.

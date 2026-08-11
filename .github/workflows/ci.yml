@@ -30,6 +30,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Fails only on error-level rules. The vue/ and js/ recommended sets are
+      # reported as warnings: 15,000 lines had never been linted and that backlog
+      # must not gate unrelated work. The one rule that gates CI is
+      # write-seam/writes-through-seam.
+      - name: Lint
+        run: npm run lint
+
       - name: Run unit tests
         run: npm test
 

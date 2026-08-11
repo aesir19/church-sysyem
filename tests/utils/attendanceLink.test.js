@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   buildGuestLinkPayload,
   isDuplicateMemberConflict,
-  isPolicyViolation,
 } from '../../src/utils/attendanceLink.js'
 
 describe('buildGuestLinkPayload', () => {
@@ -81,39 +80,5 @@ describe('isDuplicateMemberConflict', () => {
 
   it('tolerates an error object with no message or details', () => {
     expect(isDuplicateMemberConflict({ code: '23505' })).toBe(false)
-  })
-})
-
-describe('isPolicyViolation', () => {
-  // Verbatim from running the VERIFICATION.md §4.1 matrix against staging: the
-  // WITH CHECK half of attendance_update_link_guest RAISES rather than filtering,
-  // so this error is what a cross-church link attempt actually produces. The USING
-  // half filters to zero rows and never reaches here.
-  it('recognises the WITH CHECK rejection', () => {
-    expect(
-      isPolicyViolation({
-        code: '42501',
-        message: 'new row violates row-level security policy for table "attendance"',
-      })
-    ).toBe(true)
-  })
-
-  it('is case-insensitive about the message', () => {
-    expect(isPolicyViolation({ message: 'New Row Violates Row-Level Security Policy' })).toBe(true)
-  })
-
-  it('falls back to the SQLSTATE only when there is no message', () => {
-    expect(isPolicyViolation({ code: '42501' })).toBe(true)
-    // With a message present, an ordinary missing-grant denial is left alone so it
-    // surfaces as itself rather than as a misleading cross-church explanation.
-    expect(isPolicyViolation({ code: '42501', message: 'permission denied for table attendance' })).toBe(false)
-  })
-
-  it('does not claim unrelated failures', () => {
-    expect(isPolicyViolation(null)).toBe(false)
-    expect(isPolicyViolation(undefined)).toBe(false)
-    expect(isPolicyViolation({})).toBe(false)
-    expect(isPolicyViolation({ code: '23505', message: 'duplicate key value' })).toBe(false)
-    expect(isPolicyViolation({ code: '23514', message: 'attendance_identity_check' })).toBe(false)
   })
 })

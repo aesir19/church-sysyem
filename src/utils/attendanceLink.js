@@ -17,9 +17,6 @@ const MEMBER_UNIQUE_CONSTRAINT = 'attendance_service_member_key'
 /** Postgres `unique_violation`. */
 const UNIQUE_VIOLATION = '23505'
 
-/** Postgres `insufficient_privilege` — also what an RLS WITH CHECK failure raises. */
-const INSUFFICIENT_PRIVILEGE = '42501'
-
 /**
  * The payload that turns a guest row into a member row.
  *
@@ -60,34 +57,4 @@ export function isDuplicateMemberConflict(error) {
 
   const text = `${error.message || ''} ${error.details || ''}`
   return text.includes(MEMBER_UNIQUE_CONSTRAINT)
-}
-
-/**
- * Was the link rejected by the policy's WITH CHECK clause?
- *
- * The two halves of attendance_update_link_guest fail in two DIFFERENT ways, and
- * this is easy to get wrong — it was, until the isolation matrix was actually run
- * against staging:
- *
- *   USING      filters. A row it excludes is simply not visible to the UPDATE, so
- *              PostgREST returns success with zero rows and interpretMutation is
- *              what catches it.
- *   WITH CHECK raises. A row that would violate it aborts the statement with
- *              42501 'new row violates row-level security policy'.
- *
- * So the second case never reaches interpretMutation's blocked-message path, and
- * without this the raw Postgres text would be shown to a volunteer. That is the
- * class of leak docs/SECURITY.md §3.5 objects to.
- *
- * @param {{ code?: string, message?: string } | null | undefined} error
- * @returns {boolean}
- */
-export function isPolicyViolation(error) {
-  if (!error) return false
-  if (/row-level security policy/i.test(error.message || '')) return true
-
-  // Fall back to the SQLSTATE only when there is no message to read; 42501 also
-  // covers a plain missing grant, which this call site cannot produce because its
-  // payload is fixed to the three granted columns.
-  return !error.message && error.code === INSUFFICIENT_PRIVILEGE
 }

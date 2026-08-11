@@ -20,7 +20,7 @@ const caps = computed(() => deriveCapabilities(permissions.value))
 // also drives the reactive `permissions` ref that components read. Defensive so a
 // partial Supabase mock in a view test cannot throw at import/setup time.
 async function loadPermissions(force = false) {
-  let uid = null
+  let uid
   try {
     const { data } = await supabase.auth.getUser()
     uid = data?.user?.id ?? null

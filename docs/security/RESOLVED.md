@@ -264,3 +264,35 @@ alone proves the flag is set, not that filtering works.
 > RLS-protected table must declare `security_invoker = on`. It is in [CLAUDE.md](../../CLAUDE.md)
 > and [ADR-0004](../decisions/0004-view-aggregates-but-does-not-allocate.md). Postgres will not
 > warn, and the failure is silent.
+
+---
+
+## 3.14 Finance authorization bound to a mutable display name — RESOLVED 2026-08-11
+
+Fixed by `0014_rbac_predicates`, which took the second of the two options the finding offered:
+an immutable key on `groups` rather than promoting `user_accounts.role`.
+
+`groups.ministry_key` is a stable slug (`finance` / `secretariat` / `welcome`), **system-managed
+and deliberately absent from the `authenticated` column grants**, so no user action can set or
+change it. `0014` adopts the existing `Finance Team` ministry by matching on the name **once, at
+migration time**, and every predicate afterwards keys on the slug. Renaming the group through the
+Ministries screen therefore no longer grants or revokes anything.
+
+The finding said "whichever loses must be dropped — a column that looks authoritative and is not
+is a trap." `user_accounts.role` was kept and given a real job by `0017_group_membership_and_roles`
+(it feeds `get_my_permissions()`), so both are now load-bearing rather than one being a decoy.
+
+## 3.15 Client identity state outlives the session — RESOLVED, partially
+
+`useFinanceMember.js` is deleted. `useCurrentRole` replaced it and holds the module-level cache
+**keyed to the auth user id**, cleared on `SIGNED_OUT`, so a second user signing in on the same
+tab cannot inherit the first user's role.
+
+One subtlety worth recording, because it was learned by breaking it: the cache is invalidated on
+`SIGNED_OUT` **only**. Supabase re-emits `SIGNED_IN` and `TOKEN_REFRESHED` on token refresh and
+tab focus, and clearing on those made the role — and therefore the church selector — flicker off
+and reset mid-session.
+
+**Not fully closed.** The finding's "Related" paragraph noted that refresh-token expiry surfaces a
+raw `JWT expired` string to the user. That is still true and is tracked as issue #30.
+

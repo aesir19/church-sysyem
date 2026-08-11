@@ -83,8 +83,18 @@ buys the least.
 
 Needing to **hold a secret the browser must never see**, or to **act with no user present**:
 sending giving statements by email, a scheduled monthly close, a payment-processor webhook. When
-that arrives, write ADR-0005 choosing Supabase Edge Functions and stating the invocation budget —
+that arrives, write a record choosing Supabase Edge Functions and stating the invocation budget —
 do not reopen the vendor question from scratch.
+
+*(This originally said "write ADR-0005". That number went to the JWT/`localStorage` record instead;
+forward-referencing an unwritten ADR by number does not survive contact with an ADR log. Refer to
+the next free number at the time, or to no number at all.)*
+
+**First case to arrive: AI features.** [ADR-0010](0010-ai-features-need-an-edge-function.md) takes
+exactly this path for the "third-party API keys" line above — a vendor key held as an Edge Function
+secret, the caller's JWT forwarded so RLS still applies, aggregates only. It does **not** yet
+supersede this record: it names the constraints and blocks implementation until a further record
+pins a vendor and budget.
 
 If the motivation is instead *wanting fullstack experience* or a stronger portfolio piece, that is
 a legitimate goal, and it should be pursued as an explicit owner decision rather than justified on

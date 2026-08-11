@@ -22,6 +22,8 @@ supersede the record explicitly.
 | [0006](0006-error-sink-in-stack.md) | Error monitoring is an in-stack table, not a third-party processor | Accepted |
 | [0007](0007-public-checkin-endpoint.md) | The public check-in endpoint — `anon` reaches two definer functions and no table | Accepted (residual risk) |
 | [0008](0008-sentry-alongside-in-stack-sink.md) | Sentry adopted alongside the in-stack sink, conditional on scrubbing | Accepted (residual risk) |
+| [0009](0009-vetted-runtime-dependency-candidates.md) | Three runtime dependencies are vetted but unjustified | Accepted (standing evaluation) |
+| [0010](0010-ai-features-need-an-edge-function.md) | AI features go through a Supabase Edge Function, or not at all | Accepted (constraint) |
 
 ## Format
 

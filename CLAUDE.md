@@ -37,8 +37,15 @@ Evaluate every decision against this order, in order:
   See [ADR-0002](docs/decisions/0002-no-second-compute-vendor.md).
 - **Never replicate authorization in the frontend.** If a user shouldn't see a row, the *policy*
   must reject it. UI gating is presentation, never enforcement.
-- **Never `select('*')` on `members`.** Enumerate columns. Reuse the shared `MEMBER_COLUMNS`
-  constant.
+- **Never `select('*')` on `members`.** Enumerate columns. `MEMBER_COLUMNS` and the two member
+  reads live in [src/lib/data/members.js](src/lib/data/members.js) — prefer that module over a new
+  inline query. Not yet universal: `MinistrySmallGroupView` still reads members inline for its
+  picker, which is [issue #38](https://github.com/aesir19/church-sysyem/issues/38).
+- **Never take the outcome of a PostgREST write from the raw result.** RLS refuses a write by
+  *filtering*, so `{ error: null, data: [] }` means refused, not saved. Pass the builder to
+  `write()` (or a mutating RPC to `writeRpc()`) from [src/lib/data/write.js](src/lib/data/write.js)
+  and branch on `result.ok`. Constructing the builder in a view is fine — it is reading the outcome
+  yourself that is banned, and the `write-seam/writes-through-seam` ESLint rule fails the build on it.
 - **Never add realtime subscriptions** unless explicitly requested. The static-snapshot model
   is intentional; websockets burn egress continuously.
 - **Never edit or re-run a deployed migration.** In particular `0006_baseline_rls` is a record
@@ -46,6 +53,12 @@ Evaluate every decision against this order, in order:
   `prisma migrate resolve --applied`.
 - **Never add a runtime dependency** without a stated reason and a free-tier impact note. Every
   one ships to every user on every uncached visit.
+- **Never link to a line number from a document.** `#L748` is a claim about code that goes false
+  within a week, asserted where no test can check it. Link to a file, a symbol, or a migration.
+  This rule exists because four of sixteen defect entries described code that had been deleted.
+- **Never document what the code already states.** Route tables, directory trees, stack lists and
+  view inventories belong to `src/` and `package.json`. Docs carry the reasoning that is *not*
+  recoverable from code: decisions, threat models, why a fix took its shape.
 - **Never add a synthetic keep-alive cron** to dodge Supabase auto-pause. Budget spend for no
   real-user benefit, and it risks tripping abuse policies.
 
@@ -61,8 +74,10 @@ Evaluate every decision against this order, in order:
 - **Every new authenticated route needs `meta: { requiresAuth: true }`** in
   [src/router/index.js](src/router/index.js).
 - **Every schema change goes through Prisma** (`prisma/schema.prisma` + `prisma/migrations/`),
-  and **the migration deploys before the SPA release that depends on it.** Nothing enforces
-  this ordering; the failure mode is a live column-not-found error.
+  and **the migration deploys before the SPA release that depends on it.** This is now enforced:
+  the `deploy` job in [ci.yml](.github/workflows/ci.yml) carries `needs: [test, lighthouse,
+  migrate]`, so the SPA cannot reach production ahead of its schema. Do not remove that edge —
+  the failure mode it prevents is a live column-not-found error for every user.
 - **Every Supabase call uses the shared client** imported from
   [src/lib/supabase.js](src/lib/supabase.js). Do not construct a second one.
 - **Every code or schema change gets a `code-reviewer` pass before it is called done.** Dispatch
@@ -89,13 +104,44 @@ Two project tools formalize how review and load-bearing design happen here. Both
   [docs/decisions/](docs/decisions/). It is *not* triggered automatically just because a task
   touches system design.
 
+## Agent skills
+
+Per-repo configuration the installed engineering skills read. Full detail in `docs/agents/`.
+
+### Issue tracker
+
+Issues live as GitHub issues in `aesir19/church-sysyem`, driven by the `gh` CLI (installed and
+authenticated). See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
+
+Defects (`D*`) and deferred features (`B*`) were migrated into the tracker on 2026-08-11 and the
+old ids are preserved in the issue titles. **[OPERATIONS.md](docs/OPERATIONS.md) `O*` is the one
+register still kept in-repo** — it is a runbook, not a queue.
+
+**The repo is public**: never paste member PII, keys, or `.env*` contents into an issue.
+
+### Triage labels
+
+The five canonical roles, unchanged: `needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix`. See [docs/agents/triage-labels.md](docs/agents/triage-labels.md).
+
+### Domain docs
+
+Single-context. ADRs live in [docs/decisions/](docs/decisions/), **not** `docs/adr/`; the root
+`CONTEXT.md` glossary does not exist yet and is created lazily.
+See [docs/agents/domain.md](docs/agents/domain.md).
+
 ## Code conventions
 
 - Vue 3 Composition API with `<script setup>`. No Options API.
 - `<style scoped>` per SFC; only truly global rules go in [src/style.css](src/style.css).
 - Palette: primary `#1a56db`, slate neutrals (`#f8fafc`, `#e2e8f0`, `#1e293b`, `#64748b`),
   error `#dc2626`. Cards use a `12px` radius.
-- Surface Supabase failures as `error.message` to the user — the existing pattern. Avoid throwing.
+- Surface failures as a **message from the data module**, not as `error.message`. Postgres
+  constraint violations quote the offending row verbatim — `Key (first_name, last_name)=(Juan,
+  Dela Cruz) already exists` — which is member PII;
+  [sentryScrub.js](src/utils/sentryScrub.js) drops those payloads rather than redacting them, and
+  the screen must not receive them either. `write()` classifies the failure and returns safe text,
+  with the original on `cause` for logging. Avoid throwing.
 - New behaviour needs a test. Pure logic belongs in `src/utils/` where it can be tested without
   mounting a view; that separation is the point, not a style preference.
 
@@ -124,8 +170,9 @@ These follow from priority 1 and are binding unless the owner overrides them.
 | Netlify credits | 60 % of 300/mo | Check Usage tab (bandwidth + deploys share one pool); verify cache headers |
 | Database storage | 60 % of 500 MB | Audit text column sizes; archive old data offline |
 
-The route threshold is **already breached** — every view is eagerly imported into a single
-chunk. See [DEFECTS.md](docs/DEFECTS.md) D9.
+The route threshold was breached and is now **resolved** — every route is `() => import(...)`.
+Keep it that way when adding one: `/checkin` is opened on phones, on church wifi, with a cold
+cache, every service.
 
 ---
 
@@ -140,9 +187,13 @@ Read these when the task touches them. Do not read them all up front.
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model and **open** security findings | Touching auth, RLS, grants, headers, or data exposure |
 | [docs/security/VERIFICATION.md](docs/security/VERIFICATION.md) | How to prove a control works; the two-church isolation matrix | After changing any policy, grant, helper function, or view |
 | [docs/security/RESOLVED.md](docs/security/RESOLVED.md) | Closed security findings and why each fix took its shape | Before "improving" something that was already deliberately fixed |
-| [docs/DEFECTS.md](docs/DEFECTS.md) | Confirmed bugs, `D1`–`D16`, with reproductions | Picking up a fix, or before "improving" something already known-broken |
-| [docs/BACKLOG.md](docs/BACKLOG.md) | Deferred features, `B1`–`B25` — absent, not broken | Asked for a feature that may already be specced |
+| [GitHub issues](https://github.com/aesir19/church-sysyem/issues?q=is%3Aissue+is%3Aopen+label%3Adefect) | Open defects — migrated from `DEFECTS.md`, old `D*` ids kept in the titles | Picking up a fix, or before "improving" something already known-broken |
+| [docs/DEFECTS.md](docs/DEFECTS.md) | Now a pointer, plus why four entries went stale | Wondering where the defect list went |
+| [GitHub issues](https://github.com/aesir19/church-sysyem/issues?q=is%3Aissue+is%3Aopen+label%3Afeature) | Deferred features — migrated from `BACKLOG.md`, old `B*` ids kept in the titles | Asked for a feature that may already be specced |
+| [docs/BACKLOG.md](docs/BACKLOG.md) | Now a pointer, plus which entries became ADRs and why | Wondering where the backlog went |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Free-tier budgets, deploy/rollback, backups, monitoring gaps `O1`–`O25` | Deploying, migrating, or asked why the site is down |
+| [docs/agents/](docs/agents/) | Where issues live, the triage label strings, how to read the domain docs | Running an engineering skill that files, triages, or specs work |
+| [CONTEXT.md](CONTEXT.md) | The domain glossary — Directory vs Member record, Archive, Blocked write | Naming anything, or unsure whether two words mean the same thing |
 | `prisma/schema.prisma` | The canonical table/column inventory | Any question about the data model — it is the source of truth, not the docs |
 
 **Schema is never documented twice.** `prisma/schema.prisma` and `prisma/migrations/` are the
