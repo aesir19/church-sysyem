@@ -89,6 +89,30 @@ Two project tools formalize how review and load-bearing design happen here. Both
   [docs/decisions/](docs/decisions/). It is *not* triggered automatically just because a task
   touches system design.
 
+## Agent skills
+
+Per-repo configuration the installed engineering skills read. Full detail in `docs/agents/`.
+
+### Issue tracker
+
+Issues live as GitHub issues in `aesir19/church-sysyem`, driven by the `gh` CLI — installed, but
+**not yet authenticated** (`gh auth login`). See
+[docs/agents/issue-tracker.md](docs/agents/issue-tracker.md). The in-repo
+trackers ([DEFECTS.md](docs/DEFECTS.md) `D*`, [BACKLOG.md](docs/BACKLOG.md) `B*`,
+[OPERATIONS.md](docs/OPERATIONS.md) `O*`) stay authoritative for their own entries; issues
+cross-reference those ids rather than restating them.
+
+### Triage labels
+
+The five canonical roles, unchanged: `needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix`. See [docs/agents/triage-labels.md](docs/agents/triage-labels.md).
+
+### Domain docs
+
+Single-context. ADRs live in [docs/decisions/](docs/decisions/), **not** `docs/adr/`; the root
+`CONTEXT.md` glossary does not exist yet and is created lazily.
+See [docs/agents/domain.md](docs/agents/domain.md).
+
 ## Code conventions
 
 - Vue 3 Composition API with `<script setup>`. No Options API.
@@ -143,6 +167,7 @@ Read these when the task touches them. Do not read them all up front.
 | [docs/DEFECTS.md](docs/DEFECTS.md) | Confirmed bugs, `D1`–`D16`, with reproductions | Picking up a fix, or before "improving" something already known-broken |
 | [docs/BACKLOG.md](docs/BACKLOG.md) | Deferred features, `B1`–`B25` — absent, not broken | Asked for a feature that may already be specced |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Free-tier budgets, deploy/rollback, backups, monitoring gaps `O1`–`O25` | Deploying, migrating, or asked why the site is down |
+| [docs/agents/](docs/agents/) | Where issues live, the triage label strings, how to read the domain docs | Running an engineering skill that files, triages, or specs work |
 | `prisma/schema.prisma` | The canonical table/column inventory | Any question about the data model — it is the source of truth, not the docs |
 
 **Schema is never documented twice.** `prisma/schema.prisma` and `prisma/migrations/` are the
