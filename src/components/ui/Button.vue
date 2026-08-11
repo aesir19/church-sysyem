@@ -130,7 +130,9 @@ defineOptions({ inheritAttrs: true })
 
 .btn-tertiary {
   background: var(--color-accent-subtle);
-  color: var(--color-accent);
+  /* The accent as text, which has a different contrast floor from the accent
+     as a fill. See tokens.css. */
+  color: var(--color-accent-text);
   border-color: var(--color-accent-border);
 }
 .btn-tertiary:hover:not(:disabled) {

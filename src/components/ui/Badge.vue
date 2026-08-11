@@ -11,7 +11,8 @@ defineProps({
   variant: {
     type: String,
     default: 'neutral',
-    validator: (value) => ['neutral', 'accent', 'success', 'warning', 'danger'].includes(value),
+    validator: (value) =>
+      ['neutral', 'accent', 'accent-secondary', 'success', 'warning', 'danger'].includes(value),
   },
 })
 </script>
@@ -42,8 +43,18 @@ defineProps({
 
 .badge-accent {
   background: var(--color-accent-subtle);
-  color: var(--color-accent);
+  /* --color-accent-text, not --color-accent: the accent as a FILL and the
+     accent as TEXT have different contrast floors. See tokens.css. */
+  color: var(--color-accent-text);
   border-color: var(--color-accent-border);
+}
+
+/* The rarer second accent (Amendment 17). Rare is the point — magenta beside
+   cyan everywhere would leave neither one meaning anything. */
+.badge-accent-secondary {
+  background: var(--color-accent-secondary-subtle);
+  color: var(--color-accent-secondary-text);
+  border-color: var(--color-accent-secondary-border);
 }
 
 .badge-success {

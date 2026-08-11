@@ -56,7 +56,7 @@ const ROWS = [
 ]
 
 const VARIANTS = ['primary', 'secondary', 'tertiary', 'danger', 'ghost']
-const BADGES = ['neutral', 'accent', 'success', 'warning', 'danger']
+const BADGES = ['neutral', 'accent', 'accent-secondary', 'success', 'warning', 'danger']
 const TONES = ['info', 'success', 'warning', 'error']
 
 const SEMANTIC_TOKENS = [
@@ -72,6 +72,10 @@ const SEMANTIC_TOKENS = [
   '--color-accent',
   '--color-accent-hover',
   '--color-accent-subtle',
+  '--color-accent-text',
+  '--color-accent-secondary',
+  '--color-accent-secondary-subtle',
+  '--color-focus-ring',
   '--color-danger',
   '--color-success',
   '--color-warning',
@@ -90,7 +94,8 @@ const SEMANTIC_TOKENS = [
         <div>
           <h1>Style guide</h1>
           <p class="muted">
-            Placeholder palette — mechanics sign-off (§0.5 step 3). Dev-only route.
+            Brand palette — cyan #0088b0, magenta #d6006c (§0.5 step 4). Toggle the theme:
+            both are signed off together. Dev-only route.
           </p>
         </div>
       </div>

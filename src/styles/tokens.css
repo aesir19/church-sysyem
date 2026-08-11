@@ -24,14 +24,14 @@
  * A view that reaches past the semantic layer for a primitive has found a
  * missing semantic token, not a shortcut.
  *
- * THE PALETTE HERE IS A PLACEHOLDER, ON PURPOSE. docs/REDESIGN.md §0.5
- * sequences the rebrand so the component system is proved on the CURRENT blue
- * before anyone forms an opinion about the new one. Amendment 17 confirms the
- * target as cyan #0088b0 with magenta #d6006c, and it lands as an edit to the
- * primitive ramps and a handful of semantic aliases IN THIS FILE ALONE —
- * touching no SFC. A rejected palette then costs a token edit, not a re-review
- * of eleven views. CLAUDE.md's palette line is updated when that edit lands,
- * not before.
+ * THE REBRAND HAS LANDED (§0.5 step 4, Amendment 17). The placeholder blue is
+ * gone: cyan #0088b0 is the brand, magenta #d6006c the rarer second accent.
+ * The architecture did what it was built to do — the change is the primitive
+ * ramps and a handful of semantic aliases IN THIS FILE, plus three `ui/`
+ * components that were using `--color-accent` as TEXT and now use
+ * `--color-accent-text` (see the note on that token below). No view was
+ * reopened. CLAUDE.md's palette line was updated at the same commit, per
+ * Amendment 3 — this file and that line are never allowed to disagree.
  * ────────────────────────────────────────────────────────────────────────── */
 
 /* Manrope, self-hosted. REDESIGN.md Amendment 8: the mockup's Google Fonts
@@ -58,21 +58,45 @@
 
 :root {
   /* ── Primitive: colour ramps ───────────────────────────────────────────────
-   * Reconciled from the 667 colour literals across 15 files that the codebase
-   * actually holds today (60 unique), not invented. The blue ramp is centred on
-   * the documented #1a56db; the slate ramp is the neutral family already in the
-   * wild. Referenced only from the semantic block below. */
+   * The slate ramp is the neutral family already in the wild, reconciled from
+   * the colour literals the codebase held before the redesign. The cyan and
+   * magenta ramps are the rebrand (Amendment 17). Referenced only from the
+   * semantic block below.
+   *
+   * WHY THE BRAND HUE IS NOT THE STEP CALLED `accent`. #0088b0 is 4.08:1
+   * against white — under the 4.5:1 AA floor for normal text. A primary button
+   * is white 14px semibold on that fill, which is normal text by WCAG's
+   * definition (large is 24px, or 18.66px bold), so shipping the brand hue as
+   * `--color-accent` would fail the contrast audit on every primary button in
+   * the app — against `lighthouserc.json`'s 0.9 accessibility gate, which
+   * hard-fails the build. So #0088b0 is `--color-cyan-500` and keeps the jobs
+   * where its contrast is fine (the focus ring, which needs 3:1, and the dark
+   * theme), while `--color-accent` is one step darker at 4.91:1. The
+   * difference is barely perceptible; the audit failure would not have been. */
 
-  --color-blue-50: #eff6ff;
-  --color-blue-100: #dbeafe;
-  --color-blue-200: #bfdbfe;
-  --color-blue-300: #93c5fd;
-  --color-blue-400: #60a5fa;
-  --color-blue-500: #3b82f6;
-  --color-blue-600: #1a56db; /* the documented primary */
-  --color-blue-700: #1947b8;
-  --color-blue-800: #1e40af;
-  --color-blue-900: #1e3a8a;
+  --color-cyan-50: #e6f7fc;
+  --color-cyan-100: #c2ecf7;
+  --color-cyan-200: #8dd9ee;
+  --color-cyan-300: #4fc2e0;
+  --color-cyan-400: #2bb0d3;
+  --color-cyan-500: #0088b0; /* the brand hue as drawn */
+  --color-cyan-600: #007a9e;
+  --color-cyan-700: #026f91;
+  --color-cyan-800: #065874;
+  --color-cyan-900: #0a475d;
+
+  /* The rarer second accent. Same contrast reasoning: #d6006c is the hue as
+   * drawn, and the steps either side of it are what actually get used for a
+   * fill under white text or for text on a tint. */
+  --color-magenta-50: #ffe9f2;
+  --color-magenta-100: #ffcfe2;
+  --color-magenta-200: #ffa3c8;
+  --color-magenta-300: #f76ba6;
+  --color-magenta-400: #ea3d86;
+  --color-magenta-500: #d6006c; /* the second accent as drawn */
+  --color-magenta-600: #b8005d;
+  --color-magenta-700: #99004d;
+  --color-magenta-800: #7a003e;
 
   --color-slate-50: #f8fafc;
   --color-slate-100: #f1f5f9;
@@ -122,7 +146,7 @@
    * the designers already fixed once: a LIGHT tint on a dark surface is what
    * broke it. The dark block below re-points it to a dark tint, never a tint of
    * the light value. Do not reintroduce that. */
-  --color-bg-selected: var(--color-blue-50);
+  --color-bg-selected: #f4fcff;
   --color-bg-overlay: rgba(15, 23, 42, 0.5);
 
   /* Borders */
@@ -150,12 +174,26 @@
   --color-text-placeholder: var(--color-slate-500);
 
   /* Accent */
-  --color-accent: var(--color-blue-600);
-  --color-accent-hover: var(--color-blue-700);
-  --color-accent-active: var(--color-blue-800);
-  --color-accent-subtle: var(--color-blue-50);
-  --color-accent-border: var(--color-blue-200);
+  --color-accent: var(--color-cyan-600);
+  --color-accent-hover: var(--color-cyan-700);
+  --color-accent-active: var(--color-cyan-800);
+  --color-accent-subtle: var(--color-cyan-50);
+  --color-accent-border: var(--color-cyan-200);
   --color-on-accent: var(--color-white);
+  /* The accent WHEN IT IS TEXT, on a light surface or on --color-accent-subtle.
+   * A separate token because the two jobs have different floors: a fill needs
+   * its label to clear 4.5:1 against the fill, while accent text needs to clear
+   * 4.5:1 against the page. `--color-accent` on `--color-accent-subtle` is
+   * 4.49:1 — close enough to the line that a future ramp tweak would silently
+   * cross it. This step is 5.17:1 and has room. Consumed by Badge's accent
+   * variant, Button's tertiary variant and Toast's info tone. */
+  --color-accent-text: var(--color-cyan-700);
+
+  /* The rarer second accent (Amendment 17). Same four roles as the primary. */
+  --color-accent-secondary: var(--color-magenta-600);
+  --color-accent-secondary-text: var(--color-magenta-700);
+  --color-accent-secondary-subtle: var(--color-magenta-50);
+  --color-accent-secondary-border: var(--color-magenta-200);
 
   /* Status */
   --color-danger: var(--color-red-600);
@@ -178,8 +216,11 @@
 
   /* Focus. Kept separate from the elevation ramp below because a focus ring is
    * legitimately brand-coloured where a shadow is not. */
-  --color-focus-ring: var(--color-blue-600);
-  --shadow-focus-ring: 0 0 0 3px rgba(26, 86, 219, 0.25);
+  /* The brand hue at full strength. A focus indicator is measured against the
+   * 3:1 non-text floor, not 4.5:1, so this is the one place #0088b0 can be
+   * itself without qualification — 4.08:1 against white. */
+  --color-focus-ring: var(--color-cyan-500);
+  --shadow-focus-ring: 0 0 0 3px rgba(0, 136, 176, 0.3);
 
   /* ── Spacing — a 4px grid ─────────────────────────────────────────────────── */
   --space-1: 4px;
@@ -294,13 +335,23 @@
      * surface, under AA. This is 6:1. */
     --color-text-placeholder: #8b9cad;
 
-    --color-accent: var(--color-blue-400);
-    --color-accent-hover: var(--color-blue-300);
-    --color-accent-active: var(--color-blue-200);
-    --color-accent-subtle: #14273f;
-    --color-accent-border: #24405f;
+    /* Inverted on purpose: on a dark ground the accent is a LIGHT step, so the
+     * ramp walks the other way and text on the accent becomes dark. */
+    --color-accent: var(--color-cyan-300);
+    --color-accent-hover: var(--color-cyan-200);
+    --color-accent-active: var(--color-cyan-100);
+    --color-accent-subtle: #0d2a35;
+    --color-accent-border: #1c4655;
     --color-on-accent: var(--color-slate-900);
     --color-text-on-accent: var(--color-slate-900);
+    /* On a dark subtle surface the accent already has the contrast; there is no
+     * darker step to reach for and reaching for one would make it worse. */
+    --color-accent-text: var(--color-cyan-300);
+
+    --color-accent-secondary: var(--color-magenta-300);
+    --color-accent-secondary-text: var(--color-magenta-200);
+    --color-accent-secondary-subtle: #33101f;
+    --color-accent-secondary-border: #55203a;
 
     --color-danger: #f87171;
     --color-danger-hover: #fca5a5;
@@ -320,8 +371,8 @@
     --color-warning-border: #4a3a1a;
     --color-warning-text: #fde68a;
 
-    --color-focus-ring: var(--color-blue-400);
-    --shadow-focus-ring: 0 0 0 3px rgba(96, 165, 250, 0.35);
+    --color-focus-ring: var(--color-cyan-300);
+    --shadow-focus-ring: 0 0 0 3px rgba(79, 194, 224, 0.35);
 
     /* Shadows tuned for a light ground read as smudges on a dark one
      * (Amendment 7). On a dark surface, elevation comes from depth of black
@@ -357,13 +408,19 @@
   --color-text-inverse: var(--color-slate-900);
   --color-text-placeholder: #6b7d8e;
 
-  --color-accent: var(--color-blue-400);
-  --color-accent-hover: var(--color-blue-300);
-  --color-accent-active: var(--color-blue-200);
-  --color-accent-subtle: #14273f;
-  --color-accent-border: #24405f;
+  --color-accent: var(--color-cyan-300);
+  --color-accent-hover: var(--color-cyan-200);
+  --color-accent-active: var(--color-cyan-100);
+  --color-accent-subtle: #0d2a35;
+  --color-accent-border: #1c4655;
   --color-on-accent: var(--color-slate-900);
   --color-text-on-accent: var(--color-slate-900);
+  --color-accent-text: var(--color-cyan-300);
+
+  --color-accent-secondary: var(--color-magenta-300);
+  --color-accent-secondary-text: var(--color-magenta-200);
+  --color-accent-secondary-subtle: #33101f;
+  --color-accent-secondary-border: #55203a;
 
   --color-danger: #f87171;
   --color-danger-hover: #fca5a5;
@@ -383,8 +440,8 @@
   --color-warning-border: #4a3a1a;
   --color-warning-text: #fde68a;
 
-  --color-focus-ring: var(--color-blue-400);
-  --shadow-focus-ring: 0 0 0 3px rgba(96, 165, 250, 0.35);
+  --color-focus-ring: var(--color-cyan-300);
+  --shadow-focus-ring: 0 0 0 3px rgba(79, 194, 224, 0.35);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);

@@ -135,12 +135,16 @@ See [docs/agents/domain.md](docs/agents/domain.md).
 
 - Vue 3 Composition API with `<script setup>`. No Options API.
 - `<style scoped>` per SFC; only truly global rules go in [src/style.css](src/style.css).
-- Palette: primary `#1a56db`, slate neutrals (`#f8fafc`, `#e2e8f0`, `#1e293b`, `#64748b`),
-  error `#dc2626`. Cards use a `12px` radius.
-  > **This line is scheduled to change.** The redesign rebrands to cyan `#0088b0` with magenta
-  > `#d6006c` as a second accent. It is updated **when the rebrand actually lands** — not before,
-  > so this file never describes a state that is not shipped. See
-  > [REDESIGN.md Amendment 3](docs/REDESIGN.md).
+- **Colour is never a literal in an SFC.** Every value lives in
+  [src/styles/tokens.css](src/styles/tokens.css) as a two-layer token set, and views and `ui/`
+  components consume only the *semantic* layer (`--color-accent`, `--color-bg-surface`,
+  `--color-text-primary`, …). A view that reaches past it for a primitive ramp has found a
+  missing semantic token, not a shortcut. This is what made the rebrand below a one-file edit.
+- Palette: brand cyan `#0088b0`, magenta `#d6006c` as a rarer second accent, slate neutrals
+  (`#f8fafc`, `#e2e8f0`, `#1e293b`, `#64748b`), error `#dc2626`. Cards use a `12px` radius.
+  Note that `--color-accent` is one step darker than the brand hue and `--color-accent-text`
+  darker again — `#0088b0` is 4.08:1 on white, under AA, and `lighthouserc.json` hard-fails on
+  it. tokens.css carries the full reasoning; do not "correct" the accent back to the brand hex.
 - **Interaction logic for dialogs comes from Reka UI** (`reka-ui`), not from a fifth hand-rolled
   focus trap. It is scoped to `Dialog` and optionally `Toast`; buttons, cards, inputs, badges,
   tables, spinners and icons stay hand-rolled against the project's tokens, and combobox/tabs/

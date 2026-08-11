@@ -115,7 +115,8 @@ const iconName = () => ICONS[props.type] ?? 'info'
 
 .toast-info {
   background: var(--color-accent-subtle);
-  color: var(--color-accent);
+  /* The accent as text. See tokens.css on why that is a separate token. */
+  color: var(--color-accent-text);
   border-color: var(--color-accent-border);
 }
 </style>

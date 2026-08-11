@@ -215,7 +215,7 @@ defineExpose({ focusClose: () => closeButton.value?.focus() })
   align-items: center;
   gap: var(--space-3);
   overflow: hidden;
-  color: var(--color-blue-400);
+  color: var(--color-cyan-300);
 }
 
 .brand-text {
@@ -250,7 +250,7 @@ defineExpose({ focusClose: () => closeButton.value?.focus() })
 
 .icon-button:focus-visible,
 .nav-item:focus-visible {
-  outline: 2px solid var(--color-blue-400);
+  outline: 2px solid var(--color-cyan-300);
   outline-offset: -2px;
 }
 

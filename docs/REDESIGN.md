@@ -14,7 +14,7 @@ with the original brief, the correction is flagged inline.
 | | |
 |---|---|
 | Branch | `redesign` |
-| Phase | **Phase 1 built (2026-08-11)** — 1a and 1b together. Phase 0 landed §0.1–§0.5 the same day. Note that Phase 1 was built **without** the §0.5 step-3 mechanics sign-off, at the owner's instruction; that sign-off and the step-4 rebrand are still outstanding and are now the gate on Stage 2, not on Phase 1. |
+| Phase | **Rebrand landed (2026-08-11)** — §0.5 step 4, the gate on Stage 2, is cleared. Phase 0 and Phase 1 landed the same day. |
 | Mockups | Leaving the repo — see [Amendment 16](#amendment-16--the-mockups-leave-the-repo) |
 | Scope | Existing features only. [Amendment 9](#amendment-9--scope-is-the-existing-feature-set-not-the-mockups-feature-set) is the boundary. |
 
@@ -85,6 +85,33 @@ emulation, so the screenshot path this repo uses for rendered pixels cannot show
 The mechanism is verified another way — the `data-theme` blocks are present in the built CSS and
 `theme.js` is unit-tested — but nobody has *looked* at a dark page yet. Do that at the §0.5
 sign-off, where both themes are signed off together.
+
+### What the rebrand landed
+
+§0.5's sequencing paid off exactly as designed: **`tokens.css` was the edit.** The blue ramp became
+a cyan ramp and a magenta one, the semantic accent aliases were repointed, and **no view was
+reopened.** Three `ui/` components changed one declaration each, for a reason worth recording
+rather than hiding:
+
+**The brand hue is not the token called `--color-accent`, on purpose.** `#0088b0` is **4.08:1**
+against white — under the 4.5:1 AA floor for normal text, and a primary button is white 14px
+semibold on that fill, which is normal text by WCAG's definition. Shipping the brand hex as the
+accent would have failed contrast on every primary button in the app, against
+[lighthouserc.json](../lighthouserc.json)'s **0.9 accessibility gate, which hard-fails the build** —
+the gate [Amendment 6](#amendment-6--wire-the-accessibility-work-to-the-gate) raised at the end of
+Phase 1. So `#0088b0` is `--color-cyan-500` and keeps the jobs whose floor it clears: the focus
+ring (3:1, non-text) and the dark theme. `--color-accent` is one step darker at 4.91:1, and a third
+token `--color-accent-text` (5.17:1) carries the accent where it is *text on a tint* — Badge's
+accent variant, Button's tertiary, Toast's info tone, which are the three components that changed.
+The visual difference between `#0088b0` and `#007a9e` is barely perceptible. The audit failure
+would not have been.
+
+Also landed here, from [Amendment 7](#amendment-7--dark-mode-resolved-in) verbatim: the selected
+row is **`#f4fcff` light / `#0e2b38` dark**, no longer a tint of the blue ramp.
+
+The magenta second accent ships as a ramp plus four semantic tokens and a `Badge`
+`accent-secondary` variant. Its first real consumer is the Members header count in Stage 2 —
+deliberately one surface, because magenta beside cyan everywhere leaves neither meaning anything.
 
 ### Open decisions blocking Phase 0 — both now settled
 
