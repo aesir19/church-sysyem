@@ -350,76 +350,18 @@ platform upgrade — document it as a manual rebuild step regardless.
 
 ---
 
-### 3.14 Finance authorization binds to a mutable display name — High
+### 3.14 / 3.15 — RESOLVED, moved to [security/RESOLVED.md](security/RESOLVED.md)
 
-**Finding.** Two role models exist and the wrong one is authoritative.
+Both described `useFinanceMember.js` and name-keyed finance authorization. Neither exists.
 
-`user_accounts.role` exists with `DEFAULT 'unassigned'` and is **read by no code in `src/`**.
-Actual finance authorization — in the router guard
-([router/index.js:98](../src/router/index.js#L98)), the UI composable
-([useFinanceMember.js:22](../src/composables/useFinanceMember.js#L22)), and the
-`is_finance_member()` policy helper from `0008` — asks whether the caller's member row belongs to
-a group whose `name` equals the literal string `'Finance Team'`.
+- **3.14** wanted an immutable key on `groups` instead of the editable `name`.
+  `0014_rbac_predicates` added `groups.ministry_key`, system-managed and absent from the
+  `authenticated` column grants, and the RBAC predicates key on it.
+- **3.15** wanted a session-scoped identity store. `useCurrentRole` is one: cached per auth user
+  id and cleared on `SIGNED_OUT`.
 
-Group names are user-editable through the Ministries screen. So:
-
-1. **Renaming that group silently revokes finance access for every user of that church.** No
-   error, no audit entry, no obvious cause — and under §3.16 no record of who renamed it.
-2. **Authorization state is mutable by a lower-privileged action than the one it gates.** A user
-   who may edit group names thereby controls who may write the financial ledger. That shape is
-   privilege-escalation-adjacent even if no current user can exploit it usefully.
-3. `0004` makes ministry names globally unique but small-group names unique only per church, so the
-   blast radius depends on `groups.type` — an implementation detail no reader of the policy would
-   expect to matter.
-
-**Threat model.** T2. Not remotely exploitable, and RLS still confines every read to the caller's
-church — but the authorization boundary depends on a display string, which is the wrong kind of
-thing to depend on.
-
-**Mitigation (free).** Pick one authority and delete the other:
-
-- **Promote `user_accounts.role`** — rewrite `is_finance_member()` to read it, and drop the
-  group-name lookup from both the guard and the composable; or
-- **Add an immutable key to `groups`** — a `slug` or `is_system boolean` keyed on by the policy,
-  with an UPDATE policy forbidding changes to it.
-
-The second is closer to the current data model and preserves "finance team is a group you belong
-to" as the mental model. Whichever is chosen, **the loser must be dropped** — a column that looks
-authoritative and is not is a trap for the next contributor. Same finding as
-[DEFECTS.md](DEFECTS.md) D4.
-
-**Cost.** $0. One migration plus one policy rewrite.
-
----
-
-### 3.15 Client identity state outlives the session — Medium
-
-**Finding.** `isFinance` and `loaded` in
-[useFinanceMember.js:4](../src/composables/useFinanceMember.js#L4) are declared at **module
-scope**, outside the exported factory, so they are process-global for the life of the page.
-Sign-out is SPA navigation with no reload, so the module is never re-evaluated.
-
-A second user signing in on the same tab therefore inherits the first user's finance flag:
-`FundsTabs` renders the Collections and Expenses links, and the contributors section renders in
-the funds report.
-
-**What this is not.** **Not a data leak.** `0008` and `0009` enforce finance authorization
-server-side and the guard re-queries on every navigation, so the second user cannot read or write
-anything they shouldn't. The damage is that the UI asserts an entitlement the server will refuse —
-which erodes trust in the authorization model and generates support noise indistinguishable from a
-real breach.
-
-**Related.** The single `onAuthStateChange` listener
-([router/index.js:69](../src/router/index.js#L69)) handles only `PASSWORD_RECOVERY`. On
-refresh-token expiry the user sees a raw `JWT expired` string in an inline error box — a
-§3.5-class disclosure with worse UX.
-
-**Mitigation (free).** One session-scoped identity store subscribed to `onAuthStateChange`,
-cleared on `SIGNED_OUT` and on refresh failure, holding `{ churchId, churchName, linked, isFinance }`.
-This also closes [DEFECTS.md](DEFECTS.md) D5, D6, and D7 — the security fix and the cost fix are
-the same change.
-
-**Cost.** $0, and net-negative egress.
+**Still open from 3.15's "Related" note:** refresh-token expiry surfaces a raw `JWT expired`
+string. Tracked as issue #30.
 
 ---
 

@@ -53,6 +53,12 @@ Evaluate every decision against this order, in order:
   `prisma migrate resolve --applied`.
 - **Never add a runtime dependency** without a stated reason and a free-tier impact note. Every
   one ships to every user on every uncached visit.
+- **Never link to a line number from a document.** `#L748` is a claim about code that goes false
+  within a week, asserted where no test can check it. Link to a file, a symbol, or a migration.
+  This rule exists because four of sixteen defect entries described code that had been deleted.
+- **Never document what the code already states.** Route tables, directory trees, stack lists and
+  view inventories belong to `src/` and `package.json`. Docs carry the reasoning that is *not*
+  recoverable from code: decisions, threat models, why a fix took its shape.
 - **Never add a synthetic keep-alive cron** to dodge Supabase auto-pause. Budget spend for no
   real-user benefit, and it risks tripping abuse policies.
 
@@ -177,7 +183,8 @@ Read these when the task touches them. Do not read them all up front.
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model and **open** security findings | Touching auth, RLS, grants, headers, or data exposure |
 | [docs/security/VERIFICATION.md](docs/security/VERIFICATION.md) | How to prove a control works; the two-church isolation matrix | After changing any policy, grant, helper function, or view |
 | [docs/security/RESOLVED.md](docs/security/RESOLVED.md) | Closed security findings and why each fix took its shape | Before "improving" something that was already deliberately fixed |
-| [docs/DEFECTS.md](docs/DEFECTS.md) | Confirmed bugs, `D1`–`D16`, with reproductions | Picking up a fix, or before "improving" something already known-broken |
+| [GitHub issues](https://github.com/aesir19/church-sysyem/issues?q=is%3Aissue+is%3Aopen+label%3Adefect) | Open defects — migrated from `DEFECTS.md`, old `D*` ids kept in the titles | Picking up a fix, or before "improving" something already known-broken |
+| [docs/DEFECTS.md](docs/DEFECTS.md) | Now a pointer, plus why four entries went stale | Wondering where the defect list went |
 | [docs/BACKLOG.md](docs/BACKLOG.md) | Deferred features, `B1`–`B25` — absent, not broken | Asked for a feature that may already be specced |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Free-tier budgets, deploy/rollback, backups, monitoring gaps `O1`–`O25` | Deploying, migrating, or asked why the site is down |
 | [docs/agents/](docs/agents/) | Where issues live, the triage label strings, how to read the domain docs | Running an engineering skill that files, triages, or specs work |

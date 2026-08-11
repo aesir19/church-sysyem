@@ -43,71 +43,12 @@ schema/migration tooling run from Node; it never executes in the browser.
 | Users | Authorized church staff; one user maps to exactly one church |
 | Hosting | Netlify (static) + Supabase (free tiers) |
 
-## 2. Stack
-
-| Layer | Choice |
-|---|---|
-| UI | Vue 3, Composition API, `<script setup>` |
-| Routing | Vue Router 4 |
-| Build | Vite 6 |
-| Tests | Vitest (`environment: 'node'`) |
-| Backend SDK | `@supabase/supabase-js` v2 |
-| Schema tooling | Prisma CLI + migrations (Node only) |
-| Database | Supabase Postgres + Auth |
-| Modules | ESM |
-
-Deliberately absent: TypeScript, a linter, a state library, a UI component kit, a data-access
-layer. Versions live in [package.json](../package.json) — not repeated here.
-
-## 3. Where things live
-
-Directory purposes, not a file inventory (`ls src/` gives you that).
-
-| Path | Holds |
-|---|---|
-| `src/views/` | One SFC per screen. Each **owns its own Supabase queries inline** — there is no API layer (see [DEFECTS.md](DEFECTS.md) D16) |
-| `src/layouts/` | `DashboardLayout.vue` — sidebar shell wrapping every `/dashboard/*` child |
-| `src/components/` | `AppSidebar.vue` (nav), `FundsTabs.vue` (finance-gated Funds sub-nav) |
-| `src/composables/` | `useFinanceMember.js` — resolves the caller's Finance Team membership |
-| `src/utils/` | **Pure functions, no I/O.** Every file here has a matching test in `tests/utils/` |
-| `src/lib/` | `supabase.js` — the single client instance |
-| `src/router/` | Routes plus the global `beforeEach` guard |
-| `prisma/` | `schema.prisma` and numbered SQL migrations, each with an operational `rollback.sql` |
-| `scripts/prisma/` | Env preflight checks that gate the Prisma npm scripts |
-| `scripts/sql/` | `capture-security-state.sql` — read-only audit of live policies, grants, functions, views |
-| `tests/` | Vitest suites, mirroring `src/` |
-
-The `src/utils/` split is structural, not stylistic: it is the only reason any business logic in
-this project is testable without mounting a view.
-
 ## 4. Frontend
 
 ### 4.1 Bootstrap
 
 [main.js](../src/main.js) mounts `App.vue` (a bare `<router-view />`) with the router and global
 styles. `app.config.errorHandler` is **unset** — see [OPERATIONS.md](OPERATIONS.md) O2.
-
-### 4.2 Routes
-
-Defined in [src/router/index.js](../src/router/index.js).
-
-| Path | Name | Component | Meta |
-|---|---|---|---|
-| `/` | — | redirect → `/login` | — |
-| `/login` | `Login` | `LoginView` | — |
-| `/set-password` | `SetPassword` | `SetPasswordView` | `requiresAuth` |
-| `/account-pending` | `AccountPending` | `AccountPendingView` | `requiresAuth` |
-| `/dashboard` | — | `DashboardLayout` | `requiresAuth` |
-| `/dashboard` (index) | — | redirect → `/dashboard/members` | inherited |
-| `/dashboard/members` | `Members` | `DashboardView` | inherited |
-| `/dashboard/ministry` | `Ministry` | `MinistrySmallGroupView` | inherited |
-| `/dashboard/funds` | — | redirect → `/dashboard/funds/reports` | inherited |
-| `/dashboard/funds/reports` | `ChurchFunds` | `ChurchFundsView` | inherited |
-| `/dashboard/funds/collections` | `Collections` | `CollectionsInputView` | `+ requiresFinance` |
-| `/dashboard/funds/expenses` | `Expenses` | `ExpensesInputView` | `+ requiresFinance` |
-
-All components are **eagerly imported**; there is no lazy loading and no catch-all route
-([DEFECTS.md](DEFECTS.md) D9, D13).
 
 ### 4.3 The navigation guard
 
@@ -137,54 +78,6 @@ handles session expiry (D6).
 `VITE_SUPABASE_ANON_KEY` from `import.meta.env` and **throws at startup** if either is missing,
 so a misconfigured deploy fails closed rather than silently unauthenticated. It exports one
 shared client. Do not construct another.
-
-### 4.5 Views
-
-Each view fetches its own data on mount and mutates pessimistically — local state changes only
-after Supabase confirms.
-
-| View | Screen | Tables it touches |
-|---|---|---|
-| `LoginView` | Email/password sign-in | `auth` only |
-| `SetPasswordView` | Invite/recovery password set | `auth` only |
-| `AccountPendingView` | Holding page for an unlinked account | `auth` only |
-| `DashboardView` | Member list, sortable, with a tri-mode modal (view/create/edit/archive-confirm) | `members`, `get_my_church()` |
-| `MinistrySmallGroupView` | Ministry catalog (read-only) + church-owned small groups | `groups`, `group_members`, `members` |
-| `ChurchFundsView` | Monthly collectives report, print-to-PDF | `collectives_service_totals`, `collections`, `expenses` |
-| `CollectionsInputView` | Tithes/offering entry, 3-hour edit window | `collections`, `members`, `get_my_church()` |
-| `ExpensesInputView` | Month-scoped expense entry | `expenses`, `get_my_church()` |
-
-Two views carry logic worth knowing before editing them:
-
-**`ChurchFundsView`** renders a monthly report modeled on the paper "DFC Summary Report"
-workbook. It issues three live reads — the `collectives_service_totals` view once on mount (for
-the opening balance, replayed by `openingBalanceForMonth()`), then `collections` and `expenses`
-range-scoped per month, with a request-id guard discarding out-of-order responses from fast
-prev/next clicking. **All allocation math lives in
-[collectivesReport.js](../src/utils/collectivesReport.js)**, never in the view and never in SQL
-— see [ADR-0004](decisions/0004-view-aggregates-but-does-not-allocate.md), which also explains
-the two-denominator problem the allocation panel exists to avoid re-introducing.
-
-**`MinistrySmallGroupView`** works against one `groups` table where a `Ministry` has
-`church_id IS NULL` and a `Small Group` has a required `church_id`. Ministries are read-only in
-the app; only small groups can be created, renamed, or deleted. Group colors are assigned by a
-Postgres trigger from a 3,240-slot space with a global unique constraint — there is no color
-picker, and `color_slot` is not in the app's column grants.
-
-### 4.6 Pure logic layer
-
-`src/utils/` holds thirteen I/O-free modules, each with a test. The ones that encode a rule
-rather than a helper:
-
-| Module | Encodes |
-|---|---|
-| `collectivesReport.js` | The whole allocation model — the single source of truth for it |
-| `collectivesSource.js` | Live rows → calculator shapes; opening-balance replay |
-| `reportExpenseMerge.js` | Folds expenses into per-service weeks; a date with expenses but no service becomes its own week |
-| `collectionPayload.js` | Insert payload + `contributorLabel()`, which keeps "Anonymous" (`from IS NULL`) distinct from "Unknown" (unreadable member) — see [ADR-0003](decisions/0003-nullable-collections-from.md) |
-| `collectionsDate.js` | Service-date auto-selection and the 3-hour edit-window check |
-| `mutationResult.js` | Shared mutation outcome contract, incl. `EDIT_WINDOW_CLOSED_MESSAGE` |
-| `expensesMonth.js` | Month parsing and range bounds for month-scoped queries |
 
 ### 4.7 Styling
 
@@ -231,9 +124,9 @@ Three consequences that bite in application code, all in
 3. **Funds `SELECT` is not finance-gated.** The reports page is not a finance-only route, so
    gating reads would break it for everyone else.
 
-> **Stale comment warning.** [DashboardView.vue:457](../src/views/DashboardView.vue#L457) still
-> claims RLS filters `archived_at`. It does not, and has not since `0010`. The query below it is
-> correct because it filters explicitly; the comment is not.
+> **RLS does not filter `archived_at`, and has not since `0010`.** The filter is the
+> application's job on every read — see [CONTEXT.md](../CONTEXT.md) *Archive*. It now lives inside
+> `listRecords()` in `src/lib/data/members.js` rather than being repeated at each call site.
 
 ### 5.2 Archiving
 
@@ -309,3 +202,28 @@ filtered out client-side. Subsequent reloads exclude it **because the query says
 **Monthly report →** `collectives_service_totals` once for the opening balance, then
 `collections` + `expenses` scoped to the month → reshaped by `collectivesSource.js` and
 `reportExpenseMerge.js` → `computeMonthlyReport()` does all allocation → view renders.
+
+---
+
+## What this document deliberately does not contain
+
+Sections 2, 3, 4.2, 4.5 and 4.6 were removed on 2026-08-11. They transcribed the stack, the
+directory tree, the route table, the view inventory and the utils list — all of which the code
+already states, and all of which had drifted (§3 still described `useFinanceMember.js`, deleted
+months earlier).
+
+Numbering is left with gaps on purpose, so existing `§5.1`-style references still resolve.
+
+Read the code for structure:
+
+| Question | Read |
+|---|---|
+| What is the stack, at what version? | `package.json` |
+| What lives where? | `ls src/` |
+| What routes exist, and which are guarded? | `src/router/index.js` |
+| What does a view do? | the SFC |
+| What pure logic exists? | `src/utils/`, each with a matching test |
+| What tables, columns, policies, grants? | `prisma/schema.prisma`, `prisma/migrations/` |
+
+What stays here is the part the code does not state: how the tiers fit together, why the anon key
+is safe to ship, how authorization is meant to work, and how data flows through a request.
