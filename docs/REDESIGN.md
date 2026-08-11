@@ -113,6 +113,42 @@ The magenta second accent ships as a ramp plus four semantic tokens and a `Badge
 `accent-secondary` variant. Its first real consumer is the Members header count in Stage 2 —
 deliberately one surface, because magenta beside cyan everywhere leaves neither meaning anything.
 
+### What Stage 2 landed
+
+Split in two commits exactly as [Amendment 13](#amendment-13--members-stops-being-a-restyle)
+requires, because a data-flow change and a repaint in one diff makes both unreviewable.
+
+**2a — the restyle.** `DashboardView` is on tokens and `ui/`. Its **duplicate header is deleted** —
+the second "UDFC Dashboard" title and second Sign Out button that were the whole reason D12 existed;
+Phase 1b made the two sign-out paths agree, and this removes the second path's reason to exist.
+All four hand-rolled modals became `ui/Modal` call sites and the local toast queue became
+`useToast`.
+
+D11's remaining two sub-fixes land here. Sorting was `<th @click>` and rows were `<tr @click>` — a
+`<th>` and a `<tr>` are neither focusable nor activatable, so **the members table could not be
+sorted or opened from a keyboard at all**, and `aria-sort` was never announced. Both now carry real
+`<button>` elements, which is the pattern `MinistrySmallGroupView`'s group cards already used.
+Sorting is names-only, the accepted regression A13 records.
+
+The detail modal became **a right panel that is empty until a row is chosen**, so PII still appears
+only after a deliberate click. Below 1024px it is `ui/Modal` instead: A13 says the row navigates on
+mobile, and the member detail route is on the deferred list, so the accessible dialog already in the
+bundle is the honest substitute rather than an invented route. `MemberDetailPanel.vue` holds the
+field list once — two copies of a PII field list is what drifts.
+
+`facebook_link` is a link under all four of [Amendment 14](#amendment-14--facebook_link-becomes-a-link-under-conditions)'s
+conditions. `src/utils/memberLink.js` is the scheme check and host allowlist, applied **at render**
+— the half that actually protects, because nobody has audited what is already in that column.
+`window.confirm` is gone from the discard path: a browser-chrome dialog on top of an application
+dialog steals focus with none of the guarantees ADR-0011's Dialog buys, and the in-dialog warning
+carries the discard action instead.
+
+**Measured.** `CheckinView-*.js` is **6.68 kB, unchanged** — the gate holds. `Modal.vue` now has two
+call sites, so Rollup hoisted it and `reka-ui` into a **shared lazy chunk** (`Modal-*.js`, 31.7 kB /
+10.4 kB gzip) instead of inlining a copy per view: `MinistrySmallGroupView-*.js` fell from 51.4 kB
+to 19.8 kB. `DashboardView-*.css` fell from 9.60 kB to 7.94 kB. The shared entry grew 0.93 kB raw
+(0.39 kB gzip) — four new glyphs in `iconPaths.js`, which lives there.
+
 ### Open decisions blocking Phase 0 — both now settled
 
 Both changed what goes into `src/styles/tokens.css`, so both had to be settled before that file

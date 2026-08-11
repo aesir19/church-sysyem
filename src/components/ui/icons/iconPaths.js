@@ -53,6 +53,26 @@ export const ICON_PATHS = Object.freeze({
   /** The "sortable, not currently sorted" affordance on a table header. */
   'chevron-sort': Object.freeze(['M8 9l4-4 4 4', 'M16 15l-4 4-4-4']),
 
+  plus: Object.freeze(['M12 5v14', 'M5 12h14']),
+
+  pencil: Object.freeze([
+    'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7',
+    'M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z',
+  ]),
+
+  /** Soft delete, which is what "archive" means here — see CONTEXT.md. */
+  archive: Object.freeze([
+    'M3 8h18v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
+    'M2 4h20v4H2z',
+    'M10 12h4',
+  ]),
+
+  'external-link': Object.freeze([
+    'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6',
+    'M15 3h6v6',
+    'M10 14 21 3',
+  ]),
+
   search: Object.freeze(['M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0', 'M21 21l-4.35-4.35']),
 
   clock: Object.freeze(['M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0', 'M12 6v6l4 2']),
