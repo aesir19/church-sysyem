@@ -82,8 +82,9 @@ export function classifyWriteError(error) {
   // The SQLSTATE alone only when there is no message to read. 42501 also covers a
   // plain missing GRANT, which is a deployment fault rather than a permission
   // decision, and telling a user they lack permission would send them to the
-  // wrong person. That distinction was verified against staging — see
-  // isPolicyViolation's history in src/utils/attendanceLink.js.
+  // wrong person. That distinction was verified against staging with the
+  // docs/security/VERIFICATION.md §4.1 isolation matrix; the cases are kept in
+  // tests/lib/data/write.test.js.
   if (!error.message && error.code === INSUFFICIENT_PRIVILEGE) return 'denied'
   if (error.code === UNIQUE_VIOLATION || /duplicate key value|already exists/i.test(text)) {
     return 'conflict'
@@ -118,12 +119,24 @@ export function classifyWriteError(error) {
  * these payloads rather than redacting them. The same text must not reach the
  * screen either. The original error is passed through as `cause` for logging.
  *
+ * `columns` is REQUIRED. Defaulting it to `*` would put every write one
+ * forgotten option away from selecting every column of a table — including the
+ * seventeen PII columns on `members`, which CLAUDE.md makes a standing "Never".
+ * A missing `columns` is a programming error, not a runtime condition, so it
+ * throws rather than returning a result: it must fail on the first test run and
+ * can never reach a user. Writes that need nothing back pass `'id'`.
+ *
  * @param {{ select: (columns: string) => PromiseLike<{ data: unknown, error: unknown }> }} builder
- * @param {{ columns?: string, messages?: Partial<typeof DEFAULT_MESSAGES> }} [options]
+ * @param {{ columns: string, messages?: Partial<typeof DEFAULT_MESSAGES> }} options
  * @returns {Promise<{ ok: boolean, message: string, rows: unknown[], cause: unknown }>}
  */
 export async function write(builder, options = {}) {
-  const { columns = '*', messages = {} } = options
+  const { columns, messages = {} } = options
+  if (typeof columns !== 'string' || columns.trim() === '') {
+    throw new TypeError(
+      'write(): `columns` is required. Pass the columns you render, or "id" if you need nothing back.'
+    )
+  }
   const say = (kind) => messages[kind] ?? DEFAULT_MESSAGES[kind]
 
   if (!builder || typeof builder.select !== 'function') {
@@ -152,6 +165,45 @@ export async function write(builder, options = {}) {
   // that this module needs an un-awaited builder to attach `.select()` to.
   if (affectedRowCount(data) === 0) {
     return { ok: false, message: say('blocked'), rows: [], cause: null }
+  }
+
+  return { ok: true, message: '', rows: toRows(data), cause: null }
+}
+
+/**
+ * The same interpretation, for a mutating RPC.
+ *
+ * An RPC is already a promise — there is no builder to attach `.select()` to, so
+ * this takes the pending call directly. The important difference from `write`:
+ * **an empty result is not a blocked write here.** A `void` function legitimately
+ * returns null, so treating that as a refusal would report every successful call
+ * as a failure. An RPC that RLS refuses raises instead, and lands in
+ * `classifyWriteError` like any other error.
+ *
+ *   const result = await writeRpc(
+ *     supabase.rpc('close_service_now', { p_service_id: id }),
+ *     { messages: { denied: 'You cannot close that service.' } }
+ *   )
+ *
+ * @param {PromiseLike<{ data: unknown, error: unknown }>} pending
+ * @param {{ messages?: Partial<typeof DEFAULT_MESSAGES> }} [options]
+ * @returns {Promise<{ ok: boolean, message: string, rows: unknown[], cause: unknown }>}
+ */
+export async function writeRpc(pending, options = {}) {
+  const { messages = {} } = options
+  const say = (kind) => messages[kind] ?? DEFAULT_MESSAGES[kind]
+
+  let result
+  try {
+    result = await pending
+  } catch (thrown) {
+    return { ok: false, message: say('failed'), rows: [], cause: thrown }
+  }
+
+  const { data, error } = result || {}
+
+  if (error) {
+    return { ok: false, message: say(classifyWriteError(error)), rows: [], cause: error }
   }
 
   return { ok: true, message: '', rows: toRows(data), cause: null }

@@ -37,12 +37,15 @@ Evaluate every decision against this order, in order:
   See [ADR-0002](docs/decisions/0002-no-second-compute-vendor.md).
 - **Never replicate authorization in the frontend.** If a user shouldn't see a row, the *policy*
   must reject it. UI gating is presentation, never enforcement.
-- **Never `select('*')` on `members`.** Enumerate columns. `MEMBER_COLUMNS` lives in
-  [src/lib/data/members.js](src/lib/data/members.js) — reads go through that module rather than
-  copying the list.
-- **Never issue a PostgREST write outside [src/lib/data/](src/lib/data/).** RLS refuses a write by
-  *filtering*, so an unwrapped mutation reports a refusal as success. Pass the builder to `write()`.
-  The `write-seam/writes-through-seam` ESLint rule fails the build on this.
+- **Never `select('*')` on `members`.** Enumerate columns. `MEMBER_COLUMNS` and the two member
+  reads live in [src/lib/data/members.js](src/lib/data/members.js) — prefer that module over a new
+  inline query. Not yet universal: `MinistrySmallGroupView` still reads members inline for its
+  picker, which is [DEFECTS.md](docs/DEFECTS.md) D16.
+- **Never take the outcome of a PostgREST write from the raw result.** RLS refuses a write by
+  *filtering*, so `{ error: null, data: [] }` means refused, not saved. Pass the builder to
+  `write()` (or a mutating RPC to `writeRpc()`) from [src/lib/data/write.js](src/lib/data/write.js)
+  and branch on `result.ok`. Constructing the builder in a view is fine — it is reading the outcome
+  yourself that is banned, and the `write-seam/writes-through-seam` ESLint rule fails the build on it.
 - **Never add realtime subscriptions** unless explicitly requested. The static-snapshot model
   is intentional; websockets burn egress continuously.
 - **Never edit or re-run a deployed migration.** In particular `0006_baseline_rls` is a record

@@ -23,6 +23,21 @@ import globals from 'globals'
 // This walks the chain instead: flag a mutation whose receiver roots at
 // `supabase.from(...)` unless it is lexically inside a `write(...)` argument.
 
+/**
+ * Re-emit a shared config with every rule at `warn`.
+ *
+ * Exactly one rule in this repo gates CI — the write-seam rule below. The
+ * recommended sets are a 1,400-finding backlog across code that had never been
+ * linted, and gating on them would block changes that have nothing to do with
+ * them. Promote by dropping this wrapper, once the backlog is worked.
+ */
+function demoteToWarnings(config) {
+  return {
+    ...config,
+    rules: Object.fromEntries(Object.keys(config.rules ?? {}).map((rule) => [rule, 'warn'])),
+  }
+}
+
 const MUTATION_METHODS = new Set(['insert', 'update', 'delete', 'upsert'])
 
 /** Does this expression chain bottom out at `supabase.from(...)`? */
@@ -97,9 +112,13 @@ const writeSeamPlugin = {
 export default [
   { ignores: ['dist/**', 'node_modules/**', '.netlify/**', '.lighthouseci/**'] },
 
-  js.configs.recommended,
-  // eslint-plugin-vue 10 makes Vue 3 the default, so this is the Vue 3 set. The
-  // plain variant reports at `warn`; `flat/recommended-error` is the same rules
+  // js.configs.recommended ships its rules at `error`. Left as-is, an unused
+  // import in an unrelated PR turns CI red — which is precisely what the
+  // warn-level decision was meant to prevent. Demote the whole set explicitly.
+  demoteToWarnings(js.configs.recommended),
+
+  // eslint-plugin-vue 10 makes Vue 3 the default, so this is the Vue 3 set. This
+  // variant already reports at `warn`; `flat/recommended-error` is the same rules
   // at `error`, which is the promotion to make once the backlog is worked.
   ...pluginVue.configs['flat/recommended'],
 
@@ -114,9 +133,9 @@ export default [
       // `try { localStorage… } catch {}` is a deliberate idiom throughout this
       // codebase: storage throws in private mode and there is nothing to do
       // about it. See useActiveChurch.js and DashboardLayout.vue.
-      'no-empty': ['error', { allowEmptyCatch: true }],
+      'no-empty': ['warn', { allowEmptyCatch: true }],
 
-      // The one rule that gates CI. Everything inherited above is a warning:
+      // The ONLY rule that gates CI. Everything inherited above is a warning:
       // 15,000 lines had never been linted, and a backlog of pre-existing
       // findings must not block the change that closes a live defect.
       'write-seam/writes-through-seam': 'error',

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '../lib/supabase'
 import MemberAutocomplete from '../components/MemberAutocomplete.vue'
-import { write } from '../lib/data/write'
+import { write, writeRpc } from '../lib/data/write'
 import { buildGuestLinkPayload, isDuplicateMemberConflict } from '../utils/attendanceLink'
 import { buildStaffAttendancePayload, validateCheckinContact, validateCheckinName } from '../utils/checkinPayload'
 import {
@@ -415,11 +415,14 @@ async function handleCloseNow() {
   }
 
   closingService.value = true
-  const { error } = await supabase.rpc('close_service_now', { p_service_id: target.id })
+  const result = await writeRpc(
+    supabase.rpc('close_service_now', { p_service_id: target.id }),
+    { messages: { denied: 'You cannot close that service. It may belong to another church.' } }
+  )
   closingService.value = false
 
-  if (error) {
-    showToast(error.message, 'error')
+  if (!result.ok) {
+    showToast(result.message, 'error')
     return
   }
 
@@ -472,15 +475,18 @@ async function handleRotateToken() {
   }
 
   rotatingToken.value = true
-  const { data, error } = await supabase.rpc('rotate_checkin_token', { p_church_id: myChurchId.value })
+  const result = await writeRpc(
+    supabase.rpc('rotate_checkin_token', { p_church_id: myChurchId.value }),
+    { messages: { denied: 'You cannot rotate the check-in link for that church.' } }
+  )
   rotatingToken.value = false
 
-  if (error) {
-    showToast(error.message, 'error')
+  if (!result.ok) {
+    showToast(result.message, 'error')
     return
   }
 
-  checkinToken.value = data || ''
+  checkinToken.value = result.rows[0] || ''
   qrSvg.value = ''
   showQr.value = false
   showToast('New check-in link generated. Reprint the QR code.')

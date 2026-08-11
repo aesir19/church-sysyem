@@ -542,7 +542,7 @@ async function saveEdit() {
   // reports as success with zero rows. `write` is what catches that.
   const result = await write(
     supabase.from('collections').update({ amount: editAmount.value }).eq('id', selectedEntry.value.id),
-    { messages: { blocked: EDIT_WINDOW_CLOSED_MESSAGE } }
+    { columns: 'id', messages: { blocked: EDIT_WINDOW_CLOSED_MESSAGE } }
   )
 
   editSaving.value = false
@@ -565,7 +565,7 @@ async function handleDelete() {
 
   const result = await write(
     supabase.from('collections').delete().eq('id', selectedEntry.value.id),
-    { messages: { blocked: EDIT_WINDOW_CLOSED_MESSAGE } }
+    { columns: 'id', messages: { blocked: EDIT_WINDOW_CLOSED_MESSAGE } }
   )
 
   if (!result.ok) {
