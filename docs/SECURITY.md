@@ -48,7 +48,7 @@ Sorted by impact × likelihood within the threat model below. Everything in Tier
 | 13 | No data-retention policy; soft-deleted PII is kept forever | Medium | 3.10 |
 | 14 | CSP violations are unreported — a blocked injection produces no signal | Low | 3.17 |
 
-**Ordering.** #3 depends on [DEFECTS.md](DEFECTS.md) D1 — fix `collections.amount` to
+**Ordering.** #3 depends on [issue #27](https://github.com/aesir19/church-sysyem/issues/27) — fix `collections.amount` to
 `numeric(12,2)` *before* adding ledger history, or the history faithfully records drifting float
 values. #14 needs the sink from [ADR-0006](decisions/0006-error-sink-in-stack.md), so those two
 land together.
@@ -148,36 +148,28 @@ Two notes for anyone tightening this further:
 
 ---
 
-### 3.5 Raw Supabase error messages render verbatim — Medium
+### 3.5 Raw Supabase error messages render verbatim — Medium (narrowed 2026-08-11)
 
-**Finding.** `LoginView.vue` sets `errorMessage.value = error.message` and renders it under the
-form. `DashboardView.vue` does the same for load, insert, update, and archive failures.
+**Finding.** Postgres and PostgREST error text is quoted back to the user. Constraint violations
+embed the offending row verbatim — `Key (first_name, last_name)=(Juan, Dela Cruz) already exists`
+— so a duplicate-member attempt prints another member's name to whoever is at the screen. The same
+class of text also carries table names, column names and policy names.
 
-Supabase messages can include constraint names, column names, RLS policy names (`new row violates
-row-level security policy "members_insert_own_church"`), and Postgres error codes — together
-revealing schema and policy details that help an attacker shape further probes.
+**Closed for writes.** Every mutation now goes through `write()` / `writeRpc()` in
+[src/lib/data/write.js](../src/lib/data/write.js), which classifies the failure and returns one of
+four safe messages. Raw driver text is returned only on `cause`, for logging, and never reaches a
+view. The `write-seam/writes-through-seam` ESLint rule fails the build if a mutation bypasses it.
 
-**Mitigation (free).** Map known errors to user-facing strings; surface the raw message only in
-`import.meta.env.DEV`:
+**Still open for reads.** Three read paths interpolate the driver message directly:
 
-```js
-function userFacing(err) {
-  if (!err) return ''
-  if (import.meta.env.DEV) return err.message
-  if (err.status === 400 && /invalid login/i.test(err.message)) {
-    return 'Invalid email or password.'
-  }
-  if (err.code === '42501' || /row-level security/i.test(err.message)) {
-    return 'You do not have permission to perform this action.'
-  }
-  if (err.code === '23505') return 'That record already exists.'
-  if (err.code === '23502') return 'A required field is missing.'
-  return 'Something went wrong. Please try again.'
-}
-```
+- `AttendanceView` — `Failed to load the roster: ${error.message}`
+- `CollectionsInputView` — `Failed to load members: ${error.message}` and
+  `Failed to load collections: ${error.message}`
 
-Apply at every call site currently doing `error.message`. This belongs in the shared layer
-[DEFECTS.md](DEFECTS.md) D16 proposes, not copied into each view.
+A read is far less likely than a constraint violation to carry row values, which is why this is
+narrowed rather than urgent — but `permission denied for table X` still discloses schema, and the
+fix is the same one already built: route reads through their feature module and return a message
+the module chose. That is the data-access work tracked as issue #38.
 
 **Cost.** $0.
 
@@ -211,7 +203,7 @@ in the same visit — §3.18 depends on them.
 
 **Finding.** `members` captures `archived_at` and `archived_reason` but not **who** archived the
 row, when it was last edited, or by whom. With one user per church
-([BACKLOG.md](BACKLOG.md) B8) the blast radius is small — but if two staff ever share an account,
+(cross-church access is limited to SuperAdmin / Head Pastor) the blast radius is small — but if two staff ever share an account,
 or an admin role is added, "who changed this record?" becomes unanswerable.
 
 **Mitigation (cheap).** Five nullable columns plus a trigger reading `auth.uid()` from the JWT
@@ -380,7 +372,7 @@ string. Tracked as issue #30.
 So the one table that permits destructive edits **by design** records nothing about who performed
 them. The system cannot answer *"who changed this amount, from what, to what, and when"* — the
 first question anyone asks about a financial discrepancy, and the entire premise of the planned
-Report Discrepancy workflow ([BACKLOG.md](BACKLOG.md) B15), which has no substrate until this
+Report Discrepancy workflow ([issue #46](https://github.com/aesir19/church-sysyem/issues/46)), which has no substrate until this
 exists.
 
 The 3-hour window is a **containment** control, not an accountability one: it bounds how long a
@@ -414,7 +406,7 @@ alter table public.collections_history enable row level security;
 Pair with a `SECURITY DEFINER` trigger on `collections` for `UPDATE` and `DELETE`. Grant `SELECT`
 only to whichever role §3.14 settles on as the finance authority.
 
-> **Ordering.** `collections.amount` is still `real` — [DEFECTS.md](DEFECTS.md) D1. **Fix that to
+> **Ordering.** `collections.amount` is still `real` — [issue #27](https://github.com/aesir19/church-sysyem/issues/27). **Fix that to
 > `numeric(12,2)` first**, or the history table faithfully records drifting values.
 
 **Cost.** ~40 bytes per mutation. Mutations are rare by design.
@@ -506,29 +498,28 @@ a way that produces no error**. The rebuild would appear to work. That is why th
 
 ---
 
-### 3.20 Release integrity — deploys are not gated, secrets have no rotation path — Medium
+### 3.20 Release integrity — secrets have no rotation path — Medium (narrowed 2026-08-11)
 
 **Finding.** Three gaps between commit and production:
 
-1. **CI is advisory.** [ci.yml](../.github/workflows/ci.yml) runs `npm test` and `npm run build` on
-   PRs and pushes to `main`, but Netlify builds from the repository independently. Unless the
-   Netlify dashboard is configured otherwise — **verify this** — a commit whose tests fail still
-   deploys. The guard exists and is wired to nothing.
-2. **Migration ordering is enforced by human memory.** Migrations must land before the matching SPA
-   release; nothing checks it. The failure mode is a live `column does not exist` error for every
-   user — most likely during exactly the [DEFECTS.md](DEFECTS.md) D1/D2 schema work this document
-   recommends.
-3. **No secret-rotation runbook.** No procedure or trigger condition for rotating
+1. ~~**CI is advisory.**~~ **Closed.** Netlify's own git-triggered build is stopped; the `deploy`
+   job in [ci.yml](../.github/workflows/ci.yml) is the only thing that publishes, and it carries
+   `needs: [test, lighthouse, migrate]`. A red build cannot ship. See
+   [OPERATIONS.md](OPERATIONS.md) §2.
+2. ~~**Migration ordering is enforced by human memory.**~~ **Closed** by the same `needs:` edge —
+   `deploy` cannot run unless `migrate` succeeded first, so the SPA cannot reach production ahead
+   of the schema it depends on.
+3. **No secret-rotation runbook** — the one part still open, tracked as O19. No procedure or trigger condition for rotating
    `VITE_SUPABASE_ANON_KEY`, `DATABASE_URL`, or `DIRECT_URL`, and no written statement of whether a
    service-role key exists or who holds it. §1 asserts the frontend never references one — that is
    a code fact, not an inventory.
 
 **Mitigation (free).**
 
-1. Gate the Netlify build on the GitHub check, or move deployment into the existing workflow so a
-   red build cannot ship.
-2. Add `npm run prisma:migrate:status` to CI and fail the job when the tree expects a migration
-   that is not deployed.
+1. ~~Gate the Netlify build~~ — done, by moving deployment into the workflow.
+2. ~~Add a migration gate~~ — done, via `needs: [.., migrate]`. Adding
+   `npm run prisma:migrate:status` as an explicit check would still be an improvement over
+   relying on the deploy job's own success.
 3. Write a rotation runbook in [OPERATIONS.md](OPERATIONS.md): what to rotate, in what order, what
    breaks during the window, and the trigger conditions — staff departure, suspected exposure,
    annual. Include an explicit line recording whether a service-role key exists.

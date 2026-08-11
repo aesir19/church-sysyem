@@ -2,10 +2,8 @@
 
 Issues and specs for this repo live as GitHub issues in [`aesir19/church-sysyem`](https://github.com/aesir19/church-sysyem). Use the `gh` CLI for all operations.
 
-> **Prerequisite — authenticate first.** `gh` is installed on the primary dev machine
-> (`C:\Program Files\GitHub CLI\gh.exe`, on the *machine* PATH), but it is **not logged in**. Run
-> `gh auth login` once — it is interactive, so an agent cannot do it for you — before the
-> issue-tracker skills (`/to-tickets`, `/triage`, `/to-spec`, `/wayfinder`) can do anything.
+> **Authenticated** as `aesir19` (scopes: `gist`, `read:org`, `repo`, `workflow`), ADMIN on the
+> repo, issues enabled.
 >
 > **If a shell reports `gh: command not found`**, that shell's PATH predates the install rather
 > than the binary being absent. Restart VS Code (the extension host inherits its parent's
@@ -57,18 +55,21 @@ Create a GitHub issue.
 
 Run `gh issue view <number> --comments`.
 
-## Relationship to the in-repo trackers
+## Relationship to the in-repo registers
 
-This repo already tracks known work in Markdown, and those files remain the source of truth for
-their own categories — do not migrate them into GitHub issues wholesale:
+Defects (`D*`) and deferred features (`B*`) **were migrated into this tracker on 2026-08-11**. The
+old ids are preserved in the issue titles (`D1 — …`, `B17 — …`) so older commits and ADRs still
+resolve. [DEFECTS.md](../DEFECTS.md) and [BACKLOG.md](../BACKLOG.md) are now pointers.
 
-- [docs/DEFECTS.md](../DEFECTS.md) — confirmed bugs, `D1`–`D16`
-- [docs/BACKLOG.md](../BACKLOG.md) — deferred features, `B1`–`B25`
-- [docs/SECURITY.md](../SECURITY.md) — open security findings
-- [docs/OPERATIONS.md](../OPERATIONS.md) — monitoring gaps, `O1`–`O25`
+Two registers stay in-repo, deliberately:
 
-When an issue corresponds to one of these, cross-reference the id in the issue body (e.g. `Fixes D9`)
-rather than restating the entry.
+- [docs/OPERATIONS.md](../OPERATIONS.md) `O1`–`O26` — a **runbook**, not a queue. You read it
+  during an incident, in order, offline if need be.
+- [docs/SECURITY.md](../SECURITY.md) — open findings with threat-model context. This repo is
+  public; a filed, labelled, searchable list of its own weaknesses is a disclosure document.
+
+When an issue relates to one of those, cross-reference the id (`O5`, `§3.16`) rather than
+restating it.
 
 ## Wayfinding operations
 

@@ -40,7 +40,7 @@ Evaluate every decision against this order, in order:
 - **Never `select('*')` on `members`.** Enumerate columns. `MEMBER_COLUMNS` and the two member
   reads live in [src/lib/data/members.js](src/lib/data/members.js) — prefer that module over a new
   inline query. Not yet universal: `MinistrySmallGroupView` still reads members inline for its
-  picker, which is [DEFECTS.md](docs/DEFECTS.md) D16.
+  picker, which is [issue #38](https://github.com/aesir19/church-sysyem/issues/38).
 - **Never take the outcome of a PostgREST write from the raw result.** RLS refuses a write by
   *filtering*, so `{ error: null, data: [] }` means refused, not saved. Pass the builder to
   `write()` (or a mutating RPC to `writeRpc()`) from [src/lib/data/write.js](src/lib/data/write.js)
@@ -74,8 +74,10 @@ Evaluate every decision against this order, in order:
 - **Every new authenticated route needs `meta: { requiresAuth: true }`** in
   [src/router/index.js](src/router/index.js).
 - **Every schema change goes through Prisma** (`prisma/schema.prisma` + `prisma/migrations/`),
-  and **the migration deploys before the SPA release that depends on it.** Nothing enforces
-  this ordering; the failure mode is a live column-not-found error.
+  and **the migration deploys before the SPA release that depends on it.** This is now enforced:
+  the `deploy` job in [ci.yml](.github/workflows/ci.yml) carries `needs: [test, lighthouse,
+  migrate]`, so the SPA cannot reach production ahead of its schema. Do not remove that edge —
+  the failure mode it prevents is a live column-not-found error for every user.
 - **Every Supabase call uses the shared client** imported from
   [src/lib/supabase.js](src/lib/supabase.js). Do not construct a second one.
 - **Every code or schema change gets a `code-reviewer` pass before it is called done.** Dispatch
@@ -108,12 +110,14 @@ Per-repo configuration the installed engineering skills read. Full detail in `do
 
 ### Issue tracker
 
-Issues live as GitHub issues in `aesir19/church-sysyem`, driven by the `gh` CLI — installed, but
-**not yet authenticated** (`gh auth login`). See
-[docs/agents/issue-tracker.md](docs/agents/issue-tracker.md). The in-repo
-trackers ([DEFECTS.md](docs/DEFECTS.md) `D*`, [BACKLOG.md](docs/BACKLOG.md) `B*`,
-[OPERATIONS.md](docs/OPERATIONS.md) `O*`) stay authoritative for their own entries; issues
-cross-reference those ids rather than restating them.
+Issues live as GitHub issues in `aesir19/church-sysyem`, driven by the `gh` CLI (installed and
+authenticated). See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
+
+Defects (`D*`) and deferred features (`B*`) were migrated into the tracker on 2026-08-11 and the
+old ids are preserved in the issue titles. **[OPERATIONS.md](docs/OPERATIONS.md) `O*` is the one
+register still kept in-repo** — it is a runbook, not a queue.
+
+**The repo is public**: never paste member PII, keys, or `.env*` contents into an issue.
 
 ### Triage labels
 
@@ -168,7 +172,7 @@ These follow from priority 1 and are binding unless the owner overrides them.
 
 The route threshold was breached and is now **resolved** — every route is `() => import(...)`.
 Keep it that way when adding one: `/checkin` is opened on phones, on church wifi, with a cold
-cache, every service. See [DEFECTS.md](docs/DEFECTS.md) D9.
+cache, every service.
 
 ---
 

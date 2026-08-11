@@ -65,5 +65,5 @@ design exists to preserve.
 `collections_insert_own_church` scopes on `from_church` and says nothing about `from`. Adding
 `("from" IS NULL OR public.is_member_in_my_church("from"))` looks like obvious hardening — it is
 the pattern `0004` uses for `group_members` — but visiting members give at other churches'
-services, and that check would reject the case. See [BACKLOG.md](../BACKLOG.md) B17, which is the
+services, and that check would reject the case. See [issue #47](https://github.com/aesir19/church-sysyem/issues/47), which is the
 open design for recording visitors by name; resolve it before tightening this policy.

@@ -6,8 +6,10 @@ This is a **single-context** repo — one `CONTEXT.md` at the root, one ADR dire
 
 ## Before exploring, read these
 
-- **`CONTEXT.md`** at the repo root — the glossary / ubiquitous language. **Does not exist yet**;
-  `/domain-modeling` creates it lazily when terms actually get resolved.
+- **[`CONTEXT.md`](../../CONTEXT.md)** at the repo root — the glossary / ubiquitous language.
+  Created 2026-08-11. Defines Church, Active church, Member, Member record, Directory, Archive,
+  Blocked write, Capability, Service, Check-in, Guest — and the distinctions between them that the
+  code depends on.
 - **[`docs/decisions/`](../decisions/)** — this repo's ADR directory. Note the path: decisions live
   in `docs/decisions/`, **not** `docs/adr/`. Read the records that touch the area you're about to
   work in; [docs/decisions/README.md](../decisions/README.md) is the index.
@@ -24,10 +26,10 @@ backlog, operations. Read those when the task touches them, not up front.
 
 ```
 /
-├── CONTEXT.md                  ← glossary (not yet created)
+├── CONTEXT.md                  ← glossary
 ├── CLAUDE.md                   ← binding rules + doc map
 ├── docs/
-│   ├── decisions/              ← ADRs 0001–0008, plus README index
+│   ├── decisions/              ← ADRs 0001–0010, plus README index
 │   ├── ARCHITECTURE.md
 │   ├── SECURITY.md
 │   ├── DEFECTS.md
