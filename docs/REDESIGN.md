@@ -13,10 +13,36 @@ with the original brief, the correction is flagged inline.
 
 | | |
 |---|---|
-| Branch | `redesign` (no code written yet) |
-| Phase | **Phase 0 unblocked.** Both blocking decisions settled 2026-08-11 — see [Amendments 7 and 8](#amendment-7--dark-mode-resolved-in). |
+| Branch | `redesign` |
+| Phase | **Phase 0 built (2026-08-11).** §0.1–§0.5 landed; §0.6 was already done. **Phase 1 is gated on the §0.5 step-3 sign-off**, which is a human call on the style-guide route — see below. |
 | Mockups | Leaving the repo — see [Amendment 16](#amendment-16--the-mockups-leave-the-repo) |
 | Scope | Existing features only. [Amendment 9](#amendment-9--scope-is-the-existing-feature-set-not-the-mockups-feature-set) is the boundary. |
+
+### What Phase 0 landed, and what it deliberately did not
+
+Built: `src/styles/tokens.css` (two layers, dark theme, the global reduced-motion block),
+`src/components/ui/` (Button, Card, Input, Badge, Spinner, Modal, Toast, ToastHost,
+TableSortHeader, the local icon set), `AppLogo.vue` and a real favicon, the
+`theme`/`toast`/`sortState` utils and composables, and the dev-only style-guide route at
+**`/dev/style-guide`** — which is where the sign-off happens.
+
+**Not done, on purpose, because they belong to later phases:** no view was migrated; `<ToastHost />`
+is *not* yet mounted in `App.vue` (Phase 1b owns that, and mounting it early would add entry-chunk
+bytes for nothing); the sidebar still injects its icons with `v-html` (Stage 1b); the Lighthouse
+accessibility threshold is still 0.85 (Amendment 6 raises it at the *end* of Phase 1 — measured
+headroom exists already: login 0.91, checkin 1.0, 404 1.0).
+
+Two decisions were made during the build that amend records above, both written up where they
+belong rather than only here:
+
+- **Reka UI is scoped to `Dialog` alone; its Toast was declined.** `ToastHost` mounts in `App.vue`,
+  which is the shared entry chunk — the library would have shipped to every `/checkin` visitor
+  rather than to a lazy dashboard chunk. Recorded in
+  [ADR-0011](decisions/0011-headless-primitives-for-accessibility.md).
+- **The bundle gate holds — `CheckinView-*.js` is byte-identical at 6,675 B — but the dependency is
+  not yet paid for.** Nothing in a production route imports `Modal.vue` yet, so `reka-ui` is absent
+  from the production build entirely. Its real weight lands in Phase 1b and must be diffed then.
+  Full measurement table in ADR-0011.
 
 ### Open decisions blocking Phase 0 — both now settled
 

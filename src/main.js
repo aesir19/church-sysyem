@@ -3,7 +3,22 @@ import App from './App.vue'
 import router from './router'
 import * as Sentry from '@sentry/vue'
 import { scrubEvent, scrubBreadcrumb } from './utils/sentryScrub'
+import { startTheme } from './composables/useTheme'
+import './styles/tokens.css'
 import './style.css'
+
+// Both global stylesheets are imported here, in the order they cascade: tokens
+// declare the vocabulary, style.css applies the reset that consumes it. Neither
+// is hidden behind an @import, so the one file a new contributor opens first
+// shows them everything that is global.
+
+// Put the resolved theme on <html> before mount. tokens.css already carries the
+// system preference through a media query, so a user who has never touched the
+// toggle sees no flash — which is not merely convenient: netlify.toml's CSP is
+// `script-src 'self'`, so the usual inline <head> script that reads
+// localStorage before first paint would be blocked outright. The media query is
+// what makes that unnecessary.
+startTheme()
 
 const app = createApp(App)
 

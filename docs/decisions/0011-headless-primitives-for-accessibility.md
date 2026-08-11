@@ -34,7 +34,17 @@ What it is used for:
 | Need | Primitive | Why the library rather than by hand |
 |---|---|---|
 | Modal focus trap, Escape, return-focus, scroll lock, `aria-modal` | `DialogRoot` / `DialogPortal` / `DialogOverlay` / `DialogContent` / `DialogTitle` | Four divergent hand-rolled attempts already exist and none traps focus. This is tested interaction logic, not styling. |
-| Toast region semantics | `ToastProvider` / `ToastRoot` / `ToastViewport` | Correct `aria-live`, pause-on-hover and swipe-to-dismiss, once the dependency is already paid for. Optional. |
+| Toast region semantics | `ToastProvider` / `ToastRoot` / `ToastViewport` | Correct `aria-live`, pause-on-hover and swipe-to-dismiss, once the dependency is already paid for. Optional — **and declined at adoption, see below.** |
+
+**The Toast option was taken up and declined, Phase 0.** `<ToastHost />` mounts in `App.vue`, and
+`App.vue` is in the **shared entry chunk** — so anything it imports is downloaded by every visitor
+to `/checkin`, not by the lazy dashboard chunks. Reka UI's Toast would have landed there. The gate
+above watches `CheckinView-*.js`, which would not have moved; `index-*.js` would have, and that
+ships to strictly more people. The trade is also weaker than Dialog's: a focus trap is genuinely
+easy to get wrong and there were four broken attempts proving it, where a toast's semantics are an
+`aria-live` region and a role. `src/components/ui/Toast.vue` is hand-rolled against the tokens and
+gives up swipe-to-dismiss and pause-on-hover, carrying an explicit dismiss button instead — which
+is the accessible affordance regardless. **Reka UI is therefore scoped to `Dialog` alone.**
 
 What it is explicitly **not** used for, so this does not become the reflex answer:
 
@@ -75,6 +85,34 @@ That is a bug to fix before merging, not a cost to accept.**
 The measured delta on the dashboard chunks is recorded at adoption, not predicted here. If it comes
 in heavier than wanted, `@headlessui/vue` is the credible fallback — smaller surface, same
 bring-your-own-markup philosophy, covers Dialog.
+
+### Recorded at adoption — Phase 0, 2026-08-11
+
+**The gate holds: `dist/assets/CheckinView-*.js` is 6,675 B before and 6,675 B after.** Byte for
+byte unchanged. The dependency did not leak into a shared chunk.
+
+**But it is not yet paid for, and that must not be misread.** `reka-ui` does not appear anywhere in
+the production build after Phase 0, because nothing in a production route imports `Modal.vue` yet —
+the only consumer is the `import.meta.env.DEV`-gated style-guide route, which Rollup drops
+entirely. The dependency's real cost lands in **Phase 1b**, when the first existing modal call site
+is migrated, and it is that build which must be diffed against these numbers. Phase 0 proves the
+dependency installs, tree-shakes, and renders; it does not prove its weight.
+
+What Phase 0 *did* add to the shared entry chunk, which every `/checkin` visitor downloads:
+
+| Artifact | Before | After | Δ raw | Δ gzip |
+|---|---|---|---|---|
+| `index-*.css` (tokens.css) | 172 B | 8,051 B | +7,879 B | ≈ +1.9 KB |
+| `index-*.js` (theme boot) | 442,359 B | 443,137 B | +778 B | ≈ +0.2 KB |
+| `manrope-latin-*.woff2` | — | 24,836 B | new asset | n/a (already compressed) |
+
+The font is the number worth arguing about, and Amendment 8 asked for exactly this check. It is
+**24.8 KB on the critical path of the page attendees open on their phones, on church wifi, at every
+service.** Three things make it acceptable rather than merely tolerated: `font-display: swap` means
+it never blocks first paint, only the latin subset is declared so the other five the package ships
+are never emitted, and `/assets/` is immutable-cached so it is one download per new device, ever.
+If that trade is later judged wrong, the cheapest reversal is pointing `--font-sans` at the system
+stack — one token, no other file.
 
 ## Consequences
 

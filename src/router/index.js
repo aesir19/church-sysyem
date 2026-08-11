@@ -59,6 +59,20 @@ const routes = [
       { path: 'funds/expenses', name: 'Expenses', component: () => import('../views/ExpensesInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } }
     ]
   },
+  // The style-guide route (docs/REDESIGN.md §0.5) exists only in `npm run dev`.
+  // `import.meta.env.DEV` is statically replaced by Vite, so in a production
+  // build this spreads an empty array and the `() => import(...)` inside it is
+  // unreachable — Rollup drops the view and its chunk entirely. The cost of
+  // having a rendered component preview is therefore exactly zero bytes to
+  // every real user, which is what priority 1 requires. No `meta.requiresAuth`:
+  // it renders no data and reaches no table.
+  ...(import.meta.env.DEV
+    ? [{
+        path: '/dev/style-guide',
+        name: 'StyleGuide',
+        component: () => import('../views/dev/StyleGuideView.vue')
+      }]
+    : []),
   {
     // Catch-all. Closes docs/DEFECTS.md D13: an unmatched path used to render a
     // blank white page. That stopped being cosmetic the moment check-in URLs
