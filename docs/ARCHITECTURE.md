@@ -6,7 +6,7 @@ structure, not policy and not plans.
 - Rules that bind a change → [CLAUDE.md](../CLAUDE.md)
 - *Why* a load-bearing choice was made → [decisions/](decisions/)
 - Threat model and security findings → [SECURITY.md](SECURITY.md)
-- Bugs → [DEFECTS.md](DEFECTS.md) · Deferred features → [BACKLOG.md](BACKLOG.md) · Running it → [OPERATIONS.md](OPERATIONS.md)
+- Bugs and deferred features → the [issue tracker](https://github.com/aesir19/church-sysyem/issues) · Running it → [OPERATIONS.md](OPERATIONS.md)
 - Tables, columns, policies, grants, functions → `prisma/schema.prisma` and `prisma/migrations/`,
   which are the source of truth. This document does not transcribe them.
 
@@ -48,29 +48,40 @@ schema/migration tooling run from Node; it never executes in the browser.
 ### 4.1 Bootstrap
 
 [main.js](../src/main.js) mounts `App.vue` (a bare `<router-view />`) with the router and global
-styles. `app.config.errorHandler` is **unset** — see [OPERATIONS.md](OPERATIONS.md) O2.
+styles. `Sentry.init({ app })` installs `app.config.errorHandler`, but **only when
+`VITE_SENTRY_DSN` is set** — Vite inlines that at build time, so a DSN-less build tree-shakes
+`@sentry/vue` out entirely and has no global handler at all. See
+[ADR-0008](decisions/0008-sentry-alongside-in-stack-sink.md).
 
 ### 4.3 The navigation guard
 
-`router.beforeEach` runs on every navigation and can issue up to three sequential queries:
+`router.beforeEach` runs on every navigation and can issue up to three sequential queries.
+
+**`/checkin` short-circuits before any of them.** It is reached by attendees with no account at
+all, so the public page never costs an auth round-trip, and a staff member who scans the QR on
+their own phone is not bounced to the dashboard by the signed-in redirect. See
+[ADR-0007](decisions/0007-public-checkin-endpoint.md).
+
+Otherwise:
 
 1. `supabase.auth.getSession()` — always. No session on a `requiresAuth` route → `/login`.
 2. `isAccountLinked()` — reads `user_accounts` by `auth.uid()`. An authenticated user with no
    linked row is sent to `/account-pending`. This is how invited-but-unlinked staff are held.
-3. `hasFinanceRole()` — on `requiresFinance` routes only: `user_accounts → member_id`, then
-   `group_members` joined to a group literally **named `'Finance Team'`**. Failure sends the
-   user to `/dashboard/funds/reports`.
+3. `fetchCapabilities()` — on routes carrying `meta.requiresCapability` only. One
+   `get_my_permissions()` RPC, passed through `deriveCapabilities()` and `routeAllowed()` in
+   `src/utils/capabilities.js`. A caller lacking the capability is sent to `/dashboard/members`,
+   which is the safe fallback because it is reachable by every role.
 
 Two things about this that matter:
 
-- **The guard is UX, not security.** A user who defeats it still hits RLS. Finance writes are
-  gated server-side by `is_finance_member()` (`0008_funds_write_policies`).
-- **It is the project's main per-navigation cost.** The serial round-trips are
-  [DEFECTS.md](DEFECTS.md) D7; keying finance on a mutable display name is D4.
+- **The guard is UX, not security.** A user who defeats it still hits RLS. Authorization is
+  enforced server-side by the RBAC predicates from `0014`–`0017`.
+- **It is the project's main per-navigation cost.** The serial round-trips are still open —
+  `useCurrentRole` already caches permissions per session, and the guard does not use that cache.
 
 A separate `onAuthStateChange` listener handles only `PASSWORD_RECOVERY`; an invite or recovery
-token in the URL hash sets `pendingPasswordSet`, which diverts to `/set-password`. Nothing
-handles session expiry (D6).
+token in the URL hash sets `pendingPasswordSet`, which diverts to `/set-password`. **Nothing
+handles session expiry** — on refresh-token failure the user sees a raw `JWT expired` string.
 
 ### 4.4 Supabase client
 
@@ -100,8 +111,10 @@ reads `members` itself — without that, the policy on `members` would recurse.
 
 **The migrations are the source of truth for every policy and grant.** `0006_baseline_rls`
 transcribes policies that had only ever existed in the Supabase dashboard; `0007`–`0009` fix the
-defects that baseline exposed. Re-run `scripts/sql/capture-security-state.sql` to check live
-state against them.
+defects that baseline exposed; `0014`–`0017` replace the original name-based finance check with
+role and ministry predicates, keyed on the system-managed `groups.ministry_key` slug rather than
+the editable `groups.name`. Re-run `scripts/sql/capture-security-state.sql` to check live state
+against them.
 
 The shape, in one paragraph: reads are church-scoped, writes on the funds tables are
 additionally finance-gated. `members` has no DELETE policy at all — archiving is the only
@@ -119,8 +132,8 @@ Three consequences that bite in application code, all in
    policy because Postgres evaluates SELECT against the *new* row during an UPDATE, which made
    archiving impossible. Filtering is now the application's job on every read.
 2. **`collections INSERT` deliberately does not validate the contributor's church.** Visiting
-   members give at other churches' services. Do not add `is_member_in_my_church()` there — see
-   [BACKLOG.md](BACKLOG.md) B17 first.
+   members give at other churches' services. Do not add `is_member_in_my_church()` there — read
+   [ADR-0003](decisions/0003-nullable-collections-from.md) first.
 3. **Funds `SELECT` is not finance-gated.** The reports page is not a finance-only route, so
    gating reads would break it for everyone else.
 
@@ -132,7 +145,7 @@ Three consequences that bite in application code, all in
 
 Members are never hard-deleted. `archived_at` (`NULL` = active) plus an optional
 `archived_reason`, with an active-only partial index so filtering stays fast as archived rows
-accumulate. Un-archiving is a manual SQL operation — no UI ([BACKLOG.md](BACKLOG.md) B1).
+accumulate. Un-archiving is a manual SQL operation — no UI (issue #39).
 
 ### 5.3 Authentication
 
