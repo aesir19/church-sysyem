@@ -37,8 +37,12 @@ Evaluate every decision against this order, in order:
   See [ADR-0002](docs/decisions/0002-no-second-compute-vendor.md).
 - **Never replicate authorization in the frontend.** If a user shouldn't see a row, the *policy*
   must reject it. UI gating is presentation, never enforcement.
-- **Never `select('*')` on `members`.** Enumerate columns. Reuse the shared `MEMBER_COLUMNS`
-  constant.
+- **Never `select('*')` on `members`.** Enumerate columns. `MEMBER_COLUMNS` lives in
+  [src/lib/data/members.js](src/lib/data/members.js) — reads go through that module rather than
+  copying the list.
+- **Never issue a PostgREST write outside [src/lib/data/](src/lib/data/).** RLS refuses a write by
+  *filtering*, so an unwrapped mutation reports a refusal as success. Pass the builder to `write()`.
+  The `write-seam/writes-through-seam` ESLint rule fails the build on this.
 - **Never add realtime subscriptions** unless explicitly requested. The static-snapshot model
   is intentional; websockets burn egress continuously.
 - **Never edit or re-run a deployed migration.** In particular `0006_baseline_rls` is a record
@@ -119,7 +123,12 @@ See [docs/agents/domain.md](docs/agents/domain.md).
 - `<style scoped>` per SFC; only truly global rules go in [src/style.css](src/style.css).
 - Palette: primary `#1a56db`, slate neutrals (`#f8fafc`, `#e2e8f0`, `#1e293b`, `#64748b`),
   error `#dc2626`. Cards use a `12px` radius.
-- Surface Supabase failures as `error.message` to the user — the existing pattern. Avoid throwing.
+- Surface failures as a **message from the data module**, not as `error.message`. Postgres
+  constraint violations quote the offending row verbatim — `Key (first_name, last_name)=(Juan,
+  Dela Cruz) already exists` — which is member PII;
+  [sentryScrub.js](src/utils/sentryScrub.js) drops those payloads rather than redacting them, and
+  the screen must not receive them either. `write()` classifies the failure and returns safe text,
+  with the original on `cause` for logging. Avoid throwing.
 - New behaviour needs a test. Pure logic belongs in `src/utils/` where it can be tested without
   mounting a view; that separation is the point, not a style preference.
 
@@ -148,8 +157,9 @@ These follow from priority 1 and are binding unless the owner overrides them.
 | Netlify credits | 60 % of 300/mo | Check Usage tab (bandwidth + deploys share one pool); verify cache headers |
 | Database storage | 60 % of 500 MB | Audit text column sizes; archive old data offline |
 
-The route threshold is **already breached** — every view is eagerly imported into a single
-chunk. See [DEFECTS.md](docs/DEFECTS.md) D9.
+The route threshold was breached and is now **resolved** — every route is `() => import(...)`.
+Keep it that way when adding one: `/checkin` is opened on phones, on church wifi, with a cold
+cache, every service. See [DEFECTS.md](docs/DEFECTS.md) D9.
 
 ---
 
@@ -168,6 +178,7 @@ Read these when the task touches them. Do not read them all up front.
 | [docs/BACKLOG.md](docs/BACKLOG.md) | Deferred features, `B1`–`B25` — absent, not broken | Asked for a feature that may already be specced |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Free-tier budgets, deploy/rollback, backups, monitoring gaps `O1`–`O25` | Deploying, migrating, or asked why the site is down |
 | [docs/agents/](docs/agents/) | Where issues live, the triage label strings, how to read the domain docs | Running an engineering skill that files, triages, or specs work |
+| [CONTEXT.md](CONTEXT.md) | The domain glossary — Directory vs Member record, Archive, Blocked write | Naming anything, or unsure whether two words mean the same thing |
 | `prisma/schema.prisma` | The canonical table/column inventory | Any question about the data model — it is the source of truth, not the docs |
 
 **Schema is never documented twice.** `prisma/schema.prisma` and `prisma/migrations/` are the

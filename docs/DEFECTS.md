@@ -13,19 +13,19 @@ PRs. Line references were re-verified 2026-08-05.
 | D1 | **Critical** | [schema.prisma:517](../prisma/schema.prisma#L517) | `collections.amount` is `Real` (4-byte float) |
 | D2 | **High** | migrations | `collections` has no index; `members` has none on `member_of` / `archived_at` |
 | D3 | **High** | [schema.prisma:590](../prisma/schema.prisma#L590) | `members.contact_number` is `Decimal` — destroys PH phone numbers |
-| D4 | **High** | [router/index.js:98](../src/router/index.js#L98), [useFinanceMember.js:22](../src/composables/useFinanceMember.js#L22) | Two competing role models; finance authz keyed on a mutable display name |
-| D5 | Medium | [useFinanceMember.js:4](../src/composables/useFinanceMember.js#L4) | Module-level singleton never resets across a user switch |
+| ~~D4~~ | ~~**High**~~ | — | **RESOLVED.** `useFinanceMember.js` no longer exists; `useCurrentRole` + `get_my_permissions` (0017) is the single role model |
+| ~~D5~~ | ~~Medium~~ | — | **RESOLVED.** The cache in `useCurrentRole` is keyed to the auth user id and cleared on sign-out |
 | D6 | Medium | [router/index.js:69](../src/router/index.js#L69) | No session-expiry handling |
 | D7 | Medium | [router/index.js:103](../src/router/index.js#L103) | Up to 3 serial round-trips per navigation |
 | D8 | Medium | [DashboardView.vue:417](../src/views/DashboardView.vue#L417) | `todayIso` computed in UTC, not local time |
-| D9 | Medium | [router/index.js:3-11](../src/router/index.js#L3) | Every view eagerly imported; one 404 KB chunk |
+| ~~D9~~ | ~~Medium~~ | — | **RESOLVED.** Every route is `() => import(...)`; 13 lazy imports in `router/index.js` |
 | D10 | Medium | [schema.prisma:592](../prisma/schema.prisma#L592) | `members.member_of` defaults to `auth.uid()`; `onDelete: SetNull` on a `NOT NULL` column |
 | D11 | Medium | all views | No keyboard access to rows, no `aria-sort`, no modal focus trap |
-| D12 | Low | [DashboardView.vue:725](../src/views/DashboardView.vue#L725) | Two sign-out paths with divergent `localStorage` cleanup |
-| D13 | Low | [router/index.js:13](../src/router/index.js#L13) | No catch-all route — unknown paths render blank |
+| D12 | Low | 3 files | **Three** sign-out paths with divergent `localStorage` cleanup (DashboardLayout, DashboardView, AccountPendingView) |
+| ~~D13~~ | ~~Low~~ | — | **RESOLVED.** `/:pathMatch(.*)*` renders `NotFoundView` |
 | D14 | Low | 3 views | `formatMoney` implemented three times in two currency formats |
 | D15 | Low | [schema.prisma:595](../prisma/schema.prisma#L595) | Schema typo `wedding_anniversarry` is load-bearing in 4 files |
-| D16 | Medium | all views | No data-access layer — Supabase calls inline in 555–1,773-line SFCs |
+| D16 | Medium | 4 of 5 views | No data-access layer — Supabase calls inline in large SFCs. **Partly addressed:** all writes now go through `src/lib/data/write.js`, and members reads/writes through `src/lib/data/members.js`. Attendance, funds and groups still read inline |
 
 ---
 
@@ -112,13 +112,15 @@ so for the first eight hours of every local day the max is *yesterday* — a mem
 or join date is today cannot be entered until mid-afternoon. Use local date parts, not
 `toISOString()`.
 
-## D9 — Every view in one chunk
+## D9 — Every view in one chunk — RESOLVED
 
-All nine route components are imported eagerly at the top of
-[router/index.js](../src/router/index.js#L3). The build is a single **404 KB** JS chunk
-(`dist/assets/index-*.js`), shipped in full to a user who only ever opens the member list. The
-project's own threshold — lazy-load once routes reach three — has been breached since the funds
-routes landed. Convert to `() => import('../views/Foo.vue')`.
+Every route is now `() => import('../views/Foo.vue')`, and the build emits a per-view chunk. This
+matters beyond bundle hygiene: `/checkin` is opened by attendees on their phones, on church wifi,
+with a cold cache, every service — shipping them the staff dashboard would have been the single
+largest use of the Netlify bandwidth budget.
+
+Kept as a record because the threshold that forced it still applies: lazy-load once routes reach
+three.
 
 ## D12 — Two sign-out paths, divergent cleanup
 
