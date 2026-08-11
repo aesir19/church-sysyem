@@ -185,7 +185,8 @@ Read these when the task touches them. Do not read them all up front.
 | [docs/security/RESOLVED.md](docs/security/RESOLVED.md) | Closed security findings and why each fix took its shape | Before "improving" something that was already deliberately fixed |
 | [GitHub issues](https://github.com/aesir19/church-sysyem/issues?q=is%3Aissue+is%3Aopen+label%3Adefect) | Open defects — migrated from `DEFECTS.md`, old `D*` ids kept in the titles | Picking up a fix, or before "improving" something already known-broken |
 | [docs/DEFECTS.md](docs/DEFECTS.md) | Now a pointer, plus why four entries went stale | Wondering where the defect list went |
-| [docs/BACKLOG.md](docs/BACKLOG.md) | Deferred features, `B1`–`B25` — absent, not broken | Asked for a feature that may already be specced |
+| [GitHub issues](https://github.com/aesir19/church-sysyem/issues?q=is%3Aissue+is%3Aopen+label%3Afeature) | Deferred features — migrated from `BACKLOG.md`, old `B*` ids kept in the titles | Asked for a feature that may already be specced |
+| [docs/BACKLOG.md](docs/BACKLOG.md) | Now a pointer, plus which entries became ADRs and why | Wondering where the backlog went |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Free-tier budgets, deploy/rollback, backups, monitoring gaps `O1`–`O25` | Deploying, migrating, or asked why the site is down |
 | [docs/agents/](docs/agents/) | Where issues live, the triage label strings, how to read the domain docs | Running an engineering skill that files, triages, or specs work |
 | [CONTEXT.md](CONTEXT.md) | The domain glossary — Directory vs Member record, Archive, Blocked write | Naming anything, or unsure whether two words mean the same thing |
