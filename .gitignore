@@ -8,6 +8,11 @@ dist
 # Lighthouse CI run output (lighthouserc.json writes reports here)
 .lighthouseci
 
+# Playwright MCP session artifacts — screenshots and accessibility snapshots
+# written while reviewing screens against the mockups. Working notes, not
+# deliverables, and they run to tens of megabytes within a single session.
+.playwright-mcp/
+
 # Netlify CLI local link state (written by `netlify deploy`). Machine-local —
 # CI passes the site through NETLIFY_SITE_ID instead.
 .netlify
