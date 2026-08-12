@@ -24,6 +24,8 @@
     "prisma:migrate:run:deploy": "npm run prisma:check:migrate && prisma migrate deploy",
     "seed:attendance": "node scripts/prisma/with-env-file.js .env.staging npm run seed:attendance:run",
     "seed:attendance:run": "node scripts/prisma/db-execute.js scripts/sql/seed-staging-attendance.sql",
+    "seed:redesign": "node scripts/prisma/with-env-file.js .env.staging npm run seed:redesign:run",
+    "seed:redesign:run": "node scripts/prisma/db-execute.js scripts/sql/seed-staging-redesign.sql",
     "deploy:prod": "npx --yes netlify-cli@27.1.0 deploy --prod --dir=dist --no-build"
   },
   "dependencies": {
@@ -39,6 +41,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@lhci/cli": "^0.15.1",
+    "@playwright/mcp": "^0.0.79",
     "@vitejs/plugin-vue": "^5.2.3",
     "dotenv": "^16.6.1",
     "eslint": "^10.8.1",
