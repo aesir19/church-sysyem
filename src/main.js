@@ -3,7 +3,33 @@ import App from './App.vue'
 import router from './router'
 import * as Sentry from '@sentry/vue'
 import { scrubEvent, scrubBreadcrumb } from './utils/sentryScrub'
+import { startTheme } from './utils/theme'
+import '@fontsource-variable/manrope'
+import './styles/tokens.css'
 import './style.css'
+
+// Both global stylesheets are imported here, in the order they cascade: tokens
+// declare the vocabulary, style.css applies the reset that consumes it. Neither
+// is hidden behind an @import, so the one file a new contributor opens first
+// shows them everything that is global.
+//
+// MANROPE IS THE DESIGN. tokens.css has always named 'Manrope Variable' first
+// in --font-sans, but nothing imported the face, so every screen silently fell
+// through to system-ui — Segoe UI on Windows, which is a different and much
+// harder-edged letterform than the one the mockups are drawn in. The package is
+// self-hosted (not Google Fonts) because netlify.toml's CSP is `font-src
+// 'self'` and because a webfont fetched from a third party is a request that
+// tells them who is using this app. The file declares six unicode-range
+// subsets; a browser downloads only the ones the page actually needs, which
+// here is latin and latin-ext (the ₱ sign lives in the latter).
+
+// Put the resolved theme on <html> before mount. tokens.css already carries the
+// system preference through a media query, so a user who has never touched the
+// toggle sees no flash — which is not merely convenient: netlify.toml's CSP is
+// `script-src 'self'`, so the usual inline <head> script that reads
+// localStorage before first paint would be blocked outright. The media query is
+// what makes that unnecessary.
+startTheme()
 
 const app = createApp(App)
 

@@ -27,11 +27,9 @@ Always read `CLAUDE.md`. Then load **only** what the task actually touches:
 
 | The task… | Read |
 |---|---|
-| adds or changes a route, view, table, or data flow | `docs/ARCHITECTURE.md` |
 | touches auth, RLS policies, grants, the ledger, or the report calculator | the relevant record in `docs/decisions/` **before designing** |
 | touches auth, data exposure, or headers | `docs/SECURITY.md` |
-| is a bug fix | `docs/DEFECTS.md` — it may already be catalogued with a reproduction |
-| is a feature request | `docs/BACKLOG.md` — it may already be specced, with constraints |
+| is a bug fix or a feature request | the GitHub issues — it may already be catalogued or specced |
 | deploys, migrates, or asks why something is down | `docs/OPERATIONS.md` |
 | asks anything about tables or columns | `prisma/schema.prisma` — the source of truth, never the docs |
 
@@ -70,17 +68,15 @@ Fix failures before proceeding. Do not move on with a red suite.
 
 ### Step 6 — Update the right document
 
-Make a targeted edit to **one** document — do not rewrite whole files, and do not update
-`ARCHITECTURE.md` reflexively.
+Make a targeted edit to **one** document — do not rewrite whole files. Structure lives in `src/`
+and `prisma/schema.prisma`; do not transcribe it into a doc.
 
 | What happened | Where it goes |
 |---|---|
-| New route, view, table, or changed data flow | `docs/ARCHITECTURE.md` |
-| A choice future work could accidentally reverse | a **new numbered ADR** in `docs/decisions/`, added to that directory's index |
-| Fixed a defect | remove it from `docs/DEFECTS.md`, noting the commit |
-| Shipped a backlog item | remove it from `docs/BACKLOG.md` — do not leave it struck through |
-| Found a new bug you are not fixing | add it to `docs/DEFECTS.md` with a reproduction |
-| Changed a rule or threshold | `CLAUDE.md` — owner decision required |
+| A choice future work could accidentally reverse | a **new numbered ADR** in `docs/decisions/` |
+| Fixed a defect, or shipped a feature | close the GitHub issue, noting the commit |
+| Found a new bug you are not fixing | open a GitHub issue with a reproduction |
+| Changed a rule | `CLAUDE.md` — owner decision required |
 | Nothing structural changed | **update nothing** |
 
 Resolved items are deleted, not struck through. Git holds the history.

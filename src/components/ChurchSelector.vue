@@ -1,17 +1,40 @@
 <template>
-  <div v-if="showChurchSelector" class="church-switcher">
+  <div
+    v-if="showChurchSelector"
+    class="church-switcher"
+  >
     <div class="church-switcher-inner">
-      <span class="church-switcher-icon" aria-hidden="true">
-        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M18 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/>
-          <path d="M12 6v4"/>
-          <path d="M9 10h6"/>
-          <circle cx="12" cy="16" r="2"/>
+      <span
+        class="church-switcher-icon"
+        aria-hidden="true"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M18 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z" />
+          <path d="M12 6v4" />
+          <path d="M9 10h6" />
+          <circle
+            cx="12"
+            cy="16"
+            r="2"
+          />
         </svg>
       </span>
 
       <div class="church-switcher-field">
-        <label for="active-church-select" class="church-switcher-label">Viewing church</label>
+        <label
+          for="active-church-select"
+          class="church-switcher-label"
+        >Viewing church</label>
         <div class="church-switcher-select-wrap">
           <select
             id="active-church-select"
@@ -19,11 +42,30 @@
             :value="activeChurchId"
             @change="onChange"
           >
-            <option v-for="c in churches" :key="c.id" :value="c.id">{{ c.name }}</option>
+            <option
+              v-for="c in churches"
+              :key="c.id"
+              :value="c.id"
+            >
+              {{ c.name }}
+            </option>
           </select>
-          <span class="church-switcher-chevron" aria-hidden="true">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="6 9 12 15 18 9"/>
+          <span
+            class="church-switcher-chevron"
+            aria-hidden="true"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.4"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polyline points="6 9 12 15 18 9" />
             </svg>
           </span>
         </div>

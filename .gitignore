@@ -8,6 +8,11 @@ dist
 # Lighthouse CI run output (lighthouserc.json writes reports here)
 .lighthouseci
 
+# Playwright MCP session artifacts — screenshots and accessibility snapshots
+# written while reviewing screens against the mockups. Working notes, not
+# deliverables, and they run to tens of megabytes within a single session.
+.playwright-mcp/
+
 # Netlify CLI local link state (written by `netlify deploy`). Machine-local —
 # CI passes the site through NETLIFY_SITE_ID instead.
 .netlify
@@ -18,6 +23,14 @@ dist
 # Agent worktrees — full checkouts of this repo. Untracked but not ignored,
 # `git add .` stages them as an embedded-repo gitlink, not as files.
 .claude/worktrees/
+
+# Design mockups. Untracked deliberately — this repo is public, and the bundle is
+# ~600 KB of prototype HTML plus an unused second design system. Everything
+# load-bearing from it now lives in the repo as docs/REDESIGN.md amendments,
+# CONTEXT.md terms, and (later) src/styles/tokens.css.
+# See docs/REDESIGN.md — Amendment 16.
+UI mockups for form/
+UI mockups for form.zip
 
 /src/generated/prisma
 .xlsx

@@ -1,433 +1,29 @@
-<template>
-  <div class="page-container">
-    <main class="page-content">
-      <!-- Header -->
-      <div class="page-header">
-        <div>
-          <h2>Church Funds</h2>
-          <p class="page-subtitle">Monthly collectives report</p>
-        </div>
-        <div class="page-header-actions">
-          <span class="stat-badge">{{ report.weeks.length }} service dates</span>
-          <button class="btn-secondary" @click="handlePrint" title="Print / Save as PDF">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="6 9 6 2 18 2 18 9"/>
-              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
-              <rect x="6" y="14" width="12" height="8"/>
-            </svg>
-            Print
-          </button>
-        </div>
-      </div>
-
-      <FundsTabs />
-
-      <p v-if="loadError" class="load-warning">{{ loadError }}</p>
-
-      <!-- Month navigator -->
-      <div class="report-toolbar card">
-        <button class="btn-icon nav-btn" @click="prevMonth" aria-label="Previous month" title="Previous month">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="15 18 9 12 15 6"/>
-          </svg>
-        </button>
-        <div class="report-title">
-          <span class="report-title-main">{{ monthLabel }}</span>
-          <span class="report-title-sub">Collectives Summary</span>
-        </div>
-        <button class="btn-icon nav-btn" @click="nextMonth" aria-label="Next month" title="Next month">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="9 18 15 12 9 6"/>
-          </svg>
-        </button>
-      </div>
-
-      <!-- Loading / empty state. The empty state is gated on loading or it
-           flashes "no collectives" on every month navigation. -->
-      <div v-if="loading" class="card">
-        <div class="state-message">
-          <p>Loading {{ monthLabel }}…</p>
-        </div>
-      </div>
-
-      <div v-else-if="report.weeks.length === 0" class="card">
-        <div class="state-message">
-          <p>No collectives recorded for {{ monthLabel }}.</p>
-        </div>
-      </div>
-
-      <template v-else>
-        <!-- KPI cards -->
-        <div class="kpi-grid">
-          <div class="kpi-card">
-            <span class="kpi-label">Total Funds</span>
-            <span class="kpi-value">{{ formatMoney(report.totals.totalFunds) }}</span>
-            <span class="kpi-sub">Tithes + Offering + Others</span>
-          </div>
-          <div class="kpi-card">
-            <span class="kpi-label">Tithes</span>
-            <span class="kpi-value">{{ formatMoney(report.totals.tithes) }}</span>
-            <span class="kpi-sub">{{ percent(report.totals.tithes, report.totals.totalFunds) }} of total</span>
-          </div>
-          <div class="kpi-card">
-            <span class="kpi-label">Offering</span>
-            <span class="kpi-value">{{ formatMoney(report.totals.offering) }}</span>
-            <span class="kpi-sub">{{ percent(report.totals.offering, report.totals.totalFunds) }} of total</span>
-          </div>
-          <div class="kpi-card">
-            <span class="kpi-label">Expenses</span>
-            <span class="kpi-value">{{ formatMoney(report.totals.expenses) }}</span>
-            <span class="kpi-sub">{{ report.expenseSummary.length }} categories</span>
-          </div>
-          <div class="kpi-card kpi-card-accent">
-            <span class="kpi-label">Closing Balance</span>
-            <span class="kpi-value">{{ formatMoney(report.closingBalance) }}</span>
-            <span class="kpi-sub">
-              From {{ formatMoney(report.openingBalance) }}
-            </span>
-          </div>
-        </div>
-
-        <!-- Weekly breakdown -->
-        <section class="card report-section section-weekly-breakdown">
-          <header class="section-header">
-            <div>
-              <h3>Weekly Breakdown</h3>
-              <span class="section-hint">Per-service totals for {{ monthLabel }}</span>
-            </div>
-            <button
-              class="section-toggle"
-              @click="weeklyExpanded = !weeklyExpanded"
-              :aria-expanded="weeklyExpanded"
-              aria-controls="weekly-breakdown-content"
-            >
-              <span class="section-toggle-label">{{ weeklyExpanded ? 'Collapse' : 'Expand' }}</span>
-              <svg
-                class="section-toggle-icon"
-                :class="{ 'is-collapsed': !weeklyExpanded }"
-                xmlns="http://www.w3.org/2000/svg"
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2.2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <polyline points="6 9 12 15 18 9"/>
-              </svg>
-            </button>
-          </header>
-          <Transition
-            @before-enter="beforeExpand"
-            @enter="expand"
-            @after-enter="afterExpand"
-            @before-leave="beforeCollapse"
-            @leave="collapse"
-            @after-leave="afterCollapse"
-          >
-            <div v-show="weeklyExpanded" id="weekly-breakdown-content" class="table-wrap section-content">
-              <table class="report-table">
-              <thead>
-                <tr>
-                  <th class="col-label">Metric</th>
-                  <th v-for="w in report.weeks" :key="w.date" class="col-num">
-                    {{ formatShortDate(w.date) }}
-                  </th>
-                  <th class="col-num col-total">Month</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td class="col-label">Tithes</td>
-                  <td v-for="w in report.weeks" :key="w.date" class="col-num">{{ formatMoney(w.tithes) }}</td>
-                  <td class="col-num col-total">{{ formatMoney(report.totals.tithes) }}</td>
-                </tr>
-                <tr>
-                  <td class="col-label">Offering</td>
-                  <td v-for="w in report.weeks" :key="w.date" class="col-num">{{ formatMoney(w.offering) }}</td>
-                  <td class="col-num col-total">{{ formatMoney(report.totals.offering) }}</td>
-                </tr>
-                <!-- `collections` stores only is_tithes, so Others has no live
-                     source and stays hidden until a category column exists. -->
-                <tr v-if="hasOthers">
-                  <td class="col-label">Others</td>
-                  <td v-for="w in report.weeks" :key="w.date" class="col-num">{{ formatMoney(w.others) }}</td>
-                  <td class="col-num col-total">{{ formatMoney(report.totals.others) }}</td>
-                </tr>
-                <tr class="row-subtotal">
-                  <td class="col-label">Total Funds</td>
-                  <td v-for="w in report.weeks" :key="w.date" class="col-num">{{ formatMoney(w.totalFunds) }}</td>
-                  <td class="col-num col-total">{{ formatMoney(report.totals.totalFunds) }}</td>
-                </tr>
-                <tr>
-                  <td class="col-label">Expenses</td>
-                  <td v-for="w in report.weeks" :key="w.date" class="col-num neg">{{ formatMoney(w.totalExpenses) }}</td>
-                  <td class="col-num col-total neg">{{ formatMoney(report.totals.expenses) }}</td>
-                </tr>
-                <tr>
-                  <td class="col-label">Church Allocation</td>
-                  <td v-for="w in report.weeks" :key="w.date" class="col-num">{{ formatMoney(w.churchAllocation) }}</td>
-                  <td class="col-num col-total">{{ formatMoney(report.totals.churchAllocation) }}</td>
-                </tr>
-                <tr class="row-total">
-                  <td class="col-label">Net Church Funds</td>
-                  <td v-for="w in report.weeks" :key="w.date" :class="['col-num', w.netChurchFunds < 0 ? 'neg' : '']">
-                    {{ formatMoney(w.netChurchFunds) }}
-                  </td>
-                  <td :class="['col-num', 'col-total', report.totals.netChurchFunds < 0 ? 'neg' : '']">
-                    {{ formatMoney(report.totals.netChurchFunds) }}
-                  </td>
-                </tr>
-                <tr>
-                  <td class="col-label">Running Balance</td>
-                  <td v-for="w in report.weeks" :key="w.date" class="col-num muted">
-                    {{ formatMoney(w.closingBalance) }}
-                  </td>
-                  <td class="col-num col-total">{{ formatMoney(report.closingBalance) }}</td>
-                </tr>
-              </tbody>
-              </table>
-            </div>
-          </Transition>
-        </section>
-
-        <!-- Two-column: Allocations + Expenses -->
-        <div class="two-col section-alloc-expenses">
-          <!-- Allocations breakdown -->
-          <section class="card report-section">
-            <header class="section-header">
-              <h3>Allocations</h3>
-              <span class="section-hint">How the {{ formatMoney(report.totals.totalFunds) }} is distributed</span>
-            </header>
-            <ul class="alloc-list">
-              <li class="alloc-row alloc-header">
-                <span>Total Funds Collected</span>
-                <span class="alloc-amount">{{ formatMoney(report.totals.totalFunds) }}</span>
-              </li>
-              <li class="alloc-row">
-                <span>
-                  <span class="alloc-dot dot-orange"></span>
-                  Tithes of Tithes <span class="alloc-pct">{{ ratePct.tithesOfTithes }}</span>
-                </span>
-                <span class="alloc-amount neg">− {{ formatMoney(report.totals.tithesOfTithes) }}</span>
-              </li>
-              <li class="alloc-row">
-                <span>
-                  <span class="alloc-dot dot-purple"></span>
-                  Project Fund <span class="alloc-pct">{{ ratePct.project }}</span>
-                </span>
-                <span class="alloc-amount neg">− {{ formatMoney(report.totals.project) }}</span>
-              </li>
-              <li class="alloc-row">
-                <span>
-                  <span class="alloc-dot dot-teal"></span>
-                  Student Program <span class="alloc-pct">{{ ratePct.studentProgram }}</span>
-                </span>
-                <span class="alloc-amount neg">− {{ formatMoney(report.totals.studentProgramGross) }}</span>
-              </li>
-              <!-- No column stores a per-service personal draw, so this stays
-                   hidden with live data. Kept because the calculator supports
-                   it and the paper report has the line. -->
-              <li v-if="report.totals.studentProgramDeduction > 0" class="alloc-row alloc-nested">
-                <span class="alloc-nested-label">Less: Personal draw</span>
-                <span class="alloc-amount">+ {{ formatMoney(report.totals.studentProgramDeduction) }}</span>
-              </li>
-              <li class="alloc-row alloc-subtotal">
-                <span>Remaining Funds</span>
-                <span class="alloc-amount">{{ formatMoney(report.totals.remainingFunds) }}</span>
-              </li>
-              <li class="alloc-row">
-                <span>
-                  <span class="alloc-dot dot-blue"></span>
-                  Pastor's Allowance <span class="alloc-pct">{{ ratePct.pastor }}</span>
-                </span>
-                <span class="alloc-amount">{{ formatMoney(report.totals.pastorAllowance) }}</span>
-              </li>
-              <li class="alloc-row">
-                <span>
-                  <span class="alloc-dot dot-green"></span>
-                  Church Allocation <span class="alloc-pct">{{ ratePct.church }}</span>
-                </span>
-                <span class="alloc-amount">{{ formatMoney(report.totals.churchAllocation) }}</span>
-              </li>
-            </ul>
-
-            <!-- Distribution bar -->
-            <div class="alloc-bar" :aria-label="'Allocation distribution for ' + monthLabel">
-              <span
-                v-for="seg in allocationSegments"
-                :key="seg.key"
-                class="alloc-bar-seg"
-                :style="{ width: seg.width, background: seg.color }"
-                :title="seg.label + ' — ' + formatMoney(seg.amount)"
-              ></span>
-            </div>
-            <div class="alloc-legend">
-              <span v-for="seg in allocationSegments" :key="'legend-' + seg.key" class="alloc-legend-item">
-                <span class="alloc-dot" :style="{ background: seg.color }"></span>
-                {{ seg.label }}
-              </span>
-            </div>
-          </section>
-
-          <!-- Expenses -->
-          <section class="card report-section">
-            <header class="section-header">
-              <h3>Expenses</h3>
-              <span class="section-hint">Charged against the Church Allocation</span>
-            </header>
-            <div v-if="report.expenseSummary.length === 0" class="state-message small">
-              <p>No expenses recorded this month.</p>
-            </div>
-            <table v-else class="report-table compact">
-              <thead>
-                <tr>
-                  <th class="col-label">Description</th>
-                  <th class="col-num">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="e in report.expenseSummary" :key="e.description">
-                  <td class="col-label">{{ e.description }}</td>
-                  <td class="col-num neg">{{ formatMoney(e.amount) }}</td>
-                </tr>
-              </tbody>
-              <tfoot>
-                <tr class="row-total">
-                  <td class="col-label">Total Expenses</td>
-                  <td class="col-num neg">{{ formatMoney(report.totals.expenses) }}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </section>
-        </div>
-
-        <!-- Contributors (finance staff / SuperAdmin only) -->
-        <section v-if="canWriteFinance" class="card report-section section-contributors">
-          <header class="section-header">
-            <div>
-              <h3>Contributors</h3>
-              <span class="section-hint">
-                {{ report.contributors.length }} rows ·
-                each anonymous gift is listed separately
-              </span>
-            </div>
-            <button
-              class="section-toggle"
-              @click="contributorsExpanded = !contributorsExpanded"
-              :aria-expanded="contributorsExpanded"
-              aria-controls="contributors-content"
-            >
-              <span class="section-toggle-label">{{ contributorsExpanded ? 'Collapse' : 'Expand' }}</span>
-              <svg
-                class="section-toggle-icon"
-                :class="{ 'is-collapsed': !contributorsExpanded }"
-                xmlns="http://www.w3.org/2000/svg"
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2.2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <polyline points="6 9 12 15 18 9"/>
-              </svg>
-            </button>
-          </header>
-          <Transition
-            @before-enter="beforeExpand"
-            @enter="expand"
-            @after-enter="afterExpand"
-            @before-leave="beforeCollapse"
-            @leave="collapse"
-            @after-leave="afterCollapse"
-          >
-            <div v-show="contributorsExpanded" id="contributors-content" class="table-wrap section-content">
-              <table class="report-table">
-              <thead>
-                <tr>
-                  <th class="col-label">Name</th>
-                  <th class="col-num">Tithes</th>
-                  <th class="col-num">Offering</th>
-                  <th v-if="hasOthers" class="col-num">Others</th>
-                  <th class="col-num col-total">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                <!-- Keyed on `key`, not `name`: several rows legitimately read
-                     "Anonymous", one per gift. -->
-                <tr v-for="c in report.contributors" :key="c.key">
-                  <td class="col-label">{{ c.name }}</td>
-                  <td class="col-num">{{ formatMoney(c.tithes) }}</td>
-                  <td class="col-num">{{ formatMoney(c.offering) }}</td>
-                  <td v-if="hasOthers" class="col-num">{{ formatMoney(c.others) }}</td>
-                  <td class="col-num col-total">{{ formatMoney(c.total) }}</td>
-                </tr>
-              </tbody>
-              <tfoot>
-                <tr class="row-total">
-                  <td class="col-label">Total</td>
-                  <td class="col-num">{{ formatMoney(report.totals.tithes) }}</td>
-                  <td class="col-num">{{ formatMoney(report.totals.offering) }}</td>
-                  <td v-if="hasOthers" class="col-num">{{ formatMoney(report.totals.others) }}</td>
-                  <td class="col-num col-total">{{ formatMoney(report.totals.totalFunds) }}</td>
-                </tr>
-              </tfoot>
-              </table>
-            </div>
-          </Transition>
-        </section>
-
-        <!-- Balance rollup -->
-        <section class="card balance-card">
-          <header class="section-header">
-            <h3>Church Funds Balance</h3>
-            <span class="section-hint">Rollup for {{ monthLabel }}</span>
-          </header>
-          <ul class="balance-list">
-            <li>
-              <span>Church Allocation (month)</span>
-              <span class="mono">{{ formatMoney(report.totals.churchAllocation) }}</span>
-            </li>
-            <li>
-              <span>Less: Total Expenses</span>
-              <span class="mono neg">− {{ formatMoney(report.totals.expenses) }}</span>
-            </li>
-            <li class="balance-subtotal">
-              <span>Net Church Funds (month)</span>
-              <span :class="['mono', report.totals.netChurchFunds < 0 ? 'neg' : '']">
-                {{ formatMoney(report.totals.netChurchFunds) }}
-              </span>
-            </li>
-            <li>
-              <span>Add: Opening Balance</span>
-              <span class="mono">+ {{ formatMoney(report.openingBalance) }}</span>
-            </li>
-            <li class="balance-total">
-              <span>Current Church Funds</span>
-              <span class="mono">{{ formatMoney(report.closingBalance) }}</span>
-            </li>
-          </ul>
-        </section>
-      </template>
-    </main>
-  </div>
-</template>
-
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { SHARE_OF_TOTAL_FUNDS, computeMonthlyReport } from '../utils/collectivesReport'
-import FundsTabs from '../components/FundsTabs.vue'
+import Icon from '../components/ui/icons/Icon.vue'
+import Button from '../components/ui/Button.vue'
 import { supabase } from '../lib/supabase'
 import { defaultMonthKey, getMonthRange, parseMonthKey } from '../utils/expensesMonth'
 import { mergeMonthSourceWithLiveExpenses } from '../utils/reportExpenseMerge'
 import { buildMonthSourceFromCollections, openingBalanceForMonth } from '../utils/collectivesSource'
+import { formatPeso, formatPesoWhole, formatShare } from '../utils/money'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { useActiveChurch } from '../composables/useActiveChurch'
+
+// Church funds — the monthly collectives report.
+//
+// This is the one screen that computes rather than records, and the arithmetic
+// is not this file's: collectivesReport.js holds the allocation rules and is
+// tested against the paper workbook. Everything here is presentation.
+//
+// FundsTabs is gone — the last of the three screens that carried it. Delete the
+// component.
+//
+// The mockup's Contributors table and balance rollup are not drawn in the
+// handoff, but both exist today and both are kept: the rollup is the one place
+// the closing balance shows its working, and the contributor list is the report
+// a treasurer actually reconciles against. They are restyled, not redesigned.
 
 // Contributor identity is finance-staff detail: shown to the Finance ministry and
 // SuperAdmin (canWriteFinance). Pastor / Church Leader / Head Pastor see the report
@@ -440,8 +36,6 @@ const { activeChurchId, ensureLoaded } = useActiveChurch()
 
 // Narrower than COLLECTION_SELECT in CollectionsInputView: the report has no
 // edit window to enforce, so it needs neither created_at nor middle_name.
-// No from_church filter on any query here — RLS scopes every read to the
-// caller's church, as it does in every other view.
 const REPORT_COLLECTION_SELECT =
   'id, from, amount, is_tithes, collectedOn, members!collections_from_fkey(first_name, last_name)'
 
@@ -475,7 +69,7 @@ let monthRequestId = 0
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
+  'July', 'August', 'September', 'October', 'November', 'December'
 ]
 
 const monthLabel = computed(() => `${MONTH_NAMES[cursor.value.month - 1]} ${cursor.value.year}`)
@@ -504,19 +98,19 @@ const report = computed(() => {
     month: cursor.value.month,
     // Derived from the ledger rather than stored, so a correction to an older
     // entry re-derives every balance after it with no month-close step.
-    openingBalance: openingBalanceForMonth(serviceTotals.value, cursorMonthKey.value),
+    openingBalance: openingBalanceForMonth(serviceTotals.value, cursorMonthKey.value)
   })
 
   return computeMonthlyReport(mergeMonthSourceWithLiveExpenses(source, liveExpenses.value))
 })
 
-async function loadServiceTotals() {
+async function loadServiceTotals () {
   loadingLedger.value = true
   ledgerError.value = ''
 
   // Filter by the active church when it is known. RLS already scopes a single-church
   // user; the explicit filter is what stops a SuperAdmin's ledger merging churches
-  // once a church is selected. The watch below re-runs this after the church resolves.
+  // once a church is selected. The watch above re-runs this after the church resolves.
   let query = supabase
     .from('collectives_service_totals')
     .select('service_date, tithes, offering, expenses')
@@ -526,7 +120,7 @@ async function loadServiceTotals() {
 
   if (error) {
     serviceTotals.value = []
-    ledgerError.value = 'Unable to load the running balance. Opening balance is shown as zero, so Current Church Funds covers this month only.'
+    ledgerError.value = 'Unable to load the running balance. The opening balance is shown as zero, so the closing balance covers this month only.'
   } else {
     serviceTotals.value = data || []
   }
@@ -534,7 +128,7 @@ async function loadServiceTotals() {
   loadingLedger.value = false
 }
 
-async function loadMonth() {
+async function loadMonth () {
   const requestId = ++monthRequestId
   loadingMonth.value = true
   monthError.value = ''
@@ -580,7 +174,7 @@ async function loadMonth() {
 // alongside "10%" and "5%" of total funds it read as half the collection. Derive
 // them and the column adds to 100% by construction.
 const ratePct = Object.fromEntries(
-  Object.entries(SHARE_OF_TOTAL_FUNDS).map(([key, rate]) => [key, formatRate(rate)]),
+  Object.entries(SHARE_OF_TOTAL_FUNDS).map(([key, rate]) => [key, formatRate(rate)])
 )
 
 // Whole numbers for the rates in use; a decimal only if one ever needs it.
@@ -588,7 +182,7 @@ const ratePct = Object.fromEntries(
 // float residue (1 − 0.10 − 0.05 − 0.05 is 0.7999999999999999), and the current
 // rates only render cleanly because that residue happens to cancel. Do not rely
 // on the luck — 40% must not become "39.999999999999996%" if a rate changes.
-function formatRate(rate) {
+function formatRate (rate) {
   const pct = Math.round(rate * 1000) / 10
   return `${Number.isInteger(pct) ? pct : pct.toFixed(1)}%`
 }
@@ -598,66 +192,98 @@ function formatRate(rate) {
 // field, so adding a category column later needs no change here.
 const hasOthers = computed(() => report.value.totals.others > 0)
 
-const allocationSegments = computed(() => {
+// One list drives the stacked bar AND the rows beneath it — they are the same
+// five figures, and letting them drift apart is how a legend stops matching its
+// chart. `tone` marks the three that leave the church.
+const allocations = computed(() => {
   const t = report.value.totals
   const base = t.totalFunds
-  if (!base) return []
-  const segs = [
-    { key: 'tithesOfTithes', label: 'Tithes of Tithes', amount: t.tithesOfTithes, color: '#f97316' },
-    { key: 'project', label: 'Project Fund', amount: t.project, color: '#a855f7' },
-    { key: 'studentProgramNet', label: 'Student Program (net)', amount: t.studentProgramNet, color: '#14b8a6' },
-    { key: 'pastor', label: "Pastor's Allowance", amount: t.pastorAllowance, color: '#1a56db' },
-    { key: 'church', label: 'Church Allocation', amount: t.churchAllocation, color: '#10b981' },
+  const rows = [
+    { key: 'tithesOfTithes', label: 'Tithes of Tithes', amount: t.tithesOfTithes, pct: ratePct.tithesOfTithes, out: true },
+    { key: 'project', label: 'Project Fund', amount: t.project, pct: ratePct.project, out: true },
+    { key: 'studentProgram', label: 'Student Program', amount: t.studentProgramGross, pct: ratePct.studentProgram, out: true },
+    { key: 'pastor', label: 'Pastor’s Allowance', amount: t.pastorAllowance, pct: ratePct.pastor, out: false },
+    { key: 'church', label: 'Church Allocation', amount: t.churchAllocation, pct: ratePct.church, out: false }
   ]
-  return segs.map((s) => ({ ...s, width: `${(s.amount / base) * 100}%` }))
+  return rows.map((row, i) => ({
+    ...row,
+    step: i + 1,
+    width: base > 0 ? `${(row.amount / base) * 100}%` : '0%'
+  }))
 })
 
-function prevMonth() {
+// Bars measured against the largest line, matching the Expenses screen.
+const expenseLines = computed(() => {
+  const lines = report.value.expenseSummary
+  const largest = lines.length ? Math.max(...lines.map((l) => l.amount)) : 0
+  return lines.map((line) => ({
+    ...line,
+    width: largest > 0 ? `${Math.max((line.amount / largest) * 100, 2)}%` : '0%'
+  }))
+})
+
+const kpis = computed(() => {
+  const t = report.value.totals
+  return [
+    { key: 'total', label: 'Total funds', value: formatPesoWhole(t.totalFunds), sub: hasOthers.value ? 'Tithes + offering + others' : 'Tithes + offering', tint: 'plain' },
+    { key: 'tithes', label: 'Tithes', value: formatPesoWhole(t.tithes), sub: shareOfTotal(t.tithes), tint: 'plain' },
+    { key: 'offering', label: 'Offering', value: formatPesoWhole(t.offering), sub: shareOfTotal(t.offering), tint: 'plain' },
+    {
+      key: 'expenses',
+      label: 'Expenses',
+      value: formatPesoWhole(t.expenses),
+      sub: `${report.value.expenseSummary.length} ${report.value.expenseSummary.length === 1 ? 'description' : 'descriptions'}`,
+      tint: 'magenta'
+    },
+    {
+      key: 'closing',
+      label: 'Closing balance',
+      value: formatPesoWhole(report.value.closingBalance),
+      sub: `from ${formatPesoWhole(report.value.openingBalance)}`,
+      tint: 'accent'
+    }
+  ]
+})
+
+function shareOfTotal (part) {
+  const share = formatShare(part, report.value.totals.totalFunds)
+  return share ? `${share} of total` : ''
+}
+
+function prevMonth () {
   const { year, month } = cursor.value
-  cursor.value = month === 1
-    ? { year: year - 1, month: 12 }
-    : { year, month: month - 1 }
+  cursor.value = month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 }
 }
 
-function nextMonth() {
+function nextMonth () {
   const { year, month } = cursor.value
-  cursor.value = month === 12
-    ? { year: year + 1, month: 1 }
-    : { year, month: month + 1 }
+  cursor.value = month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 }
 }
 
-function formatMoney(n) {
-  const value = Number(n) || 0
-  return new Intl.NumberFormat('en-PH', {
-    style: 'currency',
-    currency: 'PHP',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value)
-}
-
-function percent(part, whole) {
-  if (!whole) return '0%'
-  return `${((part / whole) * 100).toFixed(1)}%`
-}
-
-function formatShortDate(iso) {
-  const d = new Date(iso + 'T00:00:00')
+function formatShortDate (iso) {
+  // Explicit local midnight: the bare string parses as UTC and names the day
+  // before for the first eight hours of every Manila day (D8).
+  const d = new Date(`${iso}T00:00:00`)
   if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })
 }
 
-function handlePrint() {
+// window.print(), not a generated file. The browser's print dialog saves a PDF
+// on every platform this church uses, and a hand-rolled export would be a new
+// dependency and a new thing to keep in step with the report.
+function handlePrint () {
   window.print()
 }
 
-function beforeExpand(el) {
+// Height transitions on a table, done from JS because `height: auto` is not an
+// animatable value. Unchanged from the previous implementation.
+function beforeExpand (el) {
   el.style.height = '0'
   el.style.opacity = '0'
   el.style.overflow = 'hidden'
 }
 
-function expand(el) {
+function expand (el) {
   el.style.transition = 'height 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease'
   requestAnimationFrame(() => {
     el.style.height = `${el.scrollHeight}px`
@@ -665,19 +291,19 @@ function expand(el) {
   })
 }
 
-function afterExpand(el) {
+function afterExpand (el) {
   el.style.height = 'auto'
   el.style.overflow = 'visible'
   el.style.transition = ''
 }
 
-function beforeCollapse(el) {
+function beforeCollapse (el) {
   el.style.height = `${el.scrollHeight}px`
   el.style.opacity = '1'
   el.style.overflow = 'hidden'
 }
 
-function collapse(el) {
+function collapse (el) {
   el.style.transition = 'height 260ms cubic-bezier(0.4, 0, 0.2, 1), opacity 180ms ease'
   requestAnimationFrame(() => {
     el.style.height = '0'
@@ -685,7 +311,7 @@ function collapse(el) {
   })
 }
 
-function afterCollapse(el) {
+function afterCollapse (el) {
   el.style.transition = ''
   el.style.height = ''
   el.style.opacity = ''
@@ -693,488 +319,949 @@ function afterCollapse(el) {
 }
 </script>
 
+<template>
+  <div class="fun">
+    <header
+      class="fun__head anim-rise"
+      style="--i: 0"
+    >
+      <div class="fun__title-block">
+        <h1 class="fun__title">
+          Church funds
+        </h1>
+        <p class="fun__sub">
+          Collectives report · {{ report.weeks.length }}
+          {{ report.weeks.length === 1 ? 'service date' : 'service dates' }}
+        </p>
+      </div>
+
+      <div class="fun__actions">
+        <div class="fun__month">
+          <button
+            type="button"
+            class="fun__step"
+            aria-label="Previous month"
+            @click="prevMonth"
+          >
+            <Icon
+              name="chevronLeft"
+              :size="15"
+            />
+          </button>
+          <span class="fun__month-label">{{ monthLabel }}</span>
+          <button
+            type="button"
+            class="fun__step"
+            aria-label="Next month"
+            @click="nextMonth"
+          >
+            <Icon
+              name="chevronRight"
+              :size="15"
+            />
+          </button>
+        </div>
+        <Button @click="handlePrint">
+          Print
+        </Button>
+      </div>
+    </header>
+
+    <p
+      v-if="loadError"
+      class="fun__warning"
+      role="alert"
+    >
+      {{ loadError }}
+    </p>
+
+    <!-- The empty state is gated on `loading` or it flashes "nothing recorded"
+         on every month navigation. -->
+    <!-- role + aria-label, not just shapes. Skeletons say "something is coming"
+         to the eye and nothing at all to a screen reader, and this replaced a
+         state that used to read "Loading May 2026…" aloud. -->
+    <div
+      v-if="loading"
+      class="fun__cards"
+      role="status"
+      :aria-label="`Loading ${monthLabel}`"
+    >
+      <div
+        v-for="n in 5"
+        :key="n"
+        class="skeleton fun__kpi-skeleton"
+      />
+    </div>
+
+    <section
+      v-else-if="report.weeks.length === 0"
+      class="fun__card fun__card--pad anim-rise"
+      style="--i: 1"
+    >
+      <p class="fun__empty">
+        No collectives recorded for {{ monthLabel }}.
+      </p>
+    </section>
+
+    <template v-else>
+      <div class="fun__kpis">
+        <div
+          v-for="(k, i) in kpis"
+          :key="k.key"
+          class="fun__kpi anim-rise"
+          :class="`fun__kpi--${k.tint}`"
+          :style="`--i: ${i + 1}`"
+        >
+          <span class="fun__kpi-label">{{ k.label }}</span>
+          <span class="fun__kpi-value">{{ k.value }}</span>
+          <span class="fun__kpi-sub">{{ k.sub }}</span>
+        </div>
+      </div>
+
+      <div class="fun__split">
+        <!-- Where the money went -->
+        <section
+          class="fun__card fun__card--pad anim-rise"
+          style="--i: 6"
+        >
+          <h2 class="fun__card-title">
+            Where the {{ formatPeso(report.totals.totalFunds) }} went
+          </h2>
+          <p class="fun__card-note">
+            Fixed allocation rates, applied per service date
+          </p>
+
+          <div
+            class="fun__alloc-bar anim-grow"
+            role="img"
+            :aria-label="`Allocation of ${formatPeso(report.totals.totalFunds)} for ${monthLabel}`"
+          >
+            <span
+              v-for="seg in allocations"
+              :key="seg.key"
+              class="fun__alloc-seg"
+              :class="`fun__alloc-seg--${seg.step}`"
+              :style="{ width: seg.width }"
+            />
+          </div>
+
+          <ul class="fun__alloc-rows">
+            <li
+              v-for="seg in allocations"
+              :key="seg.key"
+              class="fun__alloc-row"
+            >
+              <span
+                class="fun__dot"
+                :class="`fun__dot--${seg.step}`"
+              />
+              <span class="fun__alloc-label">{{ seg.label }}</span>
+              <span class="fun__alloc-pct">{{ seg.pct }}</span>
+              <span
+                class="fun__alloc-amount"
+                :class="{ 'is-out': seg.out }"
+              >{{ seg.out ? '− ' : '' }}{{ formatPeso(seg.amount) }}</span>
+            </li>
+
+            <!-- No column stores a per-service personal draw, so this stays
+                 hidden with live data. Kept because the calculator supports it
+                 and the paper report has the line. -->
+            <li
+              v-if="report.totals.studentProgramDeduction > 0"
+              class="fun__alloc-row fun__alloc-row--nested"
+            >
+              <span class="fun__alloc-label">Less: personal draw</span>
+              <span class="fun__alloc-amount">+ {{ formatPeso(report.totals.studentProgramDeduction) }}</span>
+            </li>
+          </ul>
+        </section>
+
+        <!-- Expenses -->
+        <section
+          class="fun__card fun__card--pad anim-rise"
+          style="--i: 7"
+        >
+          <h2 class="fun__card-title">
+            Expenses
+          </h2>
+          <p class="fun__card-note">
+            Charged against the church allocation
+          </p>
+
+          <p
+            v-if="!expenseLines.length"
+            class="fun__empty fun__empty--inset"
+          >
+            No expenses recorded this month.
+          </p>
+
+          <template v-else>
+            <ul class="fun__bars">
+              <li
+                v-for="(line, i) in expenseLines"
+                :key="line.description"
+                class="fun__bar-row"
+              >
+                <span class="fun__bar-label">{{ line.description }}</span>
+                <span class="fun__bar-track">
+                  <span
+                    class="fun__bar-fill anim-grow"
+                    :style="`width: ${line.width}; --i: ${i}`"
+                  />
+                </span>
+                <span class="fun__bar-amount">{{ formatPeso(line.amount) }}</span>
+              </li>
+            </ul>
+
+            <div class="fun__bars-total">
+              <span>Total expenses</span>
+              <span class="fun__out">{{ formatPeso(report.totals.expenses) }}</span>
+            </div>
+          </template>
+        </section>
+      </div>
+
+      <!-- Weekly breakdown -->
+      <section
+        class="fun__card anim-rise"
+        style="--i: 8"
+      >
+        <div class="fun__card-head">
+          <div class="fun__card-heading">
+            <h2 class="fun__card-title">
+              Weekly breakdown
+            </h2>
+            <span class="fun__card-meta">Per-service totals for {{ monthLabel }}</span>
+          </div>
+          <button
+            type="button"
+            class="fun__toggle"
+            :aria-expanded="weeklyExpanded"
+            aria-controls="weekly-breakdown-content"
+            @click="weeklyExpanded = !weeklyExpanded"
+          >
+            {{ weeklyExpanded ? 'Collapse' : 'Expand' }}
+            <Icon
+              name="chevronDown"
+              :size="14"
+              class="fun__toggle-icon"
+              :class="{ 'is-collapsed': !weeklyExpanded }"
+            />
+          </button>
+        </div>
+
+        <Transition
+          @before-enter="beforeExpand"
+          @enter="expand"
+          @after-enter="afterExpand"
+          @before-leave="beforeCollapse"
+          @leave="collapse"
+          @after-leave="afterCollapse"
+        >
+          <div
+            v-show="weeklyExpanded"
+            id="weekly-breakdown-content"
+            class="fun__scroll"
+          >
+            <table class="fun__table">
+              <thead>
+                <tr>
+                  <th scope="col">
+                    Metric
+                  </th>
+                  <th
+                    v-for="w in report.weeks"
+                    :key="w.date"
+                    scope="col"
+                    class="fun__num"
+                  >
+                    {{ formatShortDate(w.date) }}
+                  </th>
+                  <th
+                    scope="col"
+                    class="fun__num fun__month-col"
+                  >
+                    Month
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">
+                    Tithes
+                  </th>
+                  <td
+                    v-for="w in report.weeks"
+                    :key="w.date"
+                    class="fun__num"
+                  >
+                    {{ formatPeso(w.tithes) }}
+                  </td>
+                  <td class="fun__num fun__month-col">
+                    {{ formatPeso(report.totals.tithes) }}
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    Offering
+                  </th>
+                  <td
+                    v-for="w in report.weeks"
+                    :key="w.date"
+                    class="fun__num"
+                  >
+                    {{ formatPeso(w.offering) }}
+                  </td>
+                  <td class="fun__num fun__month-col">
+                    {{ formatPeso(report.totals.offering) }}
+                  </td>
+                </tr>
+                <tr v-if="hasOthers">
+                  <th scope="row">
+                    Others
+                  </th>
+                  <td
+                    v-for="w in report.weeks"
+                    :key="w.date"
+                    class="fun__num"
+                  >
+                    {{ formatPeso(w.others) }}
+                  </td>
+                  <td class="fun__num fun__month-col">
+                    {{ formatPeso(report.totals.others) }}
+                  </td>
+                </tr>
+                <tr class="fun__row--strong">
+                  <th scope="row">
+                    Total funds
+                  </th>
+                  <td
+                    v-for="w in report.weeks"
+                    :key="w.date"
+                    class="fun__num"
+                  >
+                    {{ formatPeso(w.totalFunds) }}
+                  </td>
+                  <td class="fun__num fun__month-col">
+                    {{ formatPeso(report.totals.totalFunds) }}
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    Expenses
+                  </th>
+                  <td
+                    v-for="w in report.weeks"
+                    :key="w.date"
+                    class="fun__num fun__out"
+                  >
+                    {{ formatPeso(w.totalExpenses) }}
+                  </td>
+                  <td class="fun__num fun__month-col fun__out">
+                    {{ formatPeso(report.totals.expenses) }}
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">
+                    Church allocation
+                  </th>
+                  <td
+                    v-for="w in report.weeks"
+                    :key="w.date"
+                    class="fun__num"
+                  >
+                    {{ formatPeso(w.churchAllocation) }}
+                  </td>
+                  <td class="fun__num fun__month-col">
+                    {{ formatPeso(report.totals.churchAllocation) }}
+                  </td>
+                </tr>
+                <tr class="fun__row--strong">
+                  <th scope="row">
+                    Net church funds
+                  </th>
+                  <td
+                    v-for="w in report.weeks"
+                    :key="w.date"
+                    class="fun__num"
+                    :class="{ 'fun__out': w.netChurchFunds < 0 }"
+                  >
+                    {{ formatPeso(w.netChurchFunds) }}
+                  </td>
+                  <td
+                    class="fun__num fun__month-col"
+                    :class="{ 'fun__out': report.totals.netChurchFunds < 0 }"
+                  >
+                    {{ formatPeso(report.totals.netChurchFunds) }}
+                  </td>
+                </tr>
+                <tr class="fun__row--muted">
+                  <th scope="row">
+                    Running balance
+                  </th>
+                  <td
+                    v-for="w in report.weeks"
+                    :key="w.date"
+                    class="fun__num"
+                  >
+                    {{ formatPeso(w.closingBalance) }}
+                  </td>
+                  <td class="fun__num fun__month-col">
+                    {{ formatPeso(report.closingBalance) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </Transition>
+      </section>
+
+      <!-- How the closing balance is reached -->
+      <section
+        class="fun__card fun__card--pad anim-rise"
+        style="--i: 9"
+      >
+        <h2 class="fun__card-title">
+          Church funds balance
+        </h2>
+        <p class="fun__card-note">
+          Rollup for {{ monthLabel }}
+        </p>
+
+        <ul class="fun__balance">
+          <li>
+            <span>Church allocation (month)</span>
+            <span class="fun__balance-amount">{{ formatPeso(report.totals.churchAllocation) }}</span>
+          </li>
+          <li>
+            <span>Less: total expenses</span>
+            <span class="fun__balance-amount fun__out">− {{ formatPeso(report.totals.expenses) }}</span>
+          </li>
+          <li class="fun__balance-sub">
+            <span>Net church funds (month)</span>
+            <span
+              class="fun__balance-amount"
+              :class="{ 'fun__out': report.totals.netChurchFunds < 0 }"
+            >{{ formatPeso(report.totals.netChurchFunds) }}</span>
+          </li>
+          <li>
+            <span>Add: opening balance</span>
+            <span class="fun__balance-amount">+ {{ formatPeso(report.openingBalance) }}</span>
+          </li>
+          <li class="fun__balance-total">
+            <span>Current church funds</span>
+            <span class="fun__balance-amount">{{ formatPeso(report.closingBalance) }}</span>
+          </li>
+        </ul>
+      </section>
+
+      <!-- Contributors (finance staff / SuperAdmin only) -->
+      <section
+        v-if="canWriteFinance"
+        class="fun__card anim-rise"
+        style="--i: 10"
+      >
+        <div class="fun__card-head">
+          <div class="fun__card-heading">
+            <h2 class="fun__card-title">
+              Contributors
+            </h2>
+            <span class="fun__card-meta">
+              {{ report.contributors.length }}
+              {{ report.contributors.length === 1 ? 'row' : 'rows' }} ·
+              each anonymous gift is listed separately
+            </span>
+          </div>
+          <button
+            type="button"
+            class="fun__toggle"
+            :aria-expanded="contributorsExpanded"
+            aria-controls="contributors-content"
+            @click="contributorsExpanded = !contributorsExpanded"
+          >
+            {{ contributorsExpanded ? 'Collapse' : 'Expand' }}
+            <Icon
+              name="chevronDown"
+              :size="14"
+              class="fun__toggle-icon"
+              :class="{ 'is-collapsed': !contributorsExpanded }"
+            />
+          </button>
+        </div>
+
+        <Transition
+          @before-enter="beforeExpand"
+          @enter="expand"
+          @after-enter="afterExpand"
+          @before-leave="beforeCollapse"
+          @leave="collapse"
+          @after-leave="afterCollapse"
+        >
+          <div
+            v-show="contributorsExpanded"
+            id="contributors-content"
+            class="fun__scroll"
+          >
+            <table class="fun__table">
+              <thead>
+                <tr>
+                  <th scope="col">
+                    Name
+                  </th>
+                  <th
+                    scope="col"
+                    class="fun__num"
+                  >
+                    Tithes
+                  </th>
+                  <th
+                    scope="col"
+                    class="fun__num"
+                  >
+                    Offering
+                  </th>
+                  <th
+                    v-if="hasOthers"
+                    scope="col"
+                    class="fun__num"
+                  >
+                    Others
+                  </th>
+                  <th
+                    scope="col"
+                    class="fun__num fun__month-col"
+                  >
+                    Total
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <!-- Keyed on `key`, not `name`: several rows legitimately read
+                     "Anonymous", one per gift. -->
+                <tr
+                  v-for="c in report.contributors"
+                  :key="c.key"
+                >
+                  <th scope="row">
+                    {{ c.name }}
+                  </th>
+                  <td class="fun__num">
+                    {{ formatPeso(c.tithes) }}
+                  </td>
+                  <td class="fun__num">
+                    {{ formatPeso(c.offering) }}
+                  </td>
+                  <td
+                    v-if="hasOthers"
+                    class="fun__num"
+                  >
+                    {{ formatPeso(c.others) }}
+                  </td>
+                  <td class="fun__num fun__month-col">
+                    {{ formatPeso(c.total) }}
+                  </td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr class="fun__row--strong">
+                  <th scope="row">
+                    Total
+                  </th>
+                  <td class="fun__num">
+                    {{ formatPeso(report.totals.tithes) }}
+                  </td>
+                  <td class="fun__num">
+                    {{ formatPeso(report.totals.offering) }}
+                  </td>
+                  <td
+                    v-if="hasOthers"
+                    class="fun__num"
+                  >
+                    {{ formatPeso(report.totals.others) }}
+                  </td>
+                  <td class="fun__num fun__month-col">
+                    {{ formatPeso(report.totals.totalFunds) }}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </Transition>
+      </section>
+    </template>
+  </div>
+</template>
+
 <style scoped>
-.page-container {
-  padding: 24px 32px;
-  background: #f8fafc;
-  min-height: 100vh;
-}
+/* The allocation ramp. Five steps of the brand cyan, because these five figures
+   are one quantity being divided — five unrelated hues (the old orange /
+   purple / teal / blue / green) read as five unrelated things.
 
-.page-content {
-  max-width: 1280px;
-  margin: 0 auto;
+   The dark theme shifts the whole ramp one step lighter: the darkest two steps
+   are legible on white and invisible on #141d26. */
+.fun {
+  --seg-1: #99e0ff;
+  --seg-2: #62c5ee;
+  --seg-3: #38a6cf;
+  --seg-4: #0088b0;
+  --seg-5: #006786;
+
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: var(--sp-18);
 }
 
-.page-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .fun {
+    --seg-1: #e0f5ff;
+    --seg-2: #a8e6ff;
+    --seg-3: #7cd4fd;
+    --seg-4: #38a6cf;
+    --seg-5: #0088b0;
+  }
+}
+:root[data-theme='dark'] .fun {
+  --seg-1: #e0f5ff;
+  --seg-2: #a8e6ff;
+  --seg-3: #7cd4fd;
+  --seg-4: #38a6cf;
+  --seg-5: #0088b0;
 }
 
-.page-header h2 {
-  font-size: 24px;
-  font-weight: 700;
-  color: #0f172a;
-  letter-spacing: -0.02em;
+/* --- Header ------------------------------------------------------------- */
+.fun__head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-16); }
+.fun__title-block { display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; }
+
+.fun__title {
+  font-size: var(--text-h1);
+  font-weight: 800;
+  letter-spacing: var(--tracking-h1);
+  line-height: var(--leading-h1);
 }
 
-.page-subtitle {
-  color: #64748b;
-  font-size: 14px;
-  margin-top: 4px;
-}
+.fun__sub { font-size: var(--text-body); color: var(--ink-4); }
 
-.page-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
+.fun__actions { display: flex; align-items: center; gap: var(--sp-9); }
 
-.stat-badge {
-  background: #e0edff;
-  color: #1a56db;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 6px 10px;
-  border-radius: 999px;
-}
-
-.btn-secondary {
-  background: #ffffff;
-  color: #1e293b;
-  border: 1px solid #e2e8f0;
-  padding: 8px 14px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
+.fun__month {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  transition: background 0.15s, border-color 0.15s;
-}
-
-.btn-secondary:hover {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-}
-
-.btn-collections {
-  background: linear-gradient(135deg, #1a56db 0%, #1e40af 100%);
-  color: #ffffff;
-  border: 1px solid #1a56db;
-  padding: 9px 16px;
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  text-decoration: none;
-  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.24);
-  transition: transform 0.15s, box-shadow 0.15s, filter 0.15s;
-}
-
-.btn-collections:hover {
-  filter: brightness(1.02);
-  transform: translateY(-1px);
-  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.3);
-}
-
-.btn-icon {
-  background: none;
-  border: 1px solid #e2e8f0;
-  padding: 6px;
-  border-radius: 8px;
-  cursor: pointer;
-  color: #64748b;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
-}
-
-.btn-icon:hover {
-  background: #f1f5f9;
-  color: #1a56db;
-  border-color: #cbd5e1;
-}
-
-.nav-btn {
-  width: 36px;
-  height: 36px;
-}
-
-.card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
-  padding: 20px;
-}
-
-.state-message {
-  text-align: center;
-  padding: 40px 16px;
-  color: #64748b;
-}
-.state-message.small { padding: 20px 12px; }
-
-.load-warning {
-  margin-top: -8px;
-  color: #b45309;
-  font-size: 12px;
-}
-
-/* Month navigator */
-.report-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 20px;
-}
-.report-title {
-  display: flex;
-  flex-direction: column;
   align-items: center;
   gap: 2px;
-}
-.report-title-main {
-  font-size: 18px;
-  font-weight: 700;
-  color: #0f172a;
-}
-.report-title-sub {
-  font-size: 12px;
-  color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  padding: 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  background: var(--surface);
 }
 
-/* KPI grid */
-.kpi-grid {
+.fun__step {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 14px;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--r-tag);
+  background: none;
+  color: var(--ink-4);
+  cursor: pointer;
+  transition: background-color var(--dur-state) ease, color var(--dur-state) ease;
 }
-.kpi-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 16px 18px;
+.fun__step:hover { background: var(--divider); color: var(--ink); }
+.fun__step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.fun__month-label { padding: 0 var(--sp-10); font-size: var(--text-body-sm); font-weight: 800; color: var(--ink); white-space: nowrap; }
+
+.fun__warning {
+  padding: var(--sp-10) var(--sp-12);
+  border-radius: var(--r-inset);
+  background: var(--magenta-tint);
+  border: 1px solid var(--magenta-border);
+  font-size: var(--text-body-sm);
+  color: var(--magenta-darkest);
+}
+
+/* --- KPI tiles ---------------------------------------------------------- */
+.fun__kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--sp-14); }
+
+.fun__kpi {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
-}
-.kpi-card-accent {
-  background: linear-gradient(135deg, #1a56db 0%, #1e40af 100%);
-  border-color: #1a56db;
-  color: #ffffff;
-}
-.kpi-card-accent .kpi-label,
-.kpi-card-accent .kpi-sub {
-  color: #dbeafe;
-}
-.kpi-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #64748b;
-}
-.kpi-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: #0f172a;
-  font-variant-numeric: tabular-nums;
-}
-.kpi-card-accent .kpi-value { color: #ffffff; }
-.kpi-sub {
-  font-size: 12px;
-  color: #64748b;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  gap: var(--sp-8);
+  padding: var(--sp-16);
+  border-radius: var(--r-inset);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
 }
 
-/* Sections */
-.report-section { padding: 20px 22px; }
-.section-header {
+.fun__kpi-label { font-size: var(--text-meta-sm); font-weight: 700; color: var(--ink-4); }
+.fun__kpi-value { font-size: 21px; font-weight: 800; letter-spacing: -0.03em; color: var(--ink); font-variant-numeric: tabular-nums; }
+.fun__kpi-sub { font-size: var(--text-meta-sm); color: var(--ink-5); min-height: 1em; }
+
+.fun__kpi--magenta { background: var(--magenta-tint); border-color: var(--magenta-border); }
+.fun__kpi--magenta .fun__kpi-label { color: var(--magenta-deep); }
+.fun__kpi--magenta .fun__kpi-value { color: var(--magenta-darkest); }
+.fun__kpi--magenta .fun__kpi-sub { color: var(--magenta-deep); }
+
+.fun__kpi--accent { background: var(--accent-tint); border-color: var(--accent-border); }
+.fun__kpi--accent .fun__kpi-label { color: var(--accent-darkest); }
+.fun__kpi--accent .fun__kpi-value { color: var(--accent-darkest); }
+.fun__kpi--accent .fun__kpi-sub { color: var(--accent-darkest); opacity: .8; }
+
+.fun__cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--sp-14); }
+.fun__kpi-skeleton { height: 92px; border-radius: var(--r-inset); }
+
+/* --- Cards -------------------------------------------------------------- */
+.fun__split { display: grid; grid-template-columns: 1.35fr 1fr; gap: var(--sp-18); align-items: start; }
+
+.fun__card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  min-width: 0;
+}
+.fun__card--pad { padding: var(--sp-20); }
+
+.fun__card-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-  flex-wrap: wrap;
-}
-.section-header h3 {
-  font-size: 15px;
-  font-weight: 700;
-  color: #0f172a;
-  letter-spacing: -0.01em;
-}
-.section-hint {
-  font-size: 12px;
-  color: #64748b;
+  gap: var(--sp-12);
+  padding: var(--sp-14) var(--sp-20);
+  border-bottom: 1px solid var(--divider);
 }
 
-.section-toggle {
-  border: 1px solid #dbe3ee;
-  background: #ffffff;
-  color: #334155;
-  border-radius: 999px;
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
+.fun__card-heading { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fun__card-title { font-size: var(--text-h2); font-weight: 800; letter-spacing: var(--tracking-h2); color: var(--ink); }
+.fun__card-note { margin-top: 3px; font-size: var(--text-meta); color: var(--ink-5); }
+.fun__card-meta { font-size: var(--text-meta); color: var(--ink-5); }
+
+.fun__toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--sp-6);
+  flex: none;
+  padding: var(--sp-6) var(--sp-10);
+  border: 1px solid var(--border);
+  border-radius: var(--r-tag);
+  background: var(--surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-meta);
+  font-weight: 700;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: background-color var(--dur-state) ease, border-color var(--dur-state) ease;
+}
+.fun__toggle:hover { background: var(--surface-subtle); border-color: var(--border-strong); }
+.fun__toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.fun__toggle-icon { transition: transform var(--dur-state) ease; }
+.fun__toggle-icon.is-collapsed { transform: rotate(-90deg); }
+
+/* --- Allocation --------------------------------------------------------- */
+.fun__alloc-bar {
+  display: flex;
+  height: 32px;
+  margin-top: var(--sp-16);
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--divider);
 }
 
-.section-toggle:hover {
-  background: #f8fafc;
-  border-color: #cbd5e1;
-}
+.fun__alloc-seg { transition: filter var(--dur-state) ease; }
+.fun__alloc-seg:hover { filter: brightness(1.08); }
 
-.section-toggle-label {
-  line-height: 1;
-}
+.fun__alloc-seg--1, .fun__dot--1 { background: var(--seg-1); }
+.fun__alloc-seg--2, .fun__dot--2 { background: var(--seg-2); }
+.fun__alloc-seg--3, .fun__dot--3 { background: var(--seg-3); }
+.fun__alloc-seg--4, .fun__dot--4 { background: var(--seg-4); }
+.fun__alloc-seg--5, .fun__dot--5 { background: var(--seg-5); }
 
-.section-toggle-icon {
-  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
-}
+.fun__alloc-rows { list-style: none; margin: var(--sp-16) 0 0; padding: 0; }
 
-.section-toggle-icon.is-collapsed {
-  transform: rotate(-90deg);
+.fun__alloc-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-10);
+  padding: var(--sp-9) 0;
+  border-bottom: 1px solid var(--divider);
 }
+.fun__alloc-row:last-child { border-bottom: 0; }
+.fun__alloc-row--nested { padding-left: var(--sp-20); }
 
-.section-content {
-  margin-top: 8px;
-}
+.fun__dot { width: 10px; height: 10px; flex: none; border-radius: 4px; }
 
-/* Section ordering in the monthly report */
-.section-alloc-expenses { order: 1; }
-.section-weekly-breakdown { order: 2; }
-.section-contributors { order: 3; }
-.balance-card { order: 4; }
+.fun__alloc-label { font-size: var(--text-body-sm); font-weight: 600; color: var(--ink); }
+.fun__alloc-pct { font-size: var(--text-meta); color: var(--ink-5); }
 
-/* Tables */
-.table-wrap {
-  overflow-x: auto;
-}
-.report-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
+.fun__alloc-amount {
+  margin-left: auto;
+  font-size: var(--text-body-sm);
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
-}
-.report-table.compact { font-size: 13px; }
-.report-table th,
-.report-table td {
-  padding: 10px 12px;
-  text-align: left;
-  border-bottom: 1px solid #f1f5f9;
-}
-.report-table th {
-  font-weight: 600;
-  color: #475569;
-  background: #f8fafc;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.report-table tbody tr:hover {
-  background: #f8fafc;
-}
-.col-label {
-  color: #0f172a;
-  font-weight: 500;
+  color: var(--ink);
   white-space: nowrap;
 }
-.col-num {
-  text-align: right;
-  color: #1e293b;
-}
-.col-total {
-  background: #eff6ff;
-  color: #1a56db;
-  font-weight: 700;
-}
-.row-subtotal td {
-  font-weight: 700;
-  background: #f8fafc;
-  border-top: 1px solid #e2e8f0;
-}
-.row-total td {
-  font-weight: 700;
-  background: #eff6ff;
-  color: #0f172a;
-  border-top: 2px solid #1a56db;
-}
-.neg { color: #dc2626; }
-.muted { color: #64748b; }
+.fun__alloc-amount.is-out { color: var(--magenta-darkest); }
 
-/* Two column layout */
-.two-col {
-  display: grid;
-  grid-template-columns: 1.2fr 1fr;
-  gap: 20px;
-}
-@media (max-width: 900px) {
-  .two-col { grid-template-columns: 1fr; }
-}
+/* --- Expense bars ------------------------------------------------------- */
+.fun__bars { list-style: none; margin: var(--sp-16) 0 0; padding: 0; display: flex; flex-direction: column; }
 
-/* Allocations */
-.alloc-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 18px;
-}
-.alloc-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 4px;
-  font-size: 13px;
-  color: #1e293b;
-  border-bottom: 1px dashed #f1f5f9;
-}
-.alloc-row:last-child { border-bottom: none; }
-.alloc-header {
-  font-weight: 700;
-  color: #0f172a;
-  border-bottom: 1px solid #e2e8f0;
-  padding-bottom: 10px;
-  margin-bottom: 4px;
-}
-.alloc-subtotal {
-  font-weight: 700;
-  color: #0f172a;
-  background: #f8fafc;
-  padding: 10px 8px;
-  border-radius: 6px;
-  margin: 4px 0;
-  border-bottom: none;
-}
-.alloc-nested {
-  padding-left: 22px;
-  color: #64748b;
-  font-size: 12px;
-}
-.alloc-nested-label { color: #64748b; }
-.alloc-amount {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-}
-.alloc-pct {
-  color: #94a3b8;
-  font-weight: 500;
-  font-size: 11px;
-  margin-left: 4px;
-}
-.alloc-dot {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  margin-right: 8px;
-  vertical-align: middle;
-}
-.dot-orange { background: #f97316; }
-.dot-purple { background: #a855f7; }
-.dot-teal { background: #14b8a6; }
-.dot-blue { background: #1a56db; }
-.dot-green { background: #10b981; }
+.fun__bar-row { display: flex; align-items: center; gap: var(--sp-12); padding: var(--sp-6) 0; }
 
-.alloc-bar {
-  display: flex;
-  height: 12px;
-  border-radius: 6px;
+.fun__bar-label {
+  width: 128px;
+  flex: none;
+  font-size: var(--text-body-sm);
+  color: var(--ink);
   overflow: hidden;
-  background: #f1f5f9;
-  margin-top: 6px;
-}
-.alloc-bar-seg {
-  height: 100%;
-  transition: filter 0.15s;
-}
-.alloc-bar-seg:hover { filter: brightness(1.1); }
-.alloc-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 10px;
-  font-size: 12px;
-  color: #64748b;
-}
-.alloc-legend-item {
-  display: inline-flex;
-  align-items: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Balance card */
-.balance-card { background: #0f172a; color: #e2e8f0; border-color: #0f172a; }
-.balance-card .section-header h3 { color: #ffffff; }
-.balance-card .section-hint { color: #94a3b8; }
-.balance-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.fun__bar-track {
+  flex: 1;
+  min-width: 0;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--divider);
+  overflow: hidden;
 }
-.balance-list li {
+
+.fun__bar-fill { display: block; height: 100%; background: var(--magenta); transform-origin: left; }
+
+.fun__bar-amount {
+  width: 78px;
+  flex: none;
+  text-align: right;
+  font-size: var(--text-meta);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.fun__bars-total {
   display: flex;
   justify-content: space-between;
-  padding: 10px 4px;
-  border-bottom: 1px dashed #334155;
-  font-size: 14px;
-  color: #cbd5e1;
+  gap: var(--sp-12);
+  margin-top: var(--sp-16);
+  padding-top: var(--sp-12);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-body-sm);
+  font-weight: 800;
+  color: var(--ink);
 }
-.balance-list li:last-child { border-bottom: none; }
-.balance-subtotal {
-  font-weight: 700;
-  color: #ffffff !important;
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 6px;
-  padding: 10px 8px !important;
-}
-.balance-total {
-  font-weight: 700;
-  color: #ffffff !important;
-  border-top: 2px solid #1a56db;
-  margin-top: 4px;
-  font-size: 16px !important;
-  padding-top: 14px !important;
-}
-.mono {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-}
-.balance-card .neg { color: #fca5a5; }
 
-/* Print */
+.fun__out { color: var(--magenta-darkest); font-variant-numeric: tabular-nums; }
+
+/* --- Tables ------------------------------------------------------------- */
+.fun__scroll { overflow-x: auto; }
+
+.fun__table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+
+.fun__table th[scope='col'] {
+  text-align: left;
+  padding: var(--sp-10) var(--sp-20);
+  background: var(--surface-subtle);
+  border-bottom: 1px solid var(--divider);
+  font-size: var(--text-meta-sm);
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--ink-5);
+  white-space: nowrap;
+}
+
+.fun__table th[scope='row'] {
+  text-align: left;
+  padding: var(--sp-10) var(--sp-20);
+  border-bottom: 1px solid var(--divider);
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.fun__table td {
+  padding: var(--sp-10) var(--sp-20);
+  border-bottom: 1px solid var(--divider);
+  font-size: var(--text-body-sm);
+  color: var(--ink-3);
+}
+
+.fun__table tbody tr:hover th[scope='row'],
+.fun__table tbody tr:hover td { background: var(--surface-subtle-2); }
+
+.fun__num { text-align: right; white-space: nowrap; }
+
+/* The month column is the answer the whole row builds to. */
+.fun__month-col { color: var(--accent-darkest); font-weight: 800; }
+.fun__table th[scope='col'].fun__month-col { color: var(--accent-darkest); }
+
+.fun__row--strong th[scope='row'],
+.fun__row--strong td { font-weight: 800; color: var(--ink); }
+
+.fun__row--muted td { color: var(--ink-5); }
+.fun__row--muted th[scope='row'] { color: var(--ink-4); font-weight: 500; }
+
+/* --- Balance rollup ----------------------------------------------------- */
+.fun__balance { list-style: none; margin: var(--sp-16) 0 0; padding: 0; }
+
+.fun__balance li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-12);
+  padding: var(--sp-9) 0;
+  border-bottom: 1px solid var(--divider);
+  font-size: var(--text-body-sm);
+  color: var(--ink-3);
+}
+
+.fun__balance-amount { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; }
+
+.fun__balance-sub { font-weight: 700; color: var(--ink); }
+
+.fun__balance-total {
+  border-bottom: 0;
+  padding-top: var(--sp-12);
+  border-top: 1px solid var(--border);
+  font-weight: 800;
+  color: var(--accent-darkest);
+}
+.fun__balance-total .fun__balance-amount { font-size: 15px; font-weight: 800; color: var(--accent-darkest); }
+
+.fun__empty { font-size: var(--text-body-sm); color: var(--ink-5); }
+.fun__empty--inset {
+  margin-top: var(--sp-16);
+  padding: var(--sp-16);
+  border-radius: var(--r-inset);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+}
+
+/* --- Print: the report is a document before it is a screen -------------- */
 @media print {
-  .page-container { background: #ffffff; padding: 0; }
-  .report-toolbar .nav-btn,
-  .page-header-actions { display: none !important; }
-  .card { box-shadow: none; border-color: #cbd5e1; page-break-inside: avoid; }
-  .balance-card { background: #ffffff; color: #0f172a; border-color: #cbd5e1; }
-  .balance-card .section-header h3 { color: #0f172a; }
-  .balance-card .section-hint,
-  .balance-list li { color: #334155; border-color: #e2e8f0; }
-  .balance-subtotal,
-  .balance-total { color: #0f172a !important; }
-  .balance-card .neg { color: #dc2626; }
+  .fun__actions,
+  .fun__toggle { display: none; }
+  .fun__card { box-shadow: none; break-inside: avoid; }
+}
+
+@media (max-width: 1200px) {
+  .fun__kpis,
+  .fun__cards { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 1000px) {
+  .fun__split { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 700px) {
+  .fun__kpis,
+  .fun__cards { grid-template-columns: 1fr 1fr; }
+  .fun__head { flex-direction: column; align-items: stretch; gap: var(--sp-12); }
+  .fun__actions { justify-content: space-between; }
+  .fun__bar-label { width: 96px; }
 }
 </style>

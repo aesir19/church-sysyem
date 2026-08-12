@@ -1,5 +1,7 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import Avatar from './ui/Avatar.vue'
+import Icon from './ui/icons/Icon.vue'
 import { memberDisplayName, normalizeName } from '../utils/attendanceWindow'
 
 /**
@@ -34,7 +36,49 @@ const open = ref(false)
 const activeIndex = ref(-1)
 const inputEl = ref(null)
 const listEl = ref(null)
+const anchorEl = ref(null)
+const anchorRect = ref(null)
 let blurTimer = null
+
+// The listbox is teleported to <body> and positioned from the field's own
+// rectangle.
+//
+// It has to be. This control is used inside ui/Modal, whose dialog is
+// `max-height: calc(100vh - 48px); overflow-y: auto` — a scroll container, so
+// an absolutely positioned list is CLIPPED at the dialog's edge and the
+// remaining names can only be reached by scrolling the whole dialog. Moving the
+// list out of that box and pinning it with position: fixed is what lets eight
+// results open over a short dialog. The aria wiring is unaffected: aria-controls
+// and aria-activedescendant are IDREFs and resolve document-wide.
+function measure () {
+  const el = anchorEl.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  anchorRect.value = { top: rect.bottom + 6, left: rect.left, width: rect.width }
+}
+
+const listStyle = computed(() => {
+  const rect = anchorRect.value
+  if (!rect) return { display: 'none' }
+  return { top: `${rect.top}px`, left: `${rect.left}px`, width: `${rect.width}px` }
+})
+
+// Fixed positioning is relative to the viewport, so anything that moves the
+// field underneath it — scrolling the page, scrolling the dialog, resizing —
+// has to re-measure or the list detaches from its input. `capture` catches
+// scrolls inside the dialog as well as on the window.
+function watchViewport (on) {
+  const method = on ? 'addEventListener' : 'removeEventListener'
+  window[method]('scroll', measure, true)
+  window[method]('resize', measure)
+}
+
+watch(open, (isOpen) => {
+  watchViewport(isOpen)
+  if (isOpen) nextTick(measure)
+})
+
+onBeforeUnmount(() => watchViewport(false))
 
 const options = computed(() =>
   (props.members || []).map((member) => ({
@@ -166,156 +210,197 @@ defineExpose({ reset, focus: () => inputEl.value?.focus() })
 </script>
 
 <template>
-  <div class="form-group autocomplete-group">
-    <label :for="inputId">{{ label }}</label>
-    <div class="autocomplete-shell" :class="{ 'is-open': open }">
-      <input
-        :id="inputId"
-        ref="inputEl"
-        v-model.trim="query"
-        type="text"
-        role="combobox"
-        aria-autocomplete="list"
-        :aria-controls="listId"
-        :aria-expanded="open"
-        :aria-activedescendant="open && activeIndex >= 0 ? optionId(activeIndex) : undefined"
-        :placeholder="placeholder"
-        :disabled="disabled"
-        autocomplete="off"
-        @focus="handleFocus"
-        @input="handleInput"
-        @blur="handleBlur"
-        @keydown="handleKeydown"
-      />
-      <button
-        v-if="query"
-        type="button"
-        class="clear-btn"
-        aria-label="Clear member"
-        @mousedown.prevent
-        @click="clearSelection"
+  <div class="mac">
+    <label
+      class="mac__label"
+      :for="inputId"
+    >{{ label }}</label>
+    <div ref="anchorEl">
+      <div
+        class="mac__shell"
+        :class="{ 'is-open': open }"
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="18" y1="6" x2="6" y2="18"/>
-          <line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-      </button>
+        <!-- The chosen member's initials, the way dialog 06 draws the control.
+           Only once something is actually chosen: while the field is being
+           typed into there is no person to stand for. -->
+        <Avatar
+          v-if="selectedName"
+          :name="selectedName"
+          :size="26"
+          class="mac__chip"
+        />
+        <input
+          :id="inputId"
+          ref="inputEl"
+          v-model.trim="query"
+          type="text"
+          role="combobox"
+          aria-autocomplete="list"
+          :aria-controls="listId"
+          :aria-expanded="open"
+          :aria-activedescendant="open && activeIndex >= 0 ? optionId(activeIndex) : undefined"
+          :placeholder="placeholder"
+          :disabled="disabled"
+          autocomplete="off"
+          @focus="handleFocus"
+          @input="handleInput"
+          @blur="handleBlur"
+          @keydown="handleKeydown"
+        >
+        <button
+          v-if="query"
+          type="button"
+          class="mac__clear"
+          aria-label="Clear member"
+          @mousedown.prevent
+          @click="clearSelection"
+        >
+          <Icon
+            name="close"
+            :size="12"
+            :width="2.2"
+          />
+        </button>
+      </div>
     </div>
-    <ul v-if="open" :id="listId" ref="listEl" class="suggestions-list" role="listbox">
-      <li
-        v-for="(option, index) in filtered"
-        :id="optionId(index)"
-        :key="option.id"
-        class="suggestion-item"
-        :class="{ 'is-active': index === activeIndex }"
-        role="option"
-        :aria-selected="option.id === modelValue"
-        @mousedown.prevent="selectOption(option)"
-        @mousemove="activeIndex = index"
+
+    <Teleport to="body">
+      <ul
+        v-if="open"
+        :id="listId"
+        ref="listEl"
+        class="mac__list"
+        :style="listStyle"
+        role="listbox"
       >
-        <span class="suggestion-name">{{ option.fullName }}</span>
-      </li>
-      <li v-if="filtered.length === 0" class="suggestion-empty" role="presentation">
-        No matching member found.
-      </li>
-    </ul>
-    <p class="field-note">
-      <template v-if="selectedName">Selected: {{ selectedName }}</template>
-      <template v-else>Start typing, then choose a name from the list.</template>
+        <li
+          v-for="(option, index) in filtered"
+          :id="optionId(index)"
+          :key="option.id"
+          class="mac__option"
+          :class="{ 'is-active': index === activeIndex }"
+          role="option"
+          :aria-selected="option.id === modelValue"
+          @mousedown.prevent="selectOption(option)"
+          @mousemove="activeIndex = index"
+        >
+          <Avatar
+            :name="option.fullName"
+            :size="26"
+          />
+          <span class="mac__name">{{ option.fullName }}</span>
+        </li>
+        <li
+          v-if="filtered.length === 0"
+          class="mac__empty"
+          role="presentation"
+        >
+          No matching member found.
+        </li>
+      </ul>
+    </Teleport>
+
+    <p class="mac__note">
+      <template v-if="selectedName">
+        Selected: {{ selectedName }}
+      </template>
+      <template v-else>
+        Start typing, then choose a name from the list.
+      </template>
     </p>
   </div>
 </template>
 
 <style scoped>
-.autocomplete-group {
+/* Chrome deliberately identical to ui/Input.vue — same box, same focus ring,
+   same label and message type. This control cannot BE an Input (it owns a
+   listbox and a combobox input), but sitting next to one in a dialog it has to
+   be indistinguishable from one. */
+.mac { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-6); }
+
+.mac__label {
+  font-size: var(--text-field);
+  font-weight: 700;
+  color: var(--ink-2);
+  letter-spacing: .01em;
+}
+
+.mac__shell {
   position: relative;
-  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-8);
+  min-height: 40px;
+  padding: 0 var(--sp-12);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  transition: border-color var(--dur-state) ease, box-shadow var(--dur-state) ease;
+}
+.mac__shell:focus-within { border-color: var(--accent-border-hi); box-shadow: var(--ring-focus); }
+
+.mac__chip { flex: none; }
+
+.mac__shell input {
   flex: 1;
   min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  padding: 9px 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  font-weight: 500;
+  color: var(--ink);
 }
+.mac__shell input::placeholder { color: var(--ink-5); font-weight: 400; }
+.mac__shell input:disabled { color: var(--ink-5); cursor: not-allowed; }
 
-.autocomplete-shell {
-  position: relative;
-}
-
-.autocomplete-shell input {
-  width: 100%;
-  box-sizing: border-box;
-  padding-right: 40px;
-}
-
-.clear-btn {
-  position: absolute;
-  top: 50%;
-  right: 10px;
-  transform: translateY(-50%);
+.mac__clear {
+  display: grid;
+  place-items: center;
   width: 22px;
   height: 22px;
-  border: none;
-  border-radius: 999px;
-  background: #e2e8f0;
-  color: #64748b;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  flex: none;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--divider);
+  color: var(--ink-4);
   cursor: pointer;
+  transition: background-color var(--dur-state) ease, color var(--dur-state) ease;
 }
+.mac__clear:hover { background: var(--border-strong); color: var(--ink); }
+.mac__clear:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.clear-btn:hover {
-  background: #cbd5e1;
-  color: #334155;
-}
-
-.suggestions-list {
+/* Teleported to <body>, so it is positioned in viewport coordinates and needs
+   to sit above ui/Modal's dialog (z-index 61) rather than above the page. */
+.mac__list {
   list-style: none;
-  margin: 8px 0 0;
-  padding: 6px;
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  background: #ffffff;
-  border: 1px solid #dbe3ef;
-  border-radius: 12px;
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
-  max-height: 280px;
+  position: fixed;
+  z-index: 70;
+  padding: var(--sp-6);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-inset);
+  box-shadow: var(--shadow-popover);
+  max-height: 260px;
   overflow-y: auto;
-  z-index: 3;
 }
 
-.suggestion-item,
-.suggestion-empty {
-  padding: 10px 12px;
-  border-radius: 8px;
-}
-
-.suggestion-item {
-  cursor: pointer;
+.mac__option {
   display: flex;
-  justify-content: space-between;
-  gap: 10px;
   align-items: center;
+  gap: var(--sp-10);
+  padding: var(--sp-7) var(--sp-9);
+  border-radius: var(--r-tag);
+  cursor: pointer;
 }
+.mac__option:hover,
+.mac__option.is-active { background: var(--accent-tint-2); }
 
-.suggestion-item:hover,
-.suggestion-item.is-active {
-  background: #eff6ff;
-}
+.mac__name { font-size: var(--text-body-sm); font-weight: 600; color: var(--ink); }
 
-.suggestion-name {
-  font-size: 0.875rem;
-  color: #0f172a;
-  font-weight: 600;
-}
+.mac__empty { padding: var(--sp-10) var(--sp-9); font-size: var(--text-body-sm); color: var(--ink-5); }
 
-.suggestion-empty {
-  font-size: 0.875rem;
-  color: #64748b;
-}
-
-.field-note {
-  margin: 6px 0 0;
-  font-size: 0.75rem;
-  color: #64748b;
-}
+.mac__note { font-size: var(--text-meta); color: var(--ink-5); }
 </style>

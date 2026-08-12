@@ -104,7 +104,11 @@ describe('ChurchFundsView', () => {
   it('renders the month navigator and no preview banner', async () => {
     const { html } = await render()
 
-    expect(html).toContain('Collectives Summary')
+    // The header names the report and the stepper names the month. The wording
+    // moved in the redesign ("Collectives Summary" under the stepper became a
+    // subtitle beside the title); what must not move is that both are present.
+    expect(html).toContain('Collectives report')
+    expect(html).toContain('Previous month')
     // The fixture-era banner is gone; nothing should advertise sample data.
     expect(html).not.toContain('Preview mode')
     expect(html).not.toContain('sample')
@@ -115,7 +119,11 @@ describe('ChurchFundsView', () => {
     // race — otherwise every month navigation flashes "No collectives recorded".
     const { html } = await render()
 
+    // The loading state is skeleton shapes now, so the announcement it carries
+    // is the aria-label — which is the only thing a screen reader gets, and the
+    // reason the label exists rather than bare divs.
     expect(html).toContain('Loading')
+    expect(html).toContain('role="status"')
     expect(html).not.toContain('No collectives recorded')
   })
 })

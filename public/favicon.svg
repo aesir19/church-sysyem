@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!--
+    The UDFC mark, matching src/components/AppLogo.vue. Replaces Vite's default
+    logo, which index.html still pointed at.
+
+    A file in public/ is copied verbatim and never sees tokens.css, so the
+    accent is written out here. The media query is the one piece of theming a
+    standalone favicon can carry: browsers that render SVG favicons honour it,
+    and the mark stays legible against a dark browser chrome instead of
+    disappearing into it.
+  -->
+  <style>
+    .mark { fill: #1a56db; }
+    .stroke { stroke: #1a56db; }
+    @media (prefers-color-scheme: dark) {
+      .mark { fill: #60a5fa; }
+      .stroke { stroke: #60a5fa; }
+    }
+  </style>
+  <rect class="mark" x="29" y="8" width="6" height="28" rx="1"/>
+  <rect class="mark" x="20" y="17" width="24" height="6" rx="1"/>
+  <path class="mark" d="M16 38h32v22H16z" opacity="0.15"/>
+  <path class="stroke" d="M16 38h32" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <rect class="mark" x="28" y="46" width="8" height="14" rx="1"/>
+</svg>

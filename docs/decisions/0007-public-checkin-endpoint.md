@@ -4,7 +4,7 @@
 
 ## Context
 
-[BACKLOG.md B20](../BACKLOG.md) records that no `services` or `attendance` table exists, so
+BACKLOG.md B20 records that no `services` or `attendance` table exists, so
 attendance cannot be correlated with giving or used for follow-up — and B22 notes that *"who is
 due for follow-up?"*, arguably the primary pastoral question the system exists to serve, has no
 data behind it. Attendance is that data.
