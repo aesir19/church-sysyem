@@ -1,6 +1,6 @@
 <script setup>
 /**
- * First view migrated onto the token layer (REDESIGN.md Phase 1a).
+ * First view migrated onto the token layer.
  *
  * What used to be here — a gradient, a card, an inline logo SVG, a hand-rolled
  * spinner keyframe, a `.form-group` and an error banner — is now AuthShell,

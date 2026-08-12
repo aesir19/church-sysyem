@@ -6,13 +6,9 @@
  * changing anything here: `npm run build && ls dist/assets | grep -i style`
  * must find nothing.
  *
- * This is REDESIGN.md §0.5's sign-off surface, and the sequencing it exists to
- * serve is the point. The palette below is deliberately the CURRENT blue, not
- * the new cyan: step 3 signs off the component system's MECHANICS on a neutral
- * placeholder, and only then does step 4 repoint the palette in tokens.css
- * alone and re-open this same page for the visual call. A rejected palette then
- * costs a token edit and a look at one throwaway page, instead of a re-review
- * of eleven views.
+ * This is the sign-off surface for the component system and the palette. Every
+ * ui/ component renders here in its real states, in both themes, so a change to
+ * tokens.css can be judged on one page instead of across eleven views.
  *
  * It renders real components in real states — hover, focus, disabled, loading,
  * an actually-open Modal, a genuinely fired Toast — rather than static tiles,
@@ -85,7 +81,7 @@ const SEMANTIC_TOKENS = [
 <template>
   <div class="guide">
     <!-- No <ToastHost /> here. App.vue mounts the one host for the whole app
-         now (Phase 1b), and the queue is module-scoped — a second host would
+         now, and the queue is module-scoped — a second host would
          render every toast twice on this route only. -->
 
     <header class="guide-header">
@@ -94,7 +90,7 @@ const SEMANTIC_TOKENS = [
         <div>
           <h1>Style guide</h1>
           <p class="muted">
-            Brand palette — cyan #0088b0, magenta #d6006c (§0.5 step 4). Toggle the theme:
+            Brand palette — cyan #0088b0, magenta #d6006c. Toggle the theme:
             both are signed off together. Dev-only route.
           </p>
         </div>

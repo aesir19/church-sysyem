@@ -73,7 +73,7 @@ describe('AppSidebar', () => {
     expect(html).not.toMatch(/<span[^>]*class="nav-icon"[^>]*><svg/)
   })
 
-  // Amendment 17: the IA ships whole so the sidebar stops churning, but a slot
+  // The IA ships whole so the sidebar stops churning, but a slot
   // with no screen behind it must not be activatable. `aria-disabled` on an
   // <a href> still lets a keyboard user follow it; a disabled <button> does not.
   it('renders the unbuilt screens as disabled buttons badged Soon, not as links', async () => {

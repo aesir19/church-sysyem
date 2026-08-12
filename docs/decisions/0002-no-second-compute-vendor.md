@@ -46,7 +46,7 @@ caller's JWT to PostgREST so RLS still evaluates — at which point it is a prox
 and holds no authority.
 
 **3. Nothing on the current backlog needs one.** Reviewed against
-[BACKLOG.md](../BACKLOG.md), [DEFECTS.md](../DEFECTS.md), and [OPERATIONS.md](../OPERATIONS.md):
+BACKLOG.md, DEFECTS.md, and [OPERATIONS.md](../OPERATIONS.md):
 
 | Want | What it actually needs |
 |---|---|

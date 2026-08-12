@@ -1,19 +1,19 @@
 <script setup>
 /**
- * Members — REDESIGN.md Stage 2, the restyle half.
+ * Members.
  *
- * Amendment 13 lists five changes here and says to land them as two commits,
- * because a data-flow change and a repaint in one diff makes both unreviewable.
- * This is the first: everything except `.range()` pagination and server-side
- * search, which follow.
+ * Restyled and reworked in two commits — a data-flow change and a repaint in
+ * one diff makes both unreviewable. The first carried everything except
+ * `.range()` pagination and server-side search; the second carried those.
  *
  * What changed beyond the paint:
  *
  * - THE DUPLICATE HEADER IS GONE. This view rendered its own "UDFC Dashboard"
  *   title and its own Sign Out button on top of the ones `DashboardLayout` and
  *   `AppSidebar` already draw. That second sign-out path is the whole reason
- *   D12 existed; Phase 1b made the two paths agree, and deleting the header
- *   removes the second path's reason to exist.
+ *   there were two sign-out paths clearing different localStorage keys.
+ *   `useSession` made them agree; deleting this header removed the second
+ *   path's reason to exist.
  *
  * - D11's second and third sub-fixes land. Sorting was `<th @click>` — a `<th>`
  *   is not focusable and not activatable, so the table could not be sorted from
@@ -21,22 +21,22 @@
  *   `<tr @click>`, same problem. Both now carry real `<button>` elements, which
  *   is the pattern `MinistrySmallGroupView`'s group cards already use.
  *
- * - SORTING IS NAMES-ONLY, an accepted regression recorded in Amendment 13. Age
- *   is `computeAge(birthdate)` in the browser and does not exist to order on; it
- *   would have to become `birthdate` descending, which is correct but inverted
- *   and easy to get backwards. Do not "restore" Age and Gender sorting without
- *   re-deciding it.
+ * - SORTING IS NAMES-ONLY. This is an accepted regression, not an oversight:
+ *   age is `computeAge(birthdate)` in the browser and does not exist to order
+ *   on, so it would have to become `birthdate` descending — correct, but
+ *   inverted and easy to get backwards. Do not "restore" Age and Gender
+ *   sorting without re-deciding it.
  *
  * - THE DETAIL MODAL BECAME A PANEL that is empty until a row is chosen. PII
  *   still appears only after a deliberate click, which is the property the modal
- *   had and the one worth keeping. Below 1024px it is `ui/Modal` instead —
- *   Amendment 13 says the row navigates on mobile, and there is no member detail
- *   route to navigate to (it is on the deferred list), so the accessible dialog
- *   we already ship is the honest substitute rather than an invented route.
+ *   had and the one worth keeping. Below 1024px it is `ui/Modal` instead: on a
+ *   phone the row should navigate, there is no member detail route to navigate
+ *   to, and the accessible dialog already in the bundle is the honest
+ *   substitute rather than an invented route.
  *
- * - `facebook_link` IS A LINK, under all four of Amendment 14's conditions. The
- *   host allowlist and scheme check are `src/utils/memberLink.js`, applied at
- *   render — see MemberDetailPanel.
+ * - `facebook_link` IS A LINK, under four conditions. The host allowlist and
+ *   scheme check are `src/utils/memberLink.js`, applied at render — see
+ *   MemberDetailPanel.
  *
  * The four hand-rolled modals here are now `ui/Modal` call sites, and the local
  * toast implementation is gone in favour of the one queue in `useToast`.
@@ -84,7 +84,7 @@ const myChurchId = activeChurchId
 const myChurchName = activeChurchName
 
 // The detail panel needs room beside the table; below this the same content is
-// a dialog. The card breakpoint is Amendment 12's — a five-column table on a
+// a dialog. The card breakpoint is the mobile one — a five-column table on a
 // phone scrolls sideways, which is how a member gets missed.
 const isWide = useMediaQuery('(min-width: 1024px)')
 const isCompact = useMediaQuery('(max-width: 767px)')
@@ -93,10 +93,10 @@ const members = ref([])
 const loading = ref(true)
 const error = ref('')
 
-// ── Paging and search (Amendment 13) ──────────────────────────────────────
+// ── Paging and search ─────────────────────────────────────────────────────
 // The record path is paginated server-side. The directory path is not — its
 // RPC takes a limit but no offset, and adding one is a migration against a
-// SECURITY DEFINER function (Amendment 15). It caps honestly instead.
+// SECURITY DEFINER function. It caps honestly instead.
 const page = ref(1)
 const total = ref(0)
 const directoryCapped = ref(false)
@@ -252,7 +252,7 @@ async function fetchMembers() {
   loading.value = true
   error.value = ''
 
-  // Amendment 13: the selection clears on any refetch. It is the only behaviour
+  // The selection clears on any refetch. It is the only behaviour
   // where what is on screen always matches the table, and it means a member's
   // address never lingers in a panel beside results it has nothing to do with.
   selectedMember.value = null
@@ -503,7 +503,7 @@ onMounted(async () => {
         <p class="page-subtitle">View and manage church members</p>
       </div>
       <div class="page-actions">
-        <!-- The rarer second accent's one surface today (Amendment 17). -->
+        <!-- The rarer second accent's one surface today. -->
         <Badge variant="accent-secondary">{{ countLabel }}</Badge>
         <Button v-if="canWriteMembers" :disabled="!myChurchId" @click="openCreate">
           <Icon name="plus" :size="16" />
@@ -544,7 +544,7 @@ onMounted(async () => {
           No members yet. Add the first one to get started.
         </p>
 
-        <!-- Cards below 768px. Amendment 12: a five-column table on a phone
+        <!-- Cards below 768px: a five-column table on a phone
              scrolls sideways, which is how a member gets missed. -->
         <ul v-else-if="isCompact" class="member-cards">
           <li v-for="member in displayMembers" :key="member.id">
@@ -643,7 +643,7 @@ onMounted(async () => {
           </table>
         </div>
 
-        <!-- Amendment 15: directory_search takes a limit but no offset, so this
+        <!-- directory_search takes a limit but no offset, so this
              path caps rather than pages. Saying so is the whole fix — the list
              was already truncated at 200, silently, before this. -->
         <p v-if="directoryCapped && !loading" class="list-note" role="status">
@@ -779,7 +779,7 @@ onMounted(async () => {
           <Input v-model="formData.date_joined" label="Date joined" type="date" :max="todayIso" />
           <Input v-model="formData.contact_number" label="Contact number" type="tel" maxlength="32" />
           <Input v-model="formData.email" label="Email" type="email" maxlength="255" />
-          <!-- Amendment 14's write-time half. It only ever buys a better error
+          <!-- The write-time half. It only ever buys a better error
                message — the check that protects is the one at render, since
                nobody has audited what is in this column already. -->
           <Input
@@ -1003,7 +1003,7 @@ onMounted(async () => {
 .row-button {
   width: 100%;
   padding: var(--space-3) var(--space-4);
-  /* Amendment 12's touch floor, which a text cell would otherwise miss. */
+  /* The 44px touch floor, which a text cell would otherwise miss. */
   min-height: 44px;
   background: none;
   border: none;

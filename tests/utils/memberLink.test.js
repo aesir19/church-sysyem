@@ -1,7 +1,7 @@
-// REDESIGN.md Amendment 14 turns `facebook_link` from documented-safe plain
-// text into an active sink: a clickable <a> inside a staff dashboard, built
-// from a member-editable column. These are the four conditions the amendment
-// makes the link ship under, expressed as tests.
+// Rendering `facebook_link` as a link turns a documented-safe plain-text field
+// into an active sink: a clickable <a> inside a staff dashboard, built from a
+// member-editable column. These are the four conditions it ships under,
+// expressed as tests.
 //
 // The one that matters most is condition 1 — VALIDATED AT RENDER, not just on
 // write. Write-time validation only ever protects rows written after it lands.
@@ -103,7 +103,7 @@ describe('safeFacebookUrl — what it refuses', () => {
 })
 
 describe('FACEBOOK_HOSTS', () => {
-  it('is exactly the three hosts Amendment 14 names, and is frozen', () => {
+  it('is exactly the three allowed hosts, and is frozen', () => {
     expect([...FACEBOOK_HOSTS].sort()).toEqual(['facebook.com', 'fb.com', 'm.facebook.com'])
     expect(Object.isFrozen(FACEBOOK_HOSTS)).toBe(true)
   })

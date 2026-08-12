@@ -1,7 +1,7 @@
 <script setup>
 /**
- * `ToastHost` is mounted once, here, beside the router view (REDESIGN.md
- * Phase 1b). It is deliberately NOT lazy: a toast reports the outcome of
+ * `ToastHost` is mounted once, here, beside the router view. It is
+ * deliberately NOT lazy: a toast reports the outcome of
  * something that already happened, so a host that had to be fetched first
  * would announce it late or not at all.
  *

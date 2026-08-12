@@ -21,7 +21,7 @@ const props = defineProps({
     validator: (value) => ['sm', 'md', 'lg'].includes(value),
   },
   /**
-   * In-flight. REDESIGN.md Amendment 17: the handoff's "no spinner" rule is
+   * In-flight. The design's "no spinner" rule is
    * about page and list loading, where a skeleton communicates shape. A submit
    * button mid-flight still needs an indicator — on the screens that write
    * money and attendance, no pending state invites double submits.
@@ -65,7 +65,7 @@ defineOptions({ inheritAttrs: true })
     background-color var(--duration-fast) var(--ease-standard),
     border-color var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard);
-  /* 44px is the mobile target floor from Amendment 12; the md size below meets
+  /* 44px is the mobile touch-target floor; the md size below meets
    * it without needing a separate touch variant. */
   min-height: 40px;
 }

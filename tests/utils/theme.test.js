@@ -33,7 +33,7 @@ function hostileStorage() {
 }
 
 describe('THEME_STORAGE_KEY', () => {
-  // Load-bearing, not cosmetic: REDESIGN.md Amendment 7 puts this exact key on
+  // Load-bearing, not cosmetic: this exact key is on
   // sessionCleanup.js's do-not-clear list alongside udfc.checkin.recorded, so a
   // theme preference outlives a sign-out. That list will name the key as a
   // string; if this constant drifts, the two stop referring to the same thing

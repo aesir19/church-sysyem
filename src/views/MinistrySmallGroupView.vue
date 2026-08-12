@@ -333,7 +333,7 @@ import { getGroupAccentStyle } from '../utils/groupPresentation'
 import { buildSmallGroupCreatePayload, buildSmallGroupUpdatePayload } from '../utils/groupPayload'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { useActiveChurch } from '../composables/useActiveChurch'
-// The first real call site of ui/Modal (REDESIGN.md Phase 1b). Deliberately the
+// The first real call site of ui/Modal. Deliberately the
 // simplest modal in the inventory — title, warning, two buttons — so that the
 // focus trap, Escape and return-focus are proved end-to-end here before
 // Modal.vue is applied to the form and detail dialogs in Stages 2–5. The other

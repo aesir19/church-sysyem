@@ -12,8 +12,8 @@
  * the auth-page logo were already TWO DIFFERENT GLYPHS — a door/circle icon in
  * AppSidebar against this cross/steeple. This file standardises on the
  * cross/steeple, which had three call sites to the door's one and reads as a
- * church at favicon size. Pointing the sidebar at this component is Stage 1b
- * work, when the shell is migrated.
+ * church at favicon size. The sidebar now points at this component too, so
+ * there is one mark.
  *
  * Colour comes from `currentColor`, not a hardcoded `#1a56db` as all three
  * copies carried. That is what lets the mark follow the theme into dark mode

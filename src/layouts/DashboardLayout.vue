@@ -1,6 +1,6 @@
 <script setup>
 /**
- * The signed-in shell (REDESIGN.md Phase 1b).
+ * The signed-in shell.
  *
  * Two behavioural changes on top of the repaint:
  *
@@ -8,7 +8,7 @@
  *   DashboardView each had their own, clearing different localStorage keys, so
  *   which keys survived depended on which button you happened to press.
  * - On a phone the rail is a drawer rather than a fixed 280px column that ate
- *   most of the viewport (Amendment 12). The bar below appears only at that
+ *   most of the viewport. The bar below appears only at that
  *   width, and only to open it.
  */
 import { ref, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'

@@ -1,8 +1,8 @@
 /**
  * Page arithmetic for a server-paginated list.
  *
- * REDESIGN.md Amendment 13 replaces the unbounded member query with `.range()`
- * at a page size of 50. Client-side paging was rejected as theatre — the
+ * The unbounded member query was replaced with `.range()` at a page size of
+ * 50. Client-side paging was rejected as theatre — the
  * unbounded query still runs, so egress is unchanged and the CLAUDE.md
  * threshold it is meant to answer stays breached.
  *

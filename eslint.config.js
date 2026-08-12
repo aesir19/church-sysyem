@@ -155,7 +155,7 @@ export default [
   //
   // `src/components/ui/` is where it stops being right. That directory holds
   // domain-blind primitives — Button, Card, Modal, Toast, Badge, Input,
-  // Spinner, Icon — named exactly as docs/REDESIGN.md §0.3 specifies, and read
+  // Spinner, Icon — named for exactly what they are, and read
   // at every call site as `<Button>`. The rule exists to stop a component
   // colliding with a current or future HTML element; none of these do, and the
   // directory is the boundary that keeps that true. Domain components in

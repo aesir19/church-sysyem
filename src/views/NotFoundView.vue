@@ -9,7 +9,7 @@
  * anyone reaches an unknown path, and a blank page gives an attendee standing in
  * a service no idea whether the link is wrong or the site is broken.
  *
- * Migrated with the auth family (REDESIGN.md Phase 1a), which is where it
+ * Migrated with the auth family, which is where it
  * belongs visually: it is the fourth signed-out page, and it is reached from a
  * phone in a pew far more often than from a desk.
  */

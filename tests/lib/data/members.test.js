@@ -69,7 +69,7 @@ describe('listDirectory', () => {
     expect(calledWith('from')).toHaveLength(0)
   })
 
-  // REDESIGN.md Amendment 15. directory_search's p_limit DEFAULTS to 200 and
+  // directory_search's p_limit DEFAULTS to 200 and
   // this module used to leave it unsent — so a church over 200 members showed
   // baseline users and Head Pastors a truncated list with NO indication it was
   // truncated. Passing it explicitly is what makes the cap something the caller
@@ -171,7 +171,6 @@ describe('listRecords', () => {
   })
 })
 
-// REDESIGN.md Amendment 13.
 describe('listRecords — pagination, ordering and search', () => {
   it('asks for exactly one page', async () => {
     resolvesTo({ data: [], error: null, count: 137 })

@@ -24,17 +24,16 @@
  * A view that reaches past the semantic layer for a primitive has found a
  * missing semantic token, not a shortcut.
  *
- * THE REBRAND HAS LANDED (§0.5 step 4, Amendment 17). The placeholder blue is
+ * THE REBRAND HAS LANDED. The placeholder blue is
  * gone: cyan #0088b0 is the brand, magenta #d6006c the rarer second accent.
  * The architecture did what it was built to do — the change is the primitive
  * ramps and a handful of semantic aliases IN THIS FILE, plus three `ui/`
  * components that were using `--color-accent` as TEXT and now use
  * `--color-accent-text` (see the note on that token below). No view was
- * reopened. CLAUDE.md's palette line was updated at the same commit, per
- * Amendment 3 — this file and that line are never allowed to disagree.
+ * reopened.
  * ────────────────────────────────────────────────────────────────────────── */
 
-/* Manrope, self-hosted. REDESIGN.md Amendment 8: the mockup's Google Fonts
+/* Manrope, self-hosted. The design's Google Fonts
  * <link> is blocked outright by netlify.toml's `font-src 'self' data:`, and
  * loosening a security header permanently to avoid an npm install is the wrong
  * trade. Served same-origin from /assets/ under the existing immutable
@@ -60,7 +59,7 @@
   /* ── Primitive: colour ramps ───────────────────────────────────────────────
    * The slate ramp is the neutral family already in the wild, reconciled from
    * the colour literals the codebase held before the redesign. The cyan and
-   * magenta ramps are the rebrand (Amendment 17). Referenced only from the
+   * magenta ramps are the rebrand. Referenced only from the
    * semantic block below.
    *
    * WHY THE BRAND HUE IS NOT THE STEP CALLED `accent`. #0088b0 is 4.08:1
@@ -142,8 +141,8 @@
   --color-bg-raised: var(--color-white);
   --color-bg-subtle: var(--color-slate-100);
   --color-bg-inset: var(--color-slate-50);
-  /* The selected row in a table. REDESIGN.md Amendment 7 records this as a bug
-   * the designers already fixed once: a LIGHT tint on a dark surface is what
+  /* The selected row in a table. This was a bug the designers already fixed
+   * once: a LIGHT tint on a dark surface is what
    * broke it. The dark block below re-points it to a dark tint, never a tint of
    * the light value. Do not reintroduce that. */
   --color-bg-selected: #f4fcff;
@@ -161,16 +160,14 @@
   --color-text-inverse: var(--color-white);
   --color-text-on-accent: var(--color-white);
   /* The em-dash placeholder for a row that legitimately has no value — an
-   * expense with no note. REDESIGN.md Amendment 9 is explicit that this is
-   * NEVER for a feature that was not built; using it there ships blanks that
-   * look permanent.
+   * expense with no note. It is NEVER for a feature that was not built; using
+   * it there ships blanks that look permanent.
    *
    * Deliberately slate-500 and not the lighter slate-400 this "wants" to be:
    * 400 on a white surface is 2.85:1, under the 4.5:1 AA floor, and Lighthouse
    * scores placeholder text like any other text against a gate that hard-fails.
-   * Amendment 6 raises that gate to 0.9 at the end of Phase 1, so a token that
-   * cannot pass it is a token that would have to be found again across eleven
-   * migrated views. 500 is 4.76:1. */
+   * That gate sits at 0.9, so a token that cannot pass it is a token that
+   * would have to be found again across eleven migrated views. 500 is 4.76:1. */
   --color-text-placeholder: var(--color-slate-500);
 
   /* Accent */
@@ -189,7 +186,7 @@
    * variant, Button's tertiary variant and Toast's info tone. */
   --color-accent-text: var(--color-cyan-700);
 
-  /* The rarer second accent (Amendment 17). Same four roles as the primary. */
+  /* The rarer second accent. Same four roles as the primary. */
   --color-accent-secondary: var(--color-magenta-600);
   --color-accent-secondary-text: var(--color-magenta-700);
   --color-accent-secondary-subtle: var(--color-magenta-50);
@@ -253,8 +250,8 @@
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
-  /* Manrope at 800 carries most of the approved design's character
-   * (Amendment 8). It is a real step, not a rounding of bold. */
+  /* Manrope at 800 carries most of the approved design's character. It is a
+   * real step, not a rounding of bold. */
   --font-weight-extrabold: 800;
 
   --leading-tight: 1.25;
@@ -304,8 +301,8 @@
  *
  * Re-points SEMANTIC names at different primitive steps. Primitives never
  * change and views never know — a view that still says `background: #ffffff`
- * cannot go dark, which is the whole reason this block exists in Phase 0
- * rather than being retrofitted after eleven views have been migrated.
+ * cannot go dark, which is the whole reason this block landed with the token
+ * layer rather than being retrofitted after eleven views had been migrated.
  *
  * Driven by a `data-theme` attribute on <html>, written by src/utils/theme.js.
  * The attribute is absent until the app boots, so the media query below carries
@@ -374,8 +371,8 @@
     --color-focus-ring: var(--color-cyan-300);
     --shadow-focus-ring: 0 0 0 3px rgba(79, 194, 224, 0.35);
 
-    /* Shadows tuned for a light ground read as smudges on a dark one
-     * (Amendment 7). On a dark surface, elevation comes from depth of black
+    /* Shadows tuned for a light ground read as smudges on a dark one.
+     * On a dark surface, elevation comes from depth of black
      * rather than from a soft grey spread. */
     --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -469,8 +466,8 @@
  * Reduced motion.
  *
  * Promoted from AttendanceView, where it was the only instance in the entire
- * app, so all eleven views carry the accommodation from day one of Phase 0 —
- * before any of them are visually migrated. This matters more after the
+ * app, so all eleven views carry the accommodation from day one — before any
+ * of them are visually migrated. This matters more after the
  * redesign than before it: the approved design animates a great deal more than
  * the current app does.
  *

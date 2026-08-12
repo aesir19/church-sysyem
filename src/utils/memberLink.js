@@ -1,11 +1,11 @@
 /**
  * Whether a member's `facebook_link` may be rendered as a link.
  *
- * REDESIGN.md Amendment 14 reverses that file's own default recommendation
- * ("don't add link behaviour at all") at the owner's request, and names four
- * conditions the link ships under. This module is conditions 1 and 2; the view
- * carries 3 (`target="_blank"` + `rel="noopener noreferrer"`) and 4 (anything
- * refused renders as plain text, never as a broken or stripped link).
+ * The default recommendation was to add no link behaviour at all. The owner
+ * asked for it, and it ships under four conditions. This module is 1 and 2 —
+ * https only, host-allowlisted. The view carries 3 (`target="_blank"` +
+ * `rel="noopener noreferrer"`) and 4 (anything refused renders as plain text,
+ * never as a broken or stripped link).
  *
  * WHY VALIDATION AT RENDER AND NOT ONLY AT WRITE. Write-time validation only
  * ever protects rows written after it lands. Nobody has audited what is in that
@@ -21,7 +21,7 @@
  * hosts is a list that is already complete.
  */
 
-/** The hosts Amendment 14 names. A `www.` prefix on any of them is accepted. */
+/** The only hosts accepted. A `www.` prefix on any of them is fine. */
 export const FACEBOOK_HOSTS = Object.freeze(['facebook.com', 'fb.com', 'm.facebook.com'])
 
 /**

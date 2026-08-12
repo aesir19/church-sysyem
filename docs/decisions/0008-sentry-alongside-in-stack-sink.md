@@ -7,7 +7,7 @@
 
 ADR-0006 chose a `public.client_errors` table over a third-party processor and closed with one
 question deliberately unresolved: *whether to additionally adopt Sentry for stack traces and
-release tracking.* [BACKLOG.md](../BACKLOG.md) recorded the condition — "if ever revisited, it
+release tracking.* BACKLOG.md recorded the condition — "if ever revisited, it
 needs a PII-scrubbing plan before error payloads leave the stack."
 
 The owner has decided to adopt it. This record is that decision plus the scrubbing plan the

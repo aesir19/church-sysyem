@@ -5,7 +5,7 @@
  * of semantic names and two sets of values for them, and the only thing that
  * chooses between the two is a `data-theme` attribute on `<html>`. Everything
  * here exists to decide what that attribute should say — nothing here knows a
- * colour. See docs/REDESIGN.md Amendment 7.
+ * colour.
  *
  * Storage is injected, not reached for, following the convention in
  * checkinMemory.js: it keeps the module testable under `environment: 'node'`
@@ -16,7 +16,7 @@
  */
 
 /**
- * Also named as a string by sessionCleanup.js's do-not-clear list (Amendment 7):
+ * Also named as a string by sessionCleanup.js's do-not-clear list:
  * a theme preference should outlive a sign-out, exactly as
  * `udfc.checkin.recorded` does.
  */

@@ -49,7 +49,7 @@ defineProps({
   border-color: var(--color-accent-border);
 }
 
-/* The rarer second accent (Amendment 17). Rare is the point — magenta beside
+/* The rarer second accent. Rare is the point — magenta beside
    cyan everywhere would leave neither one meaning anything. */
 .badge-accent-secondary {
   background: var(--color-accent-secondary-subtle);

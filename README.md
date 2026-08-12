@@ -54,13 +54,12 @@ This README is for the people who use the dashboard. Technical documentation liv
 
 | Document | Covers |
 |---|---|
-| [CLAUDE.md](CLAUDE.md) | The rules any change must follow — start here |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the system is wired |
+| [CLAUDE.md](CLAUDE.md) | The two rules any change must follow — start here |
+| `prisma/schema.prisma` and `prisma/migrations/` | The tables, columns, policies and grants — the source of truth |
 | [docs/decisions/](docs/decisions/) | Why the load-bearing choices were made |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Deploying, migrations and their caveats, backups, free-tier budgets |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, findings, verification steps |
 | [Issues](https://github.com/aesir19/church-sysyem/issues) | Known bugs (`defect`) and deferred features (`feature`) |
-| [CONTEXT.md](CONTEXT.md) | Domain glossary — what the words mean here |
 
 Quick start:
 

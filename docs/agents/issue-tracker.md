@@ -59,7 +59,7 @@ Run `gh issue view <number> --comments`.
 
 Defects (`D*`) and deferred features (`B*`) **were migrated into this tracker on 2026-08-11**. The
 old ids are preserved in the issue titles (`D1 — …`, `B17 — …`) so older commits and ADRs still
-resolve. [DEFECTS.md](../DEFECTS.md) and [BACKLOG.md](../BACKLOG.md) are now pointers.
+resolve. DEFECTS.md and BACKLOG.md are now pointers.
 
 Two registers stay in-repo, deliberately:
 

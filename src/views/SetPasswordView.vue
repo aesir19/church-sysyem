@@ -1,6 +1,6 @@
 <script setup>
 /**
- * Migrated with the rest of the auth family (REDESIGN.md Phase 1a). The
+ * Migrated with the rest of the auth family. The
  * validation and the redirect are untouched; only the chrome moved.
  */
 import { ref } from 'vue'

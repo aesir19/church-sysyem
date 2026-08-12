@@ -9,8 +9,6 @@
  * direction `'ascending'`/`'descending'` rather than `'asc'`/`'desc'` is what
  * removes the translation step where that typo would live.
  *
- * See docs/REDESIGN.md "D11 and D12 — exactly where and how".
- *
  * @typedef {{ key: string, direction: 'ascending'|'descending' }} SortState
  */
 

@@ -2,9 +2,8 @@
 /**
  * One member record, presented.
  *
- * Extracted because REDESIGN.md Amendment 13 gives the same seventeen fields
- * two homes: a sticky right panel on a wide screen, and `ui/Modal` below that
- * width. Two copies of a PII field list is exactly the sort of duplication that
+ * Extracted because the same seventeen fields have two homes: a sticky right
+ * panel on a wide screen, and `ui/Modal` below that width. Two copies of a PII field list is exactly the sort of duplication that
  * drifts — one copy gaining a field the other never shows.
  *
  * Domain-aware, so `src/components/` and not `src/components/ui/`: it knows
@@ -29,7 +28,7 @@ const props = defineProps({
 })
 
 /**
- * REDESIGN.md Amendment 14, condition 1: validated AT RENDER. This runs over
+ * Condition 1 of the four the link ships under: validated AT RENDER. It runs over
  * whatever is in the column today, which no write-time check can reach.
  * Condition 4 is the `v-else` below — a value that fails renders as the plain
  * text it has always been, never as a broken or silently stripped link.
@@ -60,9 +59,9 @@ const yesNo = (value) => (value ? 'Yes' : 'No')
 /**
  * The rows, as data rather than as fifteen near-identical template blocks.
  *
- * An empty `value` renders the em-dash placeholder. REDESIGN.md Amendment 9 is
- * explicit that the placeholder is for a row that legitimately has no value —
- * a member with no email — and NEVER for a feature that was not built.
+ * An empty `value` renders the em-dash placeholder, which is for a row that
+ * legitimately has no value — a member with no email — and NEVER for a
+ * feature that was not built.
  */
 const rows = computed(() => {
   const m = props.member ?? {}

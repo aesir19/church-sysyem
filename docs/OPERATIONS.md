@@ -3,7 +3,7 @@
 How to run, deploy, and recover this system — and an honest register of what it still cannot do
 for itself. Everything here has a **$0 path**, per priority 1 in [CLAUDE.md](../CLAUDE.md).
 
-- Bugs in the product → [DEFECTS.md](DEFECTS.md) · Missing features → [BACKLOG.md](BACKLOG.md)
+- Bugs in the product → DEFECTS.md · Missing features → BACKLOG.md
 - Threat model and verification steps → [SECURITY.md](SECURITY.md)
 
 `O`-prefixed IDs are stable; reference them in commits and PRs.

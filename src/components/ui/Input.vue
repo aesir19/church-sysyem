@@ -140,7 +140,7 @@ const describedBy = computed(() => {
 .field-control {
   width: 100%;
   /* 16px on mobile is what stops iOS Safari zooming the viewport on focus.
-     Amendment 12's 14px floor is about body copy, not form controls. */
+     The 14px body-copy floor is about body copy, not form controls. */
   font-size: var(--text-lg);
   font-family: inherit;
   color: var(--color-text-primary);

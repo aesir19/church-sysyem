@@ -25,7 +25,7 @@ import { rangeFor } from '../../utils/pagination'
 import { buildMemberNameOrFilter, sanitizeMemberSearchTerm } from '../../utils/searchFilters'
 
 /**
- * REDESIGN.md Amendment 13. Client-side paging was rejected as theatre: the
+ * Client-side paging was rejected as theatre: the
  * unbounded query still runs, so egress is unchanged and the CLAUDE.md
  * threshold it is meant to answer stays breached.
  */
@@ -37,8 +37,8 @@ export const MEMBER_PAGE_SIZE = 50
  * showed baseline users and Head Pastors a truncated list with no indication it
  * was truncated. Sending it explicitly is what lets a caller say so.
  * Paginating that path properly needs a `p_offset` parameter on a SECURITY
- * DEFINER function, which is a migration and a security review; Amendment 15
- * defers it.
+ * DEFINER function, which is a migration and a security review, and is
+ * deferred.
  */
 export const DIRECTORY_LIMIT = 200
 
@@ -47,8 +47,8 @@ export const DIRECTORY_LIMIT = 200
  *
  * A column name reaches the query as an IDENTIFIER, so it is never taken from
  * the caller unchecked — the same reason `searchFilters.js` exists for the
- * search term. Names only, deliberately: Amendment 13 records that age is
- * computed in the browser and does not exist to order on.
+ * search term. Names only, deliberately: age is computed in the browser and
+ * does not exist to order on.
  */
 const SORTABLE_COLUMNS = Object.freeze(['last_name', 'first_name'])
 
@@ -94,8 +94,8 @@ const fail = (message, cause = null, extra = {}) => ({ ok: false, message, rows:
  *
  * Not paginated: the RPC takes a limit but no offset, and adding one is a
  * migration against a SECURITY DEFINER function that is the only thing standing
- * between baseline users and the `members` table. Amendment 15 defers that and
- * caps honestly instead — `capped` is how the caller knows to say so.
+ * between baseline users and the `members` table. That is deferred; this caps
+ * honestly instead — `capped` is how the caller knows to say so.
  *
  * @param {string} churchId
  * @param {{ query?: string, limit?: number }} [options]
@@ -140,7 +140,7 @@ export async function listDirectory(churchId, { query = '', limit = DIRECTORY_LI
  * ONE PAGE, ONE ROUND TRIP. The `count: 'exact'` option rides along on the same
  * request as the rows, so the pager's total costs nothing extra — which is what
  * "one round-trip per intent" requires. The archived count the mockup also
- * shows would need a second query and is out (Amendment 9).
+ * shows would need a second query and is out.
  *
  * @param {{ churchId: string, canSeeDetail: boolean, page?: number, pageSize?: number,
  *   search?: string, sortKey?: string, sortDirection?: 'ascending'|'descending' }} params

@@ -20,8 +20,8 @@
  *   udfc.checkin.recorded — device-scoped, owned by checkinMemory.js. A
  *     volunteer's phone must not forget who it already checked in because a
  *     staff member signed out of the dashboard. See ADR-0007.
- *   udfc.theme — a display preference, not session state. REDESIGN.md
- *     Amendment 7: it should outlive a session.
+ *   udfc.theme — a display preference, not session state. It should outlive
+ *     a session.
  *
  * Neither holds member PII, which is what makes leaving them safe. Anything
  * that does hold PII belongs in SESSION_KEYS.

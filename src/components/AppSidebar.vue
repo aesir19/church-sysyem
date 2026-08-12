@@ -1,6 +1,6 @@
 <script setup>
 /**
- * The dashboard's nav rail (REDESIGN.md Phase 1b — shell migration).
+ * The dashboard's nav rail.
  *
  * THREE THINGS CHANGED HERE BEYOND THE REPAINT, each recorded where it was
  * decided:
@@ -12,7 +12,7 @@
  *    iconPaths.js and render as real `<path>` elements through Icon.vue, so
  *    there is no HTML parse step left to hijack.
  *
- * 2. NINE NAV SLOTS, THREE OF THEM "SOON" (Amendment 17). Overview, Statistics
+ * 2. NINE NAV SLOTS, THREE OF THEM "SOON". Overview, Statistics
  *    and What's next have no route and carry a badge saying so. Shipping the
  *    whole information architecture once is what stops the sidebar churning as
  *    each of those screens arrives — and a disabled slot that says "Soon" is
@@ -283,7 +283,7 @@ defineExpose({ focusClose: () => closeButton.value?.focus() })
   font-weight: var(--font-weight-medium);
   text-align: left;
   width: 100%;
-  /* Amendment 12's touch floor. The rail is used one-handed on a phone during
+  /* The 44px touch floor. The rail is used one-handed on a phone during
      a service. */
   min-height: 44px;
   cursor: pointer;
@@ -370,7 +370,7 @@ defineExpose({ focusClose: () => closeButton.value?.focus() })
 }
 
 /**
- * Mobile: the rail becomes a drawer (Amendment 12). The bottom tab bar is
+ * Mobile: the rail becomes a drawer. The bottom tab bar is
  * deliberately NOT built — the design's is five tabs and two of them point at
  * screens that do not exist.
  */

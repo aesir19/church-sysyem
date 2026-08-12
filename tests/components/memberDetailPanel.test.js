@@ -1,4 +1,4 @@
-// The rendered half of REDESIGN.md Amendment 14.
+// The rendered half of the facebook_link link rules.
 //
 // tests/utils/memberLink.test.js proves the validator decides correctly. This
 // proves the component ACTS on that decision — condition 3 (the link carries
@@ -7,8 +7,8 @@
 // stripped link). Those two live in markup, so only rendering catches them.
 //
 // SSR is enough here: this component has no dialog, no portal and no
-// interaction — it is a presentation of a row. The tooling gap REDESIGN.md
-// flags (no @vue/test-utils, no DOM environment) does not bite.
+// interaction — it is a presentation of a row. The tooling gap this project
+// has (no @vue/test-utils, no DOM environment) does not bite.
 
 import { describe, expect, it } from 'vitest'
 import { createSSRApp, h } from 'vue'
@@ -68,7 +68,7 @@ describe('MemberDetailPanel', () => {
   })
 })
 
-describe('facebook_link rendering — Amendment 14 conditions 3 and 4', () => {
+describe('facebook_link rendering — conditions 3 and 4', () => {
   it('renders an allowlisted https link as an anchor with both rel tokens', async () => {
     const { html } = await render({ ...MEMBER, facebook_link: 'https://facebook.com/juan' })
 

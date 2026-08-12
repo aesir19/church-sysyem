@@ -1,6 +1,6 @@
 <script setup>
 /**
- * Migrated with the rest of the auth family (REDESIGN.md Phase 1a).
+ * Migrated with the rest of the auth family.
  *
  * The "Return to Login" button now goes through `useSession().signOut()` — the
  * one sign-out path (D12). It used to call `supabase.auth.signOut()` directly

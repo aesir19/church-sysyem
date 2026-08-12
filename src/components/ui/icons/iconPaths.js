@@ -2,22 +2,19 @@
  * Every glyph in the app, as static path data.
  *
  * WHY A FROZEN MODULE CONSTANT AND NOT A STRING OF MARKUP. `AppSidebar.vue`
- * injects its nav icons with `v-html` today, which ARCHITECTURE.md §4.7 and
- * SECURITY.md §4.1 both already flag as a latent sink — harmless only for as
- * long as nobody threads a value from the database or a prop into it. Icon.vue
- * renders these as real `<path>` elements with `d` bound from this map, so
- * there is no HTML parse step to hijack and the sink cannot be reopened by
- * someone adding a "just this one dynamic icon" later. Retiring the `v-html`
- * itself is Stage 1b work, when the sidebar is retouched; this is the
- * destination it moves to.
+ * used to inject its nav icons with `v-html`, which SECURITY.md §4.1 flags as a
+ * latent sink — harmless only for as long as nobody threads a value from the
+ * database or a prop into it. Those glyphs moved here unchanged, and Icon.vue
+ * renders them as real `<path>` elements with `d` bound from this map, so there
+ * is no HTML parse step to hijack and the sink cannot be reopened by someone
+ * adding a "just this one dynamic icon" later.
  *
  * Geometry is a 24×24 viewBox with a 2px stroke and no fill — the same
  * convention the existing hand-drawn glyphs already follow, so consolidating
  * them is a deduplication rather than a restyle. Consolidating is the point:
  * the close "X" alone is currently duplicated, with drift, across four files.
  *
- * REDESIGN.md Amendment 9 records why this is a local set and not
- * `lucide-vue-next`: an icon package buys convenience, where ADR-0011's
+ * This is a local set and not `lucide-vue-next`: an icon package buys convenience, where ADR-0011's
  * dependency buys a tested focus trap, and priority 1 is binding.
  */
 
@@ -120,7 +117,7 @@ export const ICON_PATHS = Object.freeze({
     'M15 9h.01',
   ]),
 
-  /* The three nav slots that carry a "Soon" badge and no route (Amendment 17):
+  /* The three nav slots that carry a "Soon" badge and no route:
    * the IA lands once and the sidebar stops churning as those screens arrive. */
   home: Object.freeze(['M3 10.5 12 3l9 7.5', 'M5.5 9.5V20h13V9.5']),
   'bar-chart': Object.freeze(['M4 20V11', 'M10 20V4', 'M16 20v-6', 'M3 20h18']),

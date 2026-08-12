@@ -1,8 +1,8 @@
 /**
  * A CSS media query as a reactive boolean.
  *
- * Needed because two of Amendment 12's mobile decisions are not stylistic and
- * therefore cannot be CSS: below the breakpoint the members table becomes a
+ * Needed because two of the mobile decisions are not stylistic and therefore
+ * cannot be CSS: below the breakpoint the members table becomes a
  * card list, and the member detail moves from a sticky panel into `ui/Modal`.
  * Doing either with `display: none` would leave the losing markup in the DOM —
  * two copies of a member's address on the page, one merely invisible, and a

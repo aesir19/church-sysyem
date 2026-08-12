@@ -1,4 +1,4 @@
-// The arithmetic behind REDESIGN.md Amendment 13's server-side pagination.
+// The arithmetic behind the members list's server-side pagination.
 //
 // Pulled out of the view because off-by-one is the entire risk here and it is
 // invisible: PostgREST's `.range()` bounds are INCLUSIVE, so page 2 of 50 is

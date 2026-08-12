@@ -1,216 +1,28 @@
-# UDFC Church Dashboard — working rules
+# UDFC Church Dashboard — the rules
 
-A Vue 3 SPA (Vite, no TypeScript, no state library, no styled UI kit — see
-[ADR-0011](docs/decisions/0011-headless-primitives-for-accessibility.md)) served as static files from
-Netlify, talking directly to Supabase — Postgres + Auth + PostgREST. There is no application
-server. Business logic lives in the SPA; **authorization lives entirely in Postgres RLS.**
-Prisma is schema/migration tooling only and never runs in the browser.
+There are three. Evaluate every decision against them, in order.
 
-This file is the rulebook. It is binding. Reference material lives in `docs/` — see
-[Where things are written down](#where-things-are-written-down) at the bottom and read those
-files when the task actually touches them.
+## 1. Cost — keep operating cost at $0/month, indefinitely. Binding.
 
----
+Anything that risks pushing this project off a free tier needs an explicit owner decision
+**before** work begins.
 
-## Priority order
+## 2. Security — a close second.
 
-Evaluate every decision against this order, in order:
+The app is on the public internet and stores member PII: names, birthdates, addresses, contact
+details, baptismal status. Apply security controls unless they conflict with rule 1. When they do,
+say what was deferred and why.
 
-1. **Cost — keep operating cost at $0/month indefinitely.** Binding. Any change that risks
-   pushing the project off a free tier needs an explicit owner decision *before* work begins.
-2. **Security — a close second.** The app is on the public internet and stores member PII
-   (names, birthdates, addresses, contact details, baptismal status). Apply security controls
-   unless they conflict with priority 1; when they do, prefer the free controls in
-   [SECURITY.md](docs/SECURITY.md) and document what was deferred and why. Default posture is
-   **fail closed** — if a feature can't be made safe for free, it isn't built.
-3. Everything else — DX, polish, extra features.
+Default posture is **fail closed** — if a feature can't be made safe for free, it isn't built.
 
 ---
+## 3. UI changes are seen, not spec'd
 
-## Never
+Do not plan or build a UI change from a written spec. Work from the actual view — a screenshot, or the running app.
 
-- **Never use the `service_role` key in the frontend.** The RLS-only model is what makes a
-  public anon key safe. Bypassing policies in shipped code forces a paid hosting tier and
-  discards every policy in `0004`–`0012`.
-- **Never add a second compute vendor** — no Netlify Functions, no Render/Fly/Railway service,
-  no separate API server. All logic stays in the SPA + Postgres. The one sanctioned escape
-  hatch, if server-side code ever becomes genuinely necessary, is a Supabase Edge Function.
-  See [ADR-0002](docs/decisions/0002-no-second-compute-vendor.md).
-- **Never replicate authorization in the frontend.** If a user shouldn't see a row, the *policy*
-  must reject it. UI gating is presentation, never enforcement.
-- **Never `select('*')` on `members`.** Enumerate columns. `MEMBER_COLUMNS` and the two member
-  reads live in [src/lib/data/members.js](src/lib/data/members.js) — prefer that module over a new
-  inline query. Not yet universal: `MinistrySmallGroupView` still reads members inline for its
-  picker, which is [issue #38](https://github.com/aesir19/church-sysyem/issues/38).
-- **Never take the outcome of a PostgREST write from the raw result.** RLS refuses a write by
-  *filtering*, so `{ error: null, data: [] }` means refused, not saved. Pass the builder to
-  `write()` (or a mutating RPC to `writeRpc()`) from [src/lib/data/write.js](src/lib/data/write.js)
-  and branch on `result.ok`. Constructing the builder in a view is fine — it is reading the outcome
-  yourself that is banned, and the `write-seam/writes-through-seam` ESLint rule fails the build on it.
-- **Never add realtime subscriptions** unless explicitly requested. The static-snapshot model
-  is intentional; websockets burn egress continuously.
-- **Never edit or re-run a deployed migration.** In particular `0006_baseline_rls` is a record
-  of state that was already live and **must not be executed** — it is registered via
-  `prisma migrate resolve --applied`.
-- **Never add a runtime dependency** without a stated reason and a free-tier impact note. Every
-  one ships to every user on every uncached visit.
-- **Never link to a line number from a document.** `#L748` is a claim about code that goes false
-  within a week, asserted where no test can check it. Link to a file, a symbol, or a migration.
-  This rule exists because four of sixteen defect entries described code that had been deleted.
-- **Never document what the code already states.** Route tables, directory trees, stack lists and
-  view inventories belong to `src/` and `package.json`. Docs carry the reasoning that is *not*
-  recoverable from code: decisions, threat models, why a fix took its shape.
-- **Never add a synthetic keep-alive cron** to dodge Supabase auto-pause. Budget spend for no
-  real-user benefit, and it risks tripping abuse policies.
+If you cannot see it, stop and ask. Most screens here are behind auth and there is no tool that can reach them; "I'll build to the spec and we'll check later" is not the fallback.
 
-## Always
+Nothing gets reviewed, audited or committed until the owner has seen it.
 
-- **Every read of `members` must add `.is('archived_at', null)`.** The SELECT policy
-  deliberately returns archived rows — filtering them is the *application's* job. A read that
-  forgets shows archived people in lists and pickers. See
-  [ADR-0001](docs/decisions/0001-rls-is-the-only-authz.md).
-- **Every new database view over an RLS-protected table must declare `security_invoker = on`.**
-  Views run as their owner by default, which silently bypasses the base tables' policies and
-  leaks across churches.
-- **Every new authenticated route needs `meta: { requiresAuth: true }`** in
-  [src/router/index.js](src/router/index.js).
-- **Every schema change goes through Prisma** (`prisma/schema.prisma` + `prisma/migrations/`),
-  and **the migration deploys before the SPA release that depends on it.** This is now enforced:
-  the `deploy` job in [ci.yml](.github/workflows/ci.yml) carries `needs: [test, lighthouse,
-  migrate]`, so the SPA cannot reach production ahead of its schema. Do not remove that edge —
-  the failure mode it prevents is a live column-not-found error for every user.
-- **Every Supabase call uses the shared client** imported from
-  [src/lib/supabase.js](src/lib/supabase.js). Do not construct a second one.
-- **Every code or schema change gets a `code-reviewer` pass before it is called done.** Dispatch
-  the `code-reviewer` agent (or run `/code-review`) on the working diff and resolve CRITICAL and
-  HIGH findings before merge — those are blocking. This is in addition to `/security-review` for
-  any change to policies, grants, helper functions, or views. See [Review and design tooling](#review-and-design-tooling).
 
-## Review and design tooling
-
-Two project tools formalize how review and load-bearing design happen here. Both live under
-`.claude/` and load on session start (reload after adding or editing them).
-
-- **`code-reviewer` agent** ([.claude/agents/code-reviewer.md](.claude/agents/code-reviewer.md)) —
-  a read-only reviewer, dispatched after writing or modifying code per the Always rule above. It
-  reads this file for project conventions. Its generic React/Node checklist items do not all apply
-  (this is Vue 3 + Supabase, **no TypeScript**, no state library) — but its security, data-policy,
-  cost-awareness, and correctness checks do. It never substitutes for `/security-review` on
-  RLS/grant/function/view changes, nor for the isolation matrix in
-  [docs/security/VERIFICATION.md](docs/security/VERIFICATION.md).
-- **`software-architecture` skill** ([.claude/skills/software-architecture/SKILL.md](.claude/skills/software-architecture/SKILL.md)) —
-  a "what's hard to change?" lens for **load-bearing** decisions (the data model, the auth/RLS
-  model, service boundaries, an API's public shape). It is **invoked explicitly** — reach for it
-  by name when scoping a new subsystem, reviewing a design, or writing an ADR under
-  [docs/decisions/](docs/decisions/). It is *not* triggered automatically just because a task
-  touches system design.
-
-## Agent skills
-
-Per-repo configuration the installed engineering skills read. Full detail in `docs/agents/`.
-
-### Issue tracker
-
-Issues live as GitHub issues in `aesir19/church-sysyem`, driven by the `gh` CLI (installed and
-authenticated). See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
-
-Defects (`D*`) and deferred features (`B*`) were migrated into the tracker on 2026-08-11 and the
-old ids are preserved in the issue titles. **[OPERATIONS.md](docs/OPERATIONS.md) `O*` is the one
-register still kept in-repo** — it is a runbook, not a queue.
-
-**The repo is public**: never paste member PII, keys, or `.env*` contents into an issue.
-
-### Triage labels
-
-The five canonical roles, unchanged: `needs-triage`, `needs-info`, `ready-for-agent`,
-`ready-for-human`, `wontfix`. See [docs/agents/triage-labels.md](docs/agents/triage-labels.md).
-
-### Domain docs
-
-Single-context. ADRs live in [docs/decisions/](docs/decisions/), **not** `docs/adr/`; the root
-`CONTEXT.md` glossary does not exist yet and is created lazily.
-See [docs/agents/domain.md](docs/agents/domain.md).
-
-## Code conventions
-
-- Vue 3 Composition API with `<script setup>`. No Options API.
-- `<style scoped>` per SFC; only truly global rules go in [src/style.css](src/style.css).
-- **Colour is never a literal in an SFC.** Every value lives in
-  [src/styles/tokens.css](src/styles/tokens.css) as a two-layer token set, and views and `ui/`
-  components consume only the *semantic* layer (`--color-accent`, `--color-bg-surface`,
-  `--color-text-primary`, …). A view that reaches past it for a primitive ramp has found a
-  missing semantic token, not a shortcut. This is what made the rebrand below a one-file edit.
-- Palette: brand cyan `#0088b0`, magenta `#d6006c` as a rarer second accent, slate neutrals
-  (`#f8fafc`, `#e2e8f0`, `#1e293b`, `#64748b`), error `#dc2626`. Cards use a `12px` radius.
-  Note that `--color-accent` is one step darker than the brand hue and `--color-accent-text`
-  darker again — `#0088b0` is 4.08:1 on white, under AA, and `lighthouserc.json` hard-fails on
-  it. tokens.css carries the full reasoning; do not "correct" the accent back to the brand hex.
-- **Interaction logic for dialogs comes from Reka UI** (`reka-ui`), not from a fifth hand-rolled
-  focus trap. It is scoped to `Dialog` and optionally `Toast`; buttons, cards, inputs, badges,
-  tables, spinners and icons stay hand-rolled against the project's tokens, and combobox/tabs/
-  select stay as they are. The boundary and the bundle gate are in
-  [ADR-0011](docs/decisions/0011-headless-primitives-for-accessibility.md) — read it before
-  reaching for the library a second time.
-- Surface failures as a **message from the data module**, not as `error.message`. Postgres
-  constraint violations quote the offending row verbatim — `Key (first_name, last_name)=(Juan,
-  Dela Cruz) already exists` — which is member PII;
-  [sentryScrub.js](src/utils/sentryScrub.js) drops those payloads rather than redacting them, and
-  the screen must not receive them either. `write()` classifies the failure and returns safe text,
-  with the original on `cause` for logging. Avoid throwing.
-- New behaviour needs a test. Pure logic belongs in `src/utils/` where it can be tested without
-  mounting a view; that separation is the point, not a style preference.
-
-## Efficiency rules
-
-These follow from priority 1 and are binding unless the owner overrides them.
-
-1. **Select only what you render.** List views select the columns the table shows; full rows are
-   fetched by id only when a modal opens.
-2. **One round-trip per intent.** Prefer a single RPC or PostgREST query over chained awaits.
-   Never serialize what can be parallel.
-3. **Cache church identity for the session.** `churchId` / `churchName` change essentially never
-   — resolve once, reuse. Do not re-query per navigation.
-4. **No Supabase Storage** without a written sizing plan first.
-5. **Long-cache hashed assets.** Vite emits content-hashed filenames; `/assets/*` is
-   `immutable`, `index.html` is `no-cache`. Already configured in
-   [netlify.toml](netlify.toml) — don't regress it.
-
-## Thresholds that force a change
-
-| Signal | Threshold | Required response |
-|---|---|---|
-| Active members in one church | 300 | ~~Add `.range()` pagination~~ — **done** for the Members list (page size 50, `listRecords()`); the **attendance roster** is the list nearest this now |
-| Routes registered | ≥ 3 | Convert `router/index.js` to `() => import(...)` lazy imports |
-| Supabase egress | 60 % of 5 GB/mo | Audit list queries; tighten column selection |
-| Netlify credits | 60 % of 300/mo | Check Usage tab (bandwidth + deploys share one pool); verify cache headers |
-| Database storage | 60 % of 500 MB | Audit text column sizes; archive old data offline |
-
-The route threshold was breached and is now **resolved** — every route is `() => import(...)`.
-Keep it that way when adding one: `/checkin` is opened on phones, on church wifi, with a cold
-cache, every service.
-
----
-
-## Where things are written down
-
-Read these when the task touches them. Do not read them all up front.
-
-| File | What it answers | Read it when |
-|---|---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the system is wired *today* — routes, views, RLS model, data flows | Changing structure, adding a route/view/table |
-| [docs/decisions/](docs/decisions/) | *Why* the load-bearing choices were made, and what breaks if reversed | Before changing auth, policies, the ledger, or the report calculator |
-| [docs/SECURITY.md](docs/SECURITY.md) | Threat model and **open** security findings | Touching auth, RLS, grants, headers, or data exposure |
-| [docs/security/VERIFICATION.md](docs/security/VERIFICATION.md) | How to prove a control works; the two-church isolation matrix | After changing any policy, grant, helper function, or view |
-| [docs/security/RESOLVED.md](docs/security/RESOLVED.md) | Closed security findings and why each fix took its shape | Before "improving" something that was already deliberately fixed |
-| [GitHub issues](https://github.com/aesir19/church-sysyem/issues?q=is%3Aissue+is%3Aopen+label%3Adefect) | Open defects — migrated from `DEFECTS.md`, old `D*` ids kept in the titles | Picking up a fix, or before "improving" something already known-broken |
-| [docs/DEFECTS.md](docs/DEFECTS.md) | Now a pointer, plus why four entries went stale | Wondering where the defect list went |
-| [GitHub issues](https://github.com/aesir19/church-sysyem/issues?q=is%3Aissue+is%3Aopen+label%3Afeature) | Deferred features — migrated from `BACKLOG.md`, old `B*` ids kept in the titles | Asked for a feature that may already be specced |
-| [docs/BACKLOG.md](docs/BACKLOG.md) | Now a pointer, plus which entries became ADRs and why | Wondering where the backlog went |
-| [docs/OPERATIONS.md](docs/OPERATIONS.md) | Free-tier budgets, deploy/rollback, backups, monitoring gaps `O1`–`O25` | Deploying, migrating, or asked why the site is down |
-| [docs/agents/](docs/agents/) | Where issues live, the triage label strings, how to read the domain docs | Running an engineering skill that files, triages, or specs work |
-| [CONTEXT.md](CONTEXT.md) | The domain glossary — Directory vs Member record, Archive, Blocked write | Naming anything, or unsure whether two words mean the same thing |
-| `prisma/schema.prisma` | The canonical table/column inventory | Any question about the data model — it is the source of truth, not the docs |
-
-**Schema is never documented twice.** `prisma/schema.prisma` and `prisma/migrations/` are the
-source of truth for tables, columns, policies, grants, and functions. Docs describe intent and
-consequence; they do not transcribe the schema.
+Everything else is a judgement call. Ask when it matters.

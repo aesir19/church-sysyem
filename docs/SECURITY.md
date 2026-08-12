@@ -17,7 +17,7 @@
 | Findings already closed, and why each fix took its shape | [security/RESOLVED.md](security/RESOLVED.md) |
 | How to prove a control works; the monthly review | [security/VERIFICATION.md](security/VERIFICATION.md) |
 | Accepted risks and rejected controls | [decisions/](decisions/) — ADR-0001, 0002, 0005, 0006 |
-| Non-security defects | [DEFECTS.md](DEFECTS.md) (`D1`–`D16`) |
+| Non-security defects | DEFECTS.md (`D1`–`D16`) |
 | Operational gaps | [OPERATIONS.md](OPERATIONS.md) (`O1`–`O25`) |
 
 Section numbers are stable and match their historical positions, so gaps are intentional — a
@@ -282,7 +282,7 @@ well inside the GitHub free-tier minutes.
 
 ### 3.10 No data-retention / right-to-erasure policy — Medium
 
-**Finding.** Soft delete is the only deletion path by design ([ARCHITECTURE.md](ARCHITECTURE.md)
+**Finding.** Soft delete is the only deletion path by design (ARCHITECTURE.md
 §5.2) and there is no purge policy, so PII — full name, birthdate, address, contact number, email,
 Facebook link, wedding anniversary, baptismal status — is retained indefinitely.
 

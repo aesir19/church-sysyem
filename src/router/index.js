@@ -59,7 +59,7 @@ const routes = [
       { path: 'funds/expenses', name: 'Expenses', component: () => import('../views/ExpensesInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } }
     ]
   },
-  // The style-guide route (docs/REDESIGN.md §0.5) exists only in `npm run dev`.
+  // The style-guide route exists only in `npm run dev`.
   // `import.meta.env.DEV` is statically replaced by Vite, so in a production
   // build this spreads an empty array and the `() => import(...)` inside it is
   // unreachable — Rollup drops the view and its chunk entirely. The cost of

@@ -15,7 +15,7 @@
 // empty portal, which no build step catches. The focus trap, Escape and
 // return-focus behaviour is Reka UI's own tested responsibility.
 //
-// REDESIGN.md's verification section already flags this tooling gap: adding
+// This is a known tooling gap: adding
 // @vue/test-utils + happy-dom would close it, is dev-only, and is worth an
 // explicit ask before doing it.
 

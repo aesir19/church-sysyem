@@ -58,7 +58,7 @@ describe('clearSessionStorageKeys', () => {
     // volunteer's phone must not forget who it already checked in because a
     // staff member signed out of the dashboard in another tab.
     expect(storage.getItem('udfc.checkin.recorded')).toBe('{"v":1,"entries":[]}')
-    // REDESIGN.md Amendment 7: a theme preference should outlive a session.
+    // A theme preference should outlive a session.
     expect(storage.getItem(THEME_STORAGE_KEY)).toBe('dark')
   })
 
