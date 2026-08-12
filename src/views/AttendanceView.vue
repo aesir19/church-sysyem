@@ -947,12 +947,17 @@ function formatRecordedAt (value) {
 }
 .att__contact { font-size: var(--text-meta-sm); font-weight: 500; color: var(--ink-5); }
 
+/* Fixed width, centred text. "Guest" and "Member" are different lengths, so
+   intrinsically-sized pills start at different x on consecutive rows and the
+   column reads as ragged. */
 .att__tag {
-  padding: 3px var(--sp-9);
+  width: 58px;
+  flex: none;
+  padding: 3px var(--sp-6);
   border-radius: var(--r-tag);
   font-size: var(--text-meta-sm);
   font-weight: 700;
-  flex: none;
+  text-align: center;
 }
 .att__tag--member { background: var(--accent-tint); color: var(--accent-darkest); }
 .att__tag--guest { background: var(--magenta-tint); color: var(--magenta-deep); }
@@ -960,7 +965,19 @@ function formatRecordedAt (value) {
 .att__source { width: 130px; flex: none; font-size: var(--text-meta); color: var(--ink-5); }
 .att__time { width: 66px; flex: none; text-align: right; font-size: var(--text-meta); color: var(--ink-4); font-variant-numeric: tabular-nums; }
 
-.att__row-actions { display: flex; align-items: center; gap: var(--sp-8); flex: none; }
+/* Reserved width, right-aligned. "Link to member" only appears on guest rows,
+   so an intrinsically-sized actions cell is ~86px wider there — and because
+   everything to its left is laid out against it, that pushed the tag, source
+   and time columns of every guest row out of line with every member row. The
+   column holds its width whether the link is there or not. */
+.att__row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-8);
+  width: 128px;
+  flex: none;
+}
 
 .att__link {
   border: 0;

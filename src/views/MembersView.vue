@@ -712,6 +712,16 @@ watch(page, load)
 
 .mem__table-card { overflow: hidden; }
 
+/* flex: none on every child, and it is load-bearing rather than tidiness.
+   .mem__col is a flex column, so its children default to flex-shrink: 1 — the
+   table card was being squeezed from its natural 3062px down to the 712px left
+   over in the viewport. With overflow: hidden on the card, the surplus rows
+   were clipped rather than scrolled to: 42 of 50 members and the pager beneath
+   them existed in the DOM, were reachable by keyboard, and could not be seen or
+   scrolled to by anyone. The column only scrolls if its content is allowed to
+   be taller than it is. */
+.mem__col > * { flex: none; }
+
 /* --- Table ------------------------------------------------------------ */
 .tbl { width: 100%; border-collapse: collapse; }
 
