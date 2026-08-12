@@ -165,7 +165,13 @@ describe('listRecords', () => {
     resolvesTo({ data: [], error: null })
     await listRecords({ churchId: CHURCH, canSeeDetail: true })
     const columns = calledWith('select')[0][1]
-    expect(columns).toBe(MEMBER_COLUMNS)
+    // Starts with the explicit projection, then appends the group embed the
+    // members table's Groups column needs. `toBe` was right while the select
+    // was nothing but MEMBER_COLUMNS; the rule being defended is that the
+    // projection is enumerated and excludes what must never be fetched, not
+    // that nothing may ever be embedded alongside it.
+    expect(columns.startsWith(MEMBER_COLUMNS)).toBe(true)
+    expect(columns).toContain('group_members(groups(')
     expect(columns).not.toContain('*')
     expect(columns).not.toContain('archived_reason')
   })

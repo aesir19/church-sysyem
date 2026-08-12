@@ -72,8 +72,21 @@ export const MEMBER_COLUMNS = `
   facebook_link,
   is_one_to_one_completed,
   is_turning_point_completed,
-  is_baptized
+  is_baptized,
+  has_submitted_membership_form
 `
+
+// The groups a member belongs to, embedded on the same request.
+//
+// The members table has no group column — membership lives in the group_members
+// join table — and the redesign's members list renders a Groups column for every
+// row. Fetching that separately would be a second round-trip and a client-side
+// join over 250 rows; a PostgREST embed rides along on the one request that is
+// already being made.
+//
+// `type` comes along because a ministry and a small group are tagged
+// differently wherever they are listed.
+const MEMBER_GROUPS_EMBED = 'group_members(groups(id, name, type))'
 
 const MESSAGES = {
   loadFailed: 'Failed to load members. Please try again.',
@@ -166,7 +179,7 @@ export async function listRecords({
   // SuperAdmin, so without this their list would merge all of them.
   let query = supabase
     .from('members')
-    .select(MEMBER_COLUMNS, { count: 'exact' })
+    .select(`${MEMBER_COLUMNS}, ${MEMBER_GROUPS_EMBED}`, { count: 'exact' })
     .eq('member_of', churchId)
     .is('archived_at', null)
 
@@ -193,6 +206,26 @@ export async function listRecords({
 /**
  * @param {{ payload: object, churchId: string }} params
  */
+/**
+ * How many archived records this church holds.
+ *
+ * A separate round-trip, deliberately. `listRecords` filters `archived_at IS
+ * NULL` and its `count: 'exact'` therefore counts only the active roll — the
+ * two numbers cannot come from one request. It is a `head: true` count, so it
+ * transfers a header and no rows, and it is what lets the header read
+ * "254 active records · 39 archived" as the design does rather than dropping
+ * the half of the sentence that says records are kept rather than deleted.
+ */
+export async function countArchived(churchId) {
+  if (!churchId) return 0
+  const { count, error } = await supabase
+    .from('members')
+    .select('id', { count: 'exact', head: true })
+    .eq('member_of', churchId)
+    .not('archived_at', 'is', null)
+  return error ? 0 : (count ?? 0)
+}
+
 export async function create({ payload, churchId }) {
   if (!churchId) return fail(MESSAGES.noChurch)
 

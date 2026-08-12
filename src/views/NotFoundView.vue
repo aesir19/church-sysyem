@@ -1,67 +1,97 @@
 <script setup>
 /**
- * Catch-all route. Closes docs/DEFECTS.md D13: before this existed, any unmatched
- * path rendered a completely blank white page, because vue-router matched nothing
- * and <router-view> had nothing to display.
+ * Catch-all route. Before this existed, any unmatched path rendered a blank
+ * white page, because vue-router matched nothing and <router-view> had nothing
+ * to display.
  *
  * That stopped being cosmetic the moment check-in URLs started being printed on
- * posters. A mistyped, truncated, or retired QR link is now the most likely way
- * anyone reaches an unknown path, and a blank page gives an attendee standing in
- * a service no idea whether the link is wrong or the site is broken.
+ * posters. A mistyped, truncated or retired QR link is the most likely way
+ * anyone reaches an unknown path, and a blank page gives an attendee standing
+ * in a service no idea whether the link is wrong or the site is broken — so the
+ * copy names that case first.
  *
- * Migrated with the auth family, which is where it
- * belongs visually: it is the fourth signed-out page, and it is reached from a
- * phone in a pew far more often than from a desk.
+ * BOTH ACTIONS ARE LINKS. They navigate, so they have to be anchors: keyboard
+ * activation, middle-click and "open in new tab" come from the element, not
+ * from the styling. `ui/Button` renders a RouterLink when given `to`, which is
+ * exactly that.
  */
 import AuthShell from '../components/AuthShell.vue'
+import Button from '../components/ui/Button.vue'
 </script>
 
 <template>
   <AuthShell
-    centered
-    title="Page not found"
-    subtitle="The link you followed doesn't lead anywhere. If you scanned a QR code to check in, scan it again or ask a volunteer for help."
+    :card="false"
+    :icon="false"
+    width="md"
   >
-    <router-link class="not-found-action" to="/login">Go to sign in</router-link>
+    <template #badge>
+      <p
+        class="nf__code"
+        aria-hidden="true"
+      >
+        404
+      </p>
+    </template>
 
-    <!-- The shell's default footer names the staff dashboard. Whoever is
-         reading this page most likely scanned a poster, so it says something
-         useful to them instead. -->
-    <template #footer>
-      <p>United Door of Faith Church</p>
+    <div class="nf__head">
+      <h1 class="nf__title">
+        Page not found
+      </h1>
+      <p class="nf__body">
+        That address doesn't exist here. If you followed a QR code, the check-in
+        link may have expired.
+      </p>
+    </div>
+
+    <div class="nf__actions">
+      <Button
+        variant="primary"
+        to="/dashboard"
+      >
+        Back to dashboard
+      </Button>
+      <Button to="/login">
+        Sign in
+      </Button>
+    </div>
+
+    <template #footnote>
+      United Door of Faith Church
     </template>
   </AuthShell>
 </template>
 
 <style scoped>
-/**
- * A link, not a `ui/Button`. It navigates, so it has to be an <a> — and
- * Button.vue renders a <button>, which would need a click handler and a
- * router push to do what an href does natively. Styled to match the primary
- * variant deliberately, since it is the same affordance.
- */
-.not-found-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  padding: 0 var(--space-6);
-  background: var(--color-accent);
-  color: var(--color-text-on-accent);
-  border-radius: var(--radius-md);
-  font-size: var(--text-base);
-  font-weight: var(--font-weight-semibold);
-  text-decoration: none;
-  transition: background-color var(--duration-fast) var(--ease-standard);
+/* The one place in the app where both brand colours meet. It is decoration, so
+   it is aria-hidden and the <h1> below carries the meaning — a screen reader
+   announcing "four hundred and four" helps nobody. */
+.nf__code {
+  font-size: 74px;
+  font-weight: 800;
+  letter-spacing: -0.06em;
+  line-height: 1;
+  background: linear-gradient(100deg, var(--accent), var(--magenta));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
-.not-found-action:hover {
-  background: var(--color-accent-hover);
+.nf__head { display: flex; flex-direction: column; gap: var(--sp-9); }
+
+.nf__title {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: var(--tracking-h1);
+  line-height: 1.2;
+  color: var(--ink);
 }
 
-.not-found-action:focus-visible {
-  outline: 2px solid transparent;
-  outline-offset: 2px;
-  box-shadow: var(--shadow-focus-ring);
+.nf__body {
+  font-size: var(--text-body);
+  color: var(--ink-4);
+  line-height: 1.6;
 }
+
+.nf__actions { display: flex; gap: var(--sp-9); justify-content: center; flex-wrap: wrap; }
 </style>

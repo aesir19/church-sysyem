@@ -42,11 +42,31 @@ async function render(member, churchName = 'Cabuyao') {
   return { html: await renderToString(app), warnings }
 }
 
+/**
+ * Just the Facebook key/value row.
+ *
+ * These assertions used to search the WHOLE panel for `href=`, which worked
+ * only because the old panel linked nothing else. The redesigned panel makes
+ * the phone a `tel:` link and the email a `mailto:` one, so a document-wide
+ * search now says "there is a link" no matter what the facebook rule did. The
+ * intent of the test is unchanged — it is the blast radius that was wrong.
+ */
+function facebookRow(html) {
+  const start = html.indexOf('>Facebook<')
+  if (start === -1) return ''
+  const end = html.indexOf('</div>', start)
+  return html.slice(start, end === -1 ? undefined : end)
+}
+
 describe('MemberDetailPanel', () => {
   it('renders the record without warnings', async () => {
     const { html, warnings } = await render(MEMBER)
     expect(warnings).toEqual([])
-    expect(html).toContain('Juan Reyes Dela Cruz')
+    // The redesign abbreviates the middle name to an initial — the mockups
+    // render "Grace L Abad" and "Marites S. Cordero", never the full middle
+    // name. The whole value is still on the record and still editable; this is
+    // presentation only.
+    expect(html).toContain('Juan R. Dela Cruz')
     expect(html).toContain('Cabuyao')
   })
 
@@ -83,8 +103,8 @@ describe('facebook_link rendering — conditions 3 and 4', () => {
     const evil = 'https://facebook.com.evil.example/juan'
     const { html } = await render({ ...MEMBER, facebook_link: evil })
 
-    expect(html).not.toContain('<a ')
-    expect(html).not.toContain('href=')
+    expect(facebookRow(html)).not.toContain('<a ')
+    expect(facebookRow(html)).not.toContain('href=')
     // Condition 4: shown, not silently dropped. Hiding bad data is how it
     // survives in the column.
     expect(html).toContain('evil.example')
@@ -92,17 +112,17 @@ describe('facebook_link rendering — conditions 3 and 4', () => {
 
   it('never renders a javascript: value as a link', async () => {
     const { html } = await render({ ...MEMBER, facebook_link: 'javascript:alert(1)' })
-    expect(html).not.toContain('href=')
+    expect(facebookRow(html)).not.toContain('href=')
   })
 
   it('renders http:// as plain text — the scheme check is not decoration', async () => {
     const { html } = await render({ ...MEMBER, facebook_link: 'http://facebook.com/juan' })
-    expect(html).not.toContain('href=')
+    expect(facebookRow(html)).not.toContain('href=')
   })
 
   it('falls back to the placeholder when there is no link at all', async () => {
     const { html } = await render({ ...MEMBER, facebook_link: null })
-    expect(html).not.toContain('href=')
+    expect(facebookRow(html)).not.toContain('href=')
     expect(html).toContain('Facebook')
   })
 })

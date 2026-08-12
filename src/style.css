@@ -4,8 +4,12 @@
   box-sizing: border-box;
 }
 
+/* The last of the old design layer. This hard-coded Segoe UI stack sat under
+   every screen and beat --font-sans anywhere a component did not name the token
+   itself, which is why the redesign read as harsher than the mockups even where
+   the sizes and weights matched exactly. The token is the single source now. */
 body {
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

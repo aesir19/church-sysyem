@@ -1,0 +1,378 @@
+/* ===========================================================================
+   Design tokens — UDFC Church Dashboard
+   ===========================================================================
+   Transcribed from the design handoff in `UI mockups for form/
+   design_handoff_church_dashboard/`. Every value here was read off that bundle
+   rather than invented, and the mockups are the authority when the two ever
+   disagree: rule 3 says UI is seen, not spec'd, and this file is the one place
+   where a wrong number quietly propagates to every screen.
+
+   THEMING
+   Light is defined on bare `:root`. Dark is defined twice, deliberately:
+   once under `prefers-color-scheme: dark` guarded by `:not([data-theme="light"])`
+   so the OS setting wins when the user has expressed no preference, and once
+   under `[data-theme="dark"]` so an explicit choice beats the OS in both
+   directions. The mockups' profile page offers Light / Dark / System, which is
+   exactly the three states this produces.
+
+   NAMING
+   Roles, not appearances: `--ink-4`, not `--grey`. A token whose name describes
+   its colour cannot survive a theme flip, which is how the previous attempt
+   ended up with a light tint on a dark surface for the selected member row —
+   the one bug the handoff calls out by name. See `--row-selected`.
+   =========================================================================== */
+
+:root {
+  /* --- Surfaces ------------------------------------------------------- */
+  --app-bg:            #f4f6f8;   /* behind cards */
+  --surface:           #ffffff;   /* cards, nav, tables */
+  --surface-subtle:    #fbfcfd;   /* table headers, inset panels */
+  --surface-subtle-2:  #f9fafb;   /* row hover */
+
+  /* --- Lines ---------------------------------------------------------- */
+  --border:            #eaecf0;   /* card borders */
+  --border-strong:     #e4e7ec;   /* inputs, secondary buttons */
+  --divider:           #f2f4f7;   /* row rules, track fills */
+
+  /* --- Text ----------------------------------------------------------- */
+  --ink:               #101828;   /* headings, primary text */
+  --ink-2:             #344054;   /* labels, button text */
+  --ink-3:             #475467;   /* body */
+  --ink-4:             #667085;   /* secondary body */
+  --ink-5:             #98a2b3;   /* meta, placeholders */
+  --ink-6:             #b9c0cc;   /* axis labels, em-dash placeholders */
+
+  /* --- Accent: cyan --------------------------------------------------- */
+  --accent:            #0088b0;   /* primary actions, selection, charts */
+  --accent-deep:       #006786;   /* accent text on tint, gradient end */
+  --accent-darkest:    #004961;   /* text on cyan tint */
+  --accent-tint:       #e9f8ff;   /* selected nav, avatar chips */
+  --accent-tint-2:     #f7fdff;   /* selected rows, hover fills */
+  --accent-border:     #cbeeff;   /* tinted panel border */
+  --accent-border-hi:  #99e0ff;   /* focus border */
+  --accent-on-dark:    #7cd4fd;   /* accent text on the dark panel */
+
+  /* --- Accent 2: magenta ---------------------------------------------- */
+  /* Destructive, the second chart series, and "warnings of neglect" — the
+     follow-up figures. Not an error colour alone; see the Overview tiles. */
+  --magenta:           #d6006c;
+  --magenta-deep:      #aa0b56;
+  --magenta-darkest:   #790e3d;
+  --magenta-tint:      #fff1f4;
+  --magenta-border:    #ffdee6;
+
+  /* --- Status --------------------------------------------------------- */
+  --success:           #067647;
+  --success-tint:      #ecfdf3;
+  --success-border:    #a9efc5;
+  --warning:           #b54708;
+  --warning-deep:      #7a2e0e;
+  --warning-tint:      #fffaeb;
+  --warning-tint-2:    #fef0c7;
+  --warning-border:    #fedf89;
+
+  /* --- Composites ----------------------------------------------------- */
+  /* The dark panel is one gradient used in three places: the "Your access"
+     card, the bulk-selection bar and the undo toast. */
+  --dark-panel:        linear-gradient(135deg, #101828, #1d2939);
+  --dark-panel-ink:    #ffffff;
+  --dark-panel-ink-2:  #c6cfd9;
+  /* Invisible in light, where the panel already contrasts hard against a near-
+     white page. In DARK the same gradient sits within a few points of the app
+     background and the card dissolves — this is what keeps its edge. */
+  --dark-panel-border: transparent;
+
+  /* The selected member row. Light tint on light surface; DARK tint on dark
+     surface. Reintroducing a light value in the dark block is the documented
+     regression — it is a token precisely so that cannot happen by accident. */
+  --row-selected:      #f4fcff;
+
+  /* --- Type ----------------------------------------------------------- */
+  --font-sans: 'Manrope Variable', 'Manrope', ui-sans-serif, system-ui, sans-serif;
+
+  --text-h1:        1.75rem;   /* 28px — page title */
+  --text-h1-tight:  1.625rem;  /* 26px */
+  --text-h2:        0.9375rem; /* 15px — section */
+  --text-h3:        1.0625rem; /* 17px — card title */
+  --text-h3-sm:     1rem;      /* 16px */
+  --text-figure:    1.75rem;   /* 28px — stat figure */
+  --text-body:      0.84375rem;/* 13.5px */
+  --text-body-sm:   0.8125rem; /* 13px */
+  --text-label:     0.78125rem;/* 12.5px — label / button */
+  --text-field:     0.71875rem;/* 11.5px — field label */
+  --text-meta:      0.75rem;   /* 12px */
+  --text-meta-sm:   0.6875rem; /* 11px */
+  --text-eyebrow:   0.65625rem;/* 10.5px — eyebrow / table head */
+  --text-mobile:    0.875rem;  /* 14px minimum on mobile */
+
+  --tracking-h1:    -0.03em;
+  --tracking-h2:    -0.02em;
+  --tracking-h3:    -0.025em;
+  --tracking-eyebrow: 0.07em;
+
+  --leading-h1:     1.15;
+  --leading-body:   1.55;
+
+  /* --- Spacing -------------------------------------------------------- */
+  /* Only the steps the mockups actually use. Gaps everywhere, never margins
+     between siblings — that rule is in the handoff and it is why there is no
+     margin scale here. */
+  --sp-3: 3px;   --sp-5: 5px;   --sp-6: 6px;   --sp-7: 7px;
+  --sp-8: 8px;   --sp-9: 9px;   --sp-10: 10px; --sp-12: 12px;
+  --sp-14: 14px; --sp-16: 16px; --sp-18: 18px; --sp-20: 20px;
+  --sp-22: 22px; --sp-26: 26px; --sp-28: 28px; --sp-32: 32px;
+
+  --page-pad:   28px;  /* 26–32 in the mockups */
+  --card-pad:   20px;  /* 16–22 */
+  --nav-width:  242px;
+
+  /* --- Radii ---------------------------------------------------------- */
+  --r-checkbox: 5px;
+  --r-tag:      8px;   /* tags, small buttons, icon tiles: 7–9 */
+  --r-control:  10px;  /* buttons, inputs: 10–11 */
+  --r-inset:    12px;  /* inset panels: 12–13 */
+  --r-card:     15px;  /* cards, modals: 14–16 */
+  --r-mobile:   19px;  /* mobile cards, avatars: 18–20 */
+  --r-pill:     999px;
+
+  /* --- Elevation ------------------------------------------------------ */
+  --shadow-card:       0 1px 2px rgba(16, 24, 40, .04), 0 14px 30px -22px rgba(16, 24, 40, .5);
+  --shadow-card-hover: 0 1px 2px rgba(16, 24, 40, .05), 0 22px 40px -24px rgba(16, 24, 40, .55);
+  --shadow-modal:      0 24px 60px -18px rgba(16, 24, 40, .65);
+  --shadow-popover:    0 14px 34px -18px rgba(16, 24, 40, .6);
+  --shadow-primary:    0 8px 18px -8px rgba(0, 136, 176, .85);
+  --shadow-danger:     0 8px 18px -8px rgba(214, 0, 108, .8);
+  --scrim:             rgba(16, 24, 40, .42);
+
+  --ring-focus:        0 0 0 4px rgba(0, 136, 176, .08);
+  --ring-error:        0 0 0 4px rgba(214, 0, 108, .09);
+
+  /* --- Motion --------------------------------------------------------- */
+  --ease-entrance: cubic-bezier(.2, .8, .2, 1);
+  --dur-state:     .2s;    /* hover / state: .18–.22s */
+  --dur-rise:      .52s;
+  --dur-slide:     .45s;
+  --dur-grow:      .75s;
+  --dur-tall:      .7s;
+  --stagger:       .05s;   /* per item; lists and charts use .04–.06s */
+}
+
+/* --- Dark, via the OS, only when the user has not chosen ---------------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --app-bg:            #0b1117;
+    --surface:           #141d26;
+    --surface-subtle:    #18232d;
+    --surface-subtle-2:  #18232d;
+
+    --border:            #25313d;
+    --border-strong:     #2c3b49;
+    --divider:           #1f2a35;
+
+    --ink:               #e8eef4;
+    --ink-2:             #c6cfd9;
+    --ink-3:             #a8b6c3;
+    --ink-4:             #90a1b1;
+    --ink-5:             #71818f;
+    --ink-6:             #5a6874;
+
+    --accent:            #0088b0;
+    --accent-deep:       #0e6480;
+    --accent-darkest:    #a8e6ff;
+    --accent-tint:       #07303e;
+    --accent-tint-2:     #0a3a4a;
+    --accent-border:     #0b4c62;
+    --accent-border-hi:  #0e6480;
+    --accent-text:       #4cc0e6;
+
+    --magenta-tint:      #3b0f22;
+    --magenta-border:    #5e1638;
+    --magenta-deep:      #ff90b1;
+    --magenta-darkest:   #ff90b1;
+
+    --success:           #4ade80;
+    --success-tint:      #06301d;
+    --success-border:    #0b5433;
+    --warning:           #f0a45a;
+    --warning-deep:      #f0a45a;
+    --warning-tint:      #2a1e0c;
+    --warning-tint-2:    #3a2a10;
+    --warning-border:    #4d3714;
+
+    /* A DARK tint on a dark surface. See the note at the top of this file. */
+    --row-selected:      #0e2b38;
+    --dark-panel-border: #2c3b49;
+
+    --shadow-card:       0 1px 2px rgba(0, 0, 0, .3), 0 14px 30px -22px rgba(0, 0, 0, .8);
+    --shadow-card-hover: 0 1px 2px rgba(0, 0, 0, .35), 0 22px 40px -24px rgba(0, 0, 0, .85);
+    --shadow-modal:      0 24px 60px -18px rgba(0, 0, 0, .85);
+    --shadow-popover:    0 14px 34px -18px rgba(0, 0, 0, .8);
+  }
+}
+
+/* --- Dark, chosen explicitly ------------------------------------------- */
+:root[data-theme='dark'] {
+  --app-bg:            #0b1117;
+  --surface:           #141d26;
+  --surface-subtle:    #18232d;
+  --surface-subtle-2:  #18232d;
+
+  --border:            #25313d;
+  --border-strong:     #2c3b49;
+  --divider:           #1f2a35;
+
+  --ink:               #e8eef4;
+  --ink-2:             #c6cfd9;
+  --ink-3:             #a8b6c3;
+  --ink-4:             #90a1b1;
+  --ink-5:             #71818f;
+  --ink-6:             #5a6874;
+
+  --accent:            #0088b0;
+  --accent-deep:       #0e6480;
+  --accent-darkest:    #a8e6ff;
+  --accent-tint:       #07303e;
+  --accent-tint-2:     #0a3a4a;
+  --accent-border:     #0b4c62;
+  --accent-border-hi:  #0e6480;
+  --accent-text:       #4cc0e6;
+
+  --magenta-tint:      #3b0f22;
+  --magenta-border:    #5e1638;
+  --magenta-deep:      #ff90b1;
+  --magenta-darkest:   #ff90b1;
+
+  --success:           #4ade80;
+  --success-tint:      #06301d;
+  --success-border:    #0b5433;
+  --warning:           #f0a45a;
+  --warning-deep:      #f0a45a;
+  --warning-tint:      #2a1e0c;
+  --warning-tint-2:    #3a2a10;
+  --warning-border:    #4d3714;
+
+  --row-selected:      #0e2b38;
+  --dark-panel-border: #2c3b49;
+
+  --shadow-card:       0 1px 2px rgba(0, 0, 0, .3), 0 14px 30px -22px rgba(0, 0, 0, .8);
+  --shadow-card-hover: 0 1px 2px rgba(0, 0, 0, .35), 0 22px 40px -24px rgba(0, 0, 0, .85);
+  --shadow-modal:      0 24px 60px -18px rgba(0, 0, 0, .85);
+  --shadow-popover:    0 14px 34px -18px rgba(0, 0, 0, .8);
+}
+
+/* `--accent-text` only exists in dark; in light, accent text is the accent. */
+:root { --accent-text: var(--accent-deep); }
+
+/* ===========================================================================
+   Base
+   =========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--app-bg);
+  color: var(--ink-3);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* The bundled design system leaked serif headings into the mockups, which is
+   why every heading there carries an explicit font-family. Setting it once
+   here is the fix; nothing downstream needs to repeat it. */
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--ink);
+  letter-spacing: var(--tracking-h3);
+}
+
+p { margin: 0; }
+
+/* Every numeric column and figure. Stated once so no table forgets and gets
+   ragged columns. */
+.tabular, table, input[type='number'] { font-variant-numeric: tabular-nums; }
+
+a { color: var(--accent-text); }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ===========================================================================
+   Motion — the seven named animations from the handoff.
+   ===========================================================================
+   Stagger is driven by an `--i` custom property set on each item rather than by
+   JS timers, so a list animates in sequence with no runtime cost and no
+   scheduling to get wrong. Usage:
+
+     <li class="anim-rise" style="--i: 3">
+
+   These play on mount. A route change remounts the elements, which is what
+   makes "once per screen entry, not per re-render" fall out for free. */
+
+@keyframes rise  { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes slide { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
+@keyframes fade  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes grow  { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes tall  { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(0, 136, 176, .5); }
+  70%  { box-shadow: 0 0 0 9px rgba(0, 136, 176, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 136, 176, 0); }
+}
+
+@keyframes sweep { from { background-position: -220% 0; } to { background-position: 220% 0; } }
+
+.anim-rise {
+  animation: rise var(--dur-rise) var(--ease-entrance) both;
+  animation-delay: calc(var(--i, 0) * var(--stagger));
+}
+.anim-slide {
+  animation: slide var(--dur-slide) var(--ease-entrance) both;
+  animation-delay: calc(var(--i, 0) * var(--stagger));
+}
+.anim-fade { animation: fade var(--dur-slide) var(--ease-entrance) both; }
+
+.anim-grow {
+  transform-origin: left center;
+  animation: grow var(--dur-grow) var(--ease-entrance) both;
+  animation-delay: calc(var(--i, 0) * .04s);
+}
+.anim-tall {
+  transform-origin: bottom center;
+  animation: tall var(--dur-tall) var(--ease-entrance) both;
+  animation-delay: calc(var(--i, 0) * .04s);
+}
+
+.anim-pulse { animation: pulse 2.4s ease-out infinite; }
+
+.skeleton {
+  background: linear-gradient(90deg, var(--divider) 25%, var(--surface-subtle-2) 50%, var(--divider) 75%);
+  background-size: 220% 100%;
+  animation: sweep 1.4s linear infinite;
+  border-radius: var(--r-tag);
+}
+
+/* Hover lifts, stated once. */
+.lift { transition: transform var(--dur-state) ease, box-shadow var(--dur-state) ease; }
+.lift:hover { transform: translateY(-3px); box-shadow: var(--shadow-card-hover); }
+
+/* The handoff asks for this explicitly, and it is not optional: a congregation
+   includes people for whom the entrance animations are a vestibular problem. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .lift:hover { transform: none; }
+}

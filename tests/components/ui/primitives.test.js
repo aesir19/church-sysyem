@@ -23,6 +23,7 @@ import Card from '../../../src/components/ui/Card.vue'
 import Icon from '../../../src/components/ui/icons/Icon.vue'
 import Input from '../../../src/components/ui/Input.vue'
 import Spinner from '../../../src/components/ui/Spinner.vue'
+import Toggle from '../../../src/components/ui/Toggle.vue'
 import TableSortHeader from '../../../src/components/ui/TableSortHeader.vue'
 import Toast from '../../../src/components/ui/Toast.vue'
 import ToastHost from '../../../src/components/ui/ToastHost.vue'
@@ -69,12 +70,24 @@ describe('Button', () => {
     expect(html).toContain('disabled')
   })
 
+  // The redesign's variant set. `tertiary` is gone and `dangerQuiet` and
+  // `onDark` are new: the mockups put a destructive action BESIDE a safe one in
+  // the edit-member and unsaved-changes footers, which needs a quieter
+  // destructive style than the solid one, and the bulk bar and undo toast sit on
+  // the dark panel where secondary and ghost both disappear.
   it('renders every documented variant without a validator warning', async () => {
-    for (const variant of ['primary', 'secondary', 'tertiary', 'danger', 'ghost']) {
+    for (const variant of ['primary', 'secondary', 'danger', 'dangerQuiet', 'ghost', 'onDark']) {
       const { warnings, html } = await renderWithSlot(Button, { variant }, 'x')
       expect(warnings, variant).toEqual([])
-      expect(html).toContain(`btn-${variant}`)
+      expect(html).toContain(`btn--${variant}`)
     }
+  })
+
+  // A variant outside the set must be refused by the validator rather than
+  // silently rendering an unstyled button.
+  it('warns on a variant that is not in the set', async () => {
+    const { warnings } = await renderWithSlot(Button, { variant: 'tertiary' }, 'x')
+    expect(warnings.length).toBeGreaterThan(0)
   })
 })
 
@@ -138,6 +151,65 @@ describe('Input', () => {
     expect(html).toContain('value="Juan"')
   })
 
+  // `as` renders the element it names. Until this was asserted the test above
+  // passed vacuously: with inheritAttrs off, an unknown `as` simply landed in
+  // $attrs and was painted onto the <input> as a dead attribute, so a caller
+  // asking for a select silently got a text box.
+  it('renders the element named by `as`', async () => {
+    const cases = { input: '<input', textarea: '<textarea', select: '<select' }
+    for (const [as, tag] of Object.entries(cases)) {
+      const { html, errors } = await render(Input, { label: 'Field', as })
+      expect(errors, as).toEqual([])
+      expect(html, as).toContain(tag)
+      // And ONLY that one — a stray second control would take focus and submit
+      // an empty value alongside the real one.
+      for (const [otherAs, otherTag] of Object.entries(cases)) {
+        if (otherAs !== as) expect(html, `${as} also rendered ${otherAs}`).not.toContain(otherTag)
+      }
+    }
+  })
+
+  it('warns on an `as` outside the set rather than rendering something arbitrary', async () => {
+    const { warnings } = await render(Input, { label: 'Field', as: 'div' })
+    expect(warnings.length).toBeGreaterThan(0)
+  })
+
+  it('keeps the label paired to the control whatever `as` renders', async () => {
+    for (const as of ['input', 'textarea', 'select']) {
+      const { html } = await render(Input, { label: 'Reason', as })
+      const forAttr = html.match(/for="([^"]+)"/)?.[1]
+      expect(forAttr, as).toBeTruthy()
+      expect(html, as).toContain(`id="${forAttr}"`)
+    }
+  })
+
+  it('puts the options given to a select inside the select', async () => {
+    const wrapper = {
+      render: () => h(Input, { label: 'Gender', as: 'select', modelValue: 'Female' }, {
+        default: () => [h('option', { value: 'Male' }, 'Male'), h('option', { value: 'Female' }, 'Female')],
+      }),
+    }
+    const { html } = await render(wrapper)
+    const select = html.slice(html.indexOf('<select'), html.indexOf('</select>'))
+    expect(select).toContain('Male')
+    expect(select).toContain('Female')
+    // v-model, not :value. SSR renders neither a `value` attribute nor a
+    // `selected` option for a v-model select — the selection is made by
+    // vModelSelect's mounted hook — so the assertion that matters here is the
+    // NEGATIVE one: a `value` attribute on a <select> does nothing at all in
+    // HTML, and its presence would mean the binding had been changed back to
+    // `:value`, where the selection depends on Vue's mount ordering and an
+    // edited member's gender can silently reset to the first option.
+    expect(select).not.toMatch(/<select[^>]*\svalue=/)
+  })
+
+  it('renders a textarea value as content, which is the only place a textarea keeps it', async () => {
+    const { html } = await render(Input, { label: 'Reason', as: 'textarea', modelValue: 'Moved away' })
+    expect(html).toContain('Moved away')
+    // Never as an attribute: <textarea value="x"> renders an EMPTY box.
+    expect(html).not.toMatch(/<textarea[^>]*\svalue=/)
+  })
+
   it('gives two instances on one page distinct ids', async () => {
     const two = {
       render: () => h('div', [h(Input, { label: 'One' }), h(Input, { label: 'Two' })]),
@@ -170,11 +242,15 @@ describe('TableSortHeader', () => {
 })
 
 describe('Icon', () => {
-  it('renders a path for every name in the set', async () => {
+  // Geometry, not specifically <path>. The icons are lifted verbatim from the
+  // design handoff's own markup, and several are drawn entirely without one:
+  // `overview` is four <rect>s, `statistics` is three <line>s, `dots` is three
+  // <circle>s. Asserting <path> would fail those for being faithful.
+  it('renders geometry for every name in the set', async () => {
     for (const name of ICON_NAMES) {
       const { html, errors } = await render(Icon, { name })
       expect(errors, name).toEqual([])
-      expect(html, name).toContain('<path')
+      expect(html, name).toMatch(/<(path|rect|circle|line|polyline)\b/)
     }
   })
 
@@ -196,11 +272,27 @@ describe('Icon', () => {
 })
 
 describe('Toast', () => {
-  it('renders the message and a dismiss control', async () => {
-    const { html, errors } = await render(Toast, { message: 'Member saved.', type: 'success' })
+  // The payload is now an object rather than a bare string: the mockups' toasts
+  // carry a title, an optional second line, and an optional single action
+  // (Retry / Undo / View).
+  it('renders the title, the body and a dismiss control', async () => {
+    const { html, errors } = await render(Toast, {
+      toast: { id: 1, title: 'Member saved.', body: 'Ramon Villanueva is on the roll.', type: 'success' },
+    })
     expect(errors).toEqual([])
     expect(html).toContain('Member saved.')
-    expect(html).toContain('aria-label="Dismiss"')
+    expect(html).toContain('Ramon Villanueva is on the roll.')
+    expect(html).toContain('aria-label="Dismiss notification"')
+  })
+
+  it('renders the action when one is given, and none when it is not', async () => {
+    const withAction = await render(Toast, {
+      toast: { id: 1, title: 'Could not save.', type: 'error', action: { label: 'Retry' } },
+    })
+    expect(withAction.html).toContain('Retry')
+
+    const without = await render(Toast, { toast: { id: 2, title: 'Saved.', type: 'success' } })
+    expect(without.html).not.toContain('toast__action')
   })
 })
 
@@ -212,6 +304,49 @@ describe('ToastHost', () => {
     // not announced at all — assistive tech has to already be watching it.
     expect(html).toContain('aria-live="polite"')
     expect(html).toContain('role="status"')
+  })
+})
+
+describe('Toggle', () => {
+  // role="switch" announces on/off; a checkbox announces checked/unchecked and
+  // a bare <button> announces nothing about its state at all. These control
+  // whether somebody is recorded as baptized — the state has to be readable
+  // without seeing the knob.
+  it('is a switch that reports its state', async () => {
+    const on = await renderWithSlot(Toggle, { modelValue: true }, 'Baptized')
+    expect(on.errors).toEqual([])
+    expect(on.html).toContain('role="switch"')
+    expect(on.html).toContain('aria-checked="true"')
+    expect(on.html).toContain('Baptized')
+
+    const off = await renderWithSlot(Toggle, { modelValue: false }, 'Baptized')
+    expect(off.html).toContain('aria-checked="false"')
+  })
+
+  // Never omitted when false. An absent aria-checked reads as "not a switch",
+  // which is a different thing from "a switch that is off".
+  it('states aria-checked in both directions rather than omitting it', async () => {
+    const off = await renderWithSlot(Toggle, { modelValue: false }, 'x')
+    expect(off.html).toMatch(/aria-checked="(true|false)"/)
+  })
+
+  it('is a button, so it is reachable and activatable from a keyboard', async () => {
+    const { html } = await renderWithSlot(Toggle, {}, 'x')
+    expect(html).toContain('<button')
+    // Inside a form, a bare <button> submits it.
+    expect(html).toContain('type="button"')
+  })
+
+  it('renders the band variant without changing what it is', async () => {
+    const { html, warnings } = await renderWithSlot(Toggle, { band: true, modelValue: true }, 'Start the journey')
+    expect(warnings).toEqual([])
+    expect(html).toContain('tgl--band')
+    expect(html).toContain('role="switch"')
+  })
+
+  it('disables rather than silently ignoring a click', async () => {
+    const { html } = await renderWithSlot(Toggle, { disabled: true }, 'x')
+    expect(html).toContain('disabled')
   })
 })
 

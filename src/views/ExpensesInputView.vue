@@ -1,565 +1,616 @@
-<template>
-  <div class="page-container">
-    <main class="page-content">
-      <div class="page-header">
-        <div>
-          <h2>Expenses</h2>
-          <p class="page-subtitle">Track church expenses by month</p>
-        </div>
-      </div>
-
-      <FundsTabs />
-
-      <section class="card form-card">
-        <div class="form-heading">
-          <div>
-            <h3 class="form-title">Record Expense</h3>
-            <p class="form-copy">Choose an existing description from this month or create a new one.</p>
-          </div>
-          <div class="month-filter">
-            <label for="expense-month">Month</label>
-            <input id="expense-month" v-model="selectedMonth" type="month" />
-          </div>
-        </div>
-
-        <form class="expense-form" @submit.prevent="handleSubmit">
-          <div class="form-row">
-            <div class="form-group">
-              <label for="spent-on">Date Spent</label>
-              <input id="spent-on" v-model="form.spentOn" type="date" required @change="syncMonthToSpentOn" />
-            </div>
-
-            <div class="form-group">
-              <label for="expense-amount">Amount</label>
-              <input
-                id="expense-amount"
-                v-model.number="form.amount"
-                type="number"
-                min="0.01"
-                step="0.01"
-                placeholder="0.00"
-                required
-              />
-            </div>
-          </div>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label for="expense-description-select">Description</label>
-              <select id="expense-description-select" v-model="form.descriptionChoice" required>
-                <option value="__new__">Create new description</option>
-                <option v-for="label in existingDescriptions" :key="label" :value="label">
-                  {{ label }}
-                </option>
-              </select>
-            </div>
-
-            <div class="form-group" v-if="form.descriptionChoice === '__new__'">
-              <label for="expense-description-new">New Description</label>
-              <input
-                id="expense-description-new"
-                v-model.trim="form.newDescription"
-                type="text"
-                maxlength="120"
-                placeholder="e.g. Electricity"
-                required
-              />
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label for="expense-notes">Notes (optional)</label>
-            <input
-              id="expense-notes"
-              v-model.trim="form.notes"
-              type="text"
-              maxlength="240"
-              placeholder="Optional context"
-            />
-          </div>
-
-          <div class="form-actions">
-            <button class="btn-primary" type="submit" :disabled="saving || !myChurchId">
-              {{ saving ? 'Saving...' : 'Add Expense' }}
-            </button>
-          </div>
-
-          <p v-if="formError" class="form-error">{{ formError }}</p>
-          <p v-if="formSuccess" class="form-success">{{ formSuccess }}</p>
-        </form>
-      </section>
-
-      <section class="card">
-        <header class="section-header">
-          <div>
-            <h3>Monthly Expenses</h3>
-            <span class="section-hint">{{ entries.length }} entries · {{ monthLabel }}</span>
-          </div>
-          <div class="month-total">Total: {{ formatMoney(monthTotal) }}</div>
-        </header>
-
-        <div class="table-wrap">
-          <table v-if="entries.length > 0" class="expenses-table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Description</th>
-                <th>Amount</th>
-                <th>Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="entry in entries" :key="entry.id">
-                <td>{{ formatDisplayDate(entry.spent_on) }}</td>
-                <td>{{ entry.description }}</td>
-                <td class="amount-cell">{{ formatMoney(entry.amount) }}</td>
-                <td>{{ entry.notes || '—' }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <div v-else class="state-message">
-            <p>No expenses recorded for this month yet.</p>
-          </div>
-        </div>
-      </section>
-    </main>
-  </div>
-</template>
-
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '../lib/supabase'
-import { write } from '../lib/data/write'
-import FundsTabs from '../components/FundsTabs.vue'
+import Icon from '../components/ui/icons/Icon.vue'
+import ExpenseForm from '../components/expenses/ExpenseForm.vue'
 import { defaultMonthKey, getMonthRange, monthKeyFromDate } from '../utils/expensesMonth'
+import { summariseByDescription, largestLine, rankDescriptions } from '../utils/expenseStats'
+import { SHARE_OF_TOTAL_FUNDS } from '../utils/collectivesReport'
+import { formatPeso, formatPesoWhole, formatShare } from '../utils/money'
 import { useActiveChurch } from '../composables/useActiveChurch'
+
+// Expenses — what the church spent, charged against its share of the month's
+// allocation.
+//
+// Same shape as Collections, deliberately: form left, month right, one stepper
+// in the header. They are siblings in the flat nine and they are used by the
+// same person on the same afternoon; a treasurer should not have to relearn the
+// screen because the money is going the other way.
+//
+// FundsTabs is gone here too — see the note in CollectionsInputView.
+//
+// NO ROW DETAIL DIALOG, and that is a deliberate omission rather than an
+// oversight. The mockup draws the rows with a pointer cursor, but 0009 grants
+// `expenses` SELECT and INSERT only: there is no UPDATE grant and no DELETE
+// policy at all. An expense, once recorded, is permanent. Offering a row that
+// opens would promise a correction the database will refuse, so the rows do not
+// invite a click and the form says so before the money is saved instead.
+
+const { activeChurchId, ensureLoaded } = useActiveChurch()
 
 const EXPENSE_COLUMNS = 'id, spent_on, description, amount, notes, created_at'
 
-// Church scoping (own church, or the church selected by SuperAdmin / Head Pastor).
-const { activeChurchId, ensureLoaded } = useActiveChurch()
+// How far back the description chips look. Six months of one church's expenses
+// is a couple of hundred rows of a single short column — the cheapest way to
+// have last month's wording on hand in a month that is still empty.
+const CHIP_MONTHS = 6
 
-const selectedMonth = ref(defaultMonthKey())
-const myChurchId = activeChurchId
-const currentUserId = ref('')
+const month = ref(defaultMonthKey())
 const entries = ref([])
-const saving = ref(false)
-const formError = ref('')
-const formSuccess = ref('')
-
-const form = ref({
-  spentOn: new Date().toISOString().slice(0, 10),
-  amount: null,
-  descriptionChoice: '__new__',
-  newDescription: '',
-  notes: '',
-})
+const descriptionHistory = ref([])
+const collectionsTotal = ref(null)
+const currentUserId = ref('')
+const loading = ref(true)
+const errorMessage = ref('')
 
 const monthLabel = computed(() => {
-  const [year, month] = selectedMonth.value.split('-')
-  if (!year || !month) return ''
-  const monthIndex = Number(month) - 1
-  const monthDate = new Date(Number(year), monthIndex, 1)
-  return monthDate.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })
+  const [year, m] = month.value.split('-')
+  if (!year || !m) return ''
+  return new Date(Number(year), Number(m) - 1, 1)
+    .toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })
 })
 
-const existingDescriptions = computed(() => {
-  const labels = new Set()
-  for (const entry of entries.value) {
-    const text = String(entry.description || '').trim()
-    if (text) labels.add(text)
-  }
-  return Array.from(labels.values()).sort((a, b) => a.localeCompare(b))
+const total = computed(() => entries.value.reduce((sum, row) => sum + Number(row.amount || 0), 0))
+
+const byDescription = computed(() => summariseByDescription(entries.value))
+
+const recentDescriptions = computed(() => rankDescriptions(descriptionHistory.value))
+
+// The church's own share of the month, against which these expenses are drawn:
+// 40% of total funds collected. NOMINAL, per the note in collectivesReport —
+// the realised share drifts with the student-programme draw, and the tile is
+// describing the rule, not one month's rounding.
+const churchShare = computed(() =>
+  collectionsTotal.value === null ? null : collectionsTotal.value * SHARE_OF_TOTAL_FUNDS.church
+)
+
+const top = computed(() => largestLine(entries.value))
+
+const kpis = computed(() => {
+  const descriptions = byDescription.value.length
+  const share = churchShare.value
+
+  return [
+    {
+      key: 'spent',
+      label: 'Spent this month',
+      value: formatPesoWhole(total.value),
+      sub: `${entries.value.length} ${entries.value.length === 1 ? 'entry' : 'entries'} · ${descriptions} ${descriptions === 1 ? 'description' : 'descriptions'}`,
+      tone: 'ink'
+    },
+    {
+      key: 'allocation',
+      label: 'Against allocation',
+      // An em dash, not "0.0%": with nothing collected there is no allocation
+      // to be a fraction of, and 0% would read as "nothing has been spent".
+      value: share && share > 0 ? formatShare(total.value, share) : '—',
+      sub: share && share > 0
+        ? `of the ${formatPesoWhole(share)} church share`
+        : 'No collections recorded this month',
+      // Magenta is the colour of a figure here; a lone magenta em dash reads as
+      // an error rather than as "nothing to measure yet".
+      tone: share && share > 0 ? 'magenta' : 'ink'
+    },
+    {
+      key: 'largest',
+      label: 'Largest line',
+      value: top.value ? top.value.description : '—',
+      sub: top.value ? `${formatPeso(top.value.amount)} · ${(top.value.share * 100).toFixed(1)}%` : '',
+      tone: 'ink',
+      text: true
+    }
+  ]
 })
 
-const monthTotal = computed(() => {
-  return entries.value.reduce((sum, row) => sum + Number(row.amount || 0), 0)
-})
-
-watch(selectedMonth, async () => {
-  await loadMonthEntries()
-
-  if (form.value.descriptionChoice !== '__new__' && !existingDescriptions.value.includes(form.value.descriptionChoice)) {
-    form.value.descriptionChoice = '__new__'
-  }
-})
-
-onMounted(async () => {
-  await ensureLoaded()
-  await Promise.all([fetchCurrentUser(), loadMonthEntries()])
-})
-
-// Reload when the active church changes (church selector).
-watch(activeChurchId, async () => {
-  if (activeChurchId.value) await loadMonthEntries()
-})
-
-async function fetchCurrentUser() {
-  const { data: authData } = await supabase.auth.getUser()
-  currentUserId.value = authData?.user?.id || ''
+function shiftMonth (delta) {
+  const [year, m] = month.value.split('-').map(Number)
+  const date = new Date(year, m - 1 + delta, 1)
+  month.value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
-async function loadMonthEntries() {
-  formError.value = ''
-  const range = getMonthRange(selectedMonth.value)
-  if (!range) {
-    entries.value = []
-    return
-  }
+function formatDate (value) {
+  if (!value) return ''
+  // Explicit local midnight — the bare string parses as UTC and renders the day
+  // before for the first eight hours of every Manila day (D8).
+  return new Date(`${value}T00:00:00`).toLocaleDateString('en-PH', {
+    month: 'short',
+    day: 'numeric'
+  })
+}
 
-  if (!myChurchId.value) {
+async function fetchCurrentUser () {
+  const { data } = await supabase.auth.getUser()
+  currentUserId.value = data?.user?.id || ''
+}
+
+async function loadEntries () {
+  loading.value = true
+  errorMessage.value = ''
+
+  const range = getMonthRange(month.value)
+  if (!range || !activeChurchId.value) {
     entries.value = []
+    loading.value = false
     return
   }
 
   const { data, error } = await supabase
     .from('expenses')
     .select(EXPENSE_COLUMNS)
-    .eq('from_church', myChurchId.value)
+    // Explicit church filter: RLS returns every church's rows to a SuperAdmin,
+    // so the scope has to be stated here as well.
+    .eq('from_church', activeChurchId.value)
     .gte('spent_on', range.start)
     .lt('spent_on', range.endExclusive)
     .order('spent_on', { ascending: false })
     .order('created_at', { ascending: false })
 
   if (error) {
-    formError.value = `Failed to load expenses: ${error.message}`
+    errorMessage.value = 'Failed to load this month’s expenses. Please try again.'
+    entries.value = []
+    loading.value = false
     return
   }
 
   entries.value = data || []
+  loading.value = false
 }
 
-function syncMonthToSpentOn() {
-  const monthFromDate = monthKeyFromDate(form.value.spentOn)
-  if (monthFromDate) {
-    selectedMonth.value = monthFromDate
-  }
-}
-
-function resolveDescription() {
-  if (form.value.descriptionChoice === '__new__') {
-    return form.value.newDescription.trim()
-  }
-  return form.value.descriptionChoice.trim()
-}
-
-async function handleSubmit() {
-  formError.value = ''
-  formSuccess.value = ''
-
-  const description = resolveDescription()
-  const amount = Number(form.value.amount)
-
-  if (!form.value.spentOn || !description) {
-    formError.value = 'Date and description are required.'
+// Only the amounts, and only for the visible month: enough to size the church
+// share, without pulling a month of contributor rows onto a screen that never
+// shows a name.
+async function loadCollectionsTotal () {
+  const range = getMonthRange(month.value)
+  if (!range || !activeChurchId.value) {
+    collectionsTotal.value = null
     return
   }
 
-  if (!Number.isFinite(amount) || amount <= 0) {
-    formError.value = 'Amount must be greater than 0.'
+  const { data, error } = await supabase
+    .from('collections')
+    .select('amount')
+    .eq('from_church', activeChurchId.value)
+    .gte('collectedOn', range.start)
+    .lt('collectedOn', range.endExclusive)
+
+  // null, not 0 — an unreadable month and an empty one are different facts, and
+  // the tile says so.
+  collectionsTotal.value = error ? null : (data || []).reduce((sum, r) => sum + Number(r.amount || 0), 0)
+}
+
+async function loadDescriptionHistory () {
+  if (!activeChurchId.value) {
+    descriptionHistory.value = []
     return
   }
 
-  if (!myChurchId.value) {
-    formError.value = 'Unable to save expense without church context.'
-    return
-  }
+  const since = new Date()
+  since.setMonth(since.getMonth() - CHIP_MONTHS)
+  const start = `${since.getFullYear()}-${String(since.getMonth() + 1).padStart(2, '0')}-01`
 
-  saving.value = true
-  const payload = {
-    from_church: myChurchId.value,
-    spent_on: form.value.spentOn,
-    description,
-    amount,
-    notes: form.value.notes ? form.value.notes.trim() : null,
-    created_by: currentUserId.value || null,
-  }
+  const { data, error } = await supabase
+    .from('expenses')
+    .select('description')
+    .eq('from_church', activeChurchId.value)
+    .gte('spent_on', start)
 
-  const result = await write(
-    supabase.from('expenses').insert(payload),
-    {
-      columns: EXPENSE_COLUMNS,
-      messages: { blocked: 'That expense could not be saved. It may belong to another church.' },
-    }
-  )
-
-  saving.value = false
-
-  if (!result.ok) {
-    formError.value = result.message
-    return
-  }
-
-  const inserted = result.rows[0]
-  const insertedMonth = monthKeyFromDate(inserted.spent_on)
-  if (insertedMonth === selectedMonth.value) {
-    entries.value.unshift(inserted)
-  }
-
-  formSuccess.value = `Added expense: ${inserted.description}.`
-  form.value.amount = null
-  form.value.notes = ''
-
-  if (form.value.descriptionChoice === '__new__') {
-    form.value.newDescription = ''
-  }
-
-  window.setTimeout(() => {
-    formSuccess.value = ''
-  }, 2500)
+  descriptionHistory.value = error ? [] : (data || [])
 }
 
-function formatMoney(value) {
-  const amount = Number(value || 0)
-  return 'PHP ' + amount.toLocaleString('en-PH', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
+function onSaved (row) {
+  // An expense saved into another month is not dropped silently — the month
+  // follows the entry, so what was just typed is visible where it landed.
+  if (monthKeyFromDate(row.spent_on) !== month.value) {
+    month.value = monthKeyFromDate(row.spent_on)
+  } else {
+    entries.value = [row, ...entries.value]
+  }
+  descriptionHistory.value = [{ description: row.description }, ...descriptionHistory.value]
 }
 
-function formatDisplayDate(dateStr) {
-  if (!dateStr) return ''
-  const date = new Date(`${dateStr}T00:00:00`)
-  if (Number.isNaN(date.getTime())) return dateStr
-  return date.toLocaleDateString('en-PH', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })
-}
+onMounted(async () => {
+  await ensureLoaded()
+  await Promise.all([
+    fetchCurrentUser(),
+    loadEntries(),
+    loadCollectionsTotal(),
+    loadDescriptionHistory()
+  ])
+})
+
+watch(month, async () => {
+  await Promise.all([loadEntries(), loadCollectionsTotal()])
+})
+
+watch(activeChurchId, async () => {
+  if (!activeChurchId.value) return
+  await Promise.all([loadEntries(), loadCollectionsTotal(), loadDescriptionHistory()])
+})
 </script>
 
+<template>
+  <div class="exp">
+    <header
+      class="exp__head anim-rise"
+      style="--i: 0"
+    >
+      <div class="exp__title-block">
+        <h1 class="exp__title">
+          Expenses
+        </h1>
+        <p class="exp__sub">
+          Charged against the church share of the allocation
+        </p>
+      </div>
+
+      <div class="exp__month">
+        <button
+          type="button"
+          class="exp__step"
+          aria-label="Previous month"
+          @click="shiftMonth(-1)"
+        >
+          <Icon
+            name="chevronLeft"
+            :size="15"
+          />
+        </button>
+        <span class="exp__month-label">{{ monthLabel }}</span>
+        <button
+          type="button"
+          class="exp__step"
+          aria-label="Next month"
+          @click="shiftMonth(1)"
+        >
+          <Icon
+            name="chevronRight"
+            :size="15"
+          />
+        </button>
+      </div>
+    </header>
+
+    <div class="exp__grid">
+      <div
+        class="anim-rise"
+        style="--i: 1"
+      >
+        <ExpenseForm
+          :church-id="activeChurchId"
+          :created-by="currentUserId"
+          :recent-descriptions="recentDescriptions"
+          @saved="onSaved"
+        />
+      </div>
+
+      <div class="exp__right">
+        <div class="exp__kpis">
+          <div
+            v-for="(k, i) in kpis"
+            :key="k.key"
+            class="exp__kpi anim-rise"
+            :style="`--i: ${i + 2}`"
+          >
+            <span class="exp__kpi-label">{{ k.label }}</span>
+            <span
+              class="exp__kpi-value"
+              :class="[`exp__kpi-value--${k.tone}`, { 'exp__kpi-value--text': k.text }]"
+            >{{ k.value }}</span>
+            <span class="exp__kpi-sub">{{ k.sub }}</span>
+          </div>
+        </div>
+
+        <section
+          v-if="byDescription.length"
+          class="exp__card exp__card--pad anim-rise"
+          style="--i: 5"
+        >
+          <h2 class="exp__card-title">
+            By description
+          </h2>
+          <ul class="exp__bars">
+            <li
+              v-for="(line, i) in byDescription"
+              :key="line.description"
+              class="exp__bar-row"
+            >
+              <span class="exp__bar-label">{{ line.description }}</span>
+              <span class="exp__bar-track">
+                <span
+                  class="exp__bar-fill anim-grow"
+                  :style="`width: ${line.width}; --i: ${i}`"
+                />
+              </span>
+              <span class="exp__bar-amount">{{ formatPeso(line.amount) }}</span>
+            </li>
+          </ul>
+        </section>
+
+        <section
+          class="exp__card anim-rise"
+          style="--i: 6"
+        >
+          <div class="exp__card-head">
+            <h2 class="exp__card-title">
+              Monthly expenses
+            </h2>
+            <span class="exp__card-meta">
+              {{ entries.length }} {{ entries.length === 1 ? 'entry' : 'entries' }} · {{ formatPeso(total) }}
+            </span>
+          </div>
+
+          <p
+            v-if="errorMessage"
+            class="exp__error"
+            role="alert"
+          >
+            {{ errorMessage }}
+          </p>
+
+          <div
+            v-else-if="loading"
+            class="exp__rows"
+          >
+            <div
+              v-for="n in 5"
+              :key="n"
+              class="skeleton exp__row-skeleton"
+            />
+          </div>
+
+          <p
+            v-else-if="!entries.length"
+            class="exp__empty"
+          >
+            Nothing recorded for {{ monthLabel }} yet.
+          </p>
+
+          <table
+            v-else
+            class="exp__table"
+          >
+            <thead>
+              <tr>
+                <th scope="col">
+                  Date
+                </th>
+                <th scope="col">
+                  Description
+                </th>
+                <th scope="col">
+                  Notes
+                </th>
+                <th
+                  scope="col"
+                  class="exp__num"
+                >
+                  Amount
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="entry in entries"
+                :key="entry.id"
+              >
+                <td class="exp__date">
+                  {{ formatDate(entry.spent_on) }}
+                </td>
+                <td class="exp__desc">
+                  {{ entry.description }}
+                </td>
+                <td :class="{ 'exp__no-note': !entry.notes }">
+                  {{ entry.notes || '—' }}
+                </td>
+                <td class="exp__num exp__amount">
+                  {{ formatPeso(entry.amount) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+    </div>
+  </div>
+</template>
+
 <style scoped>
-.page-container {
-  padding: 24px 32px;
-  background: #f8fafc;
-  min-height: 100vh;
+.exp { display: flex; flex-direction: column; gap: var(--sp-20); }
+
+.exp__head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-16); }
+.exp__title-block { display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; }
+
+.exp__title {
+  font-size: var(--text-h1);
+  font-weight: 800;
+  letter-spacing: var(--tracking-h1);
+  line-height: var(--leading-h1);
 }
 
-.page-content {
-  max-width: 1280px;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
+.exp__sub { font-size: var(--text-body); color: var(--ink-4); }
 
-.page-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.page-header h2 {
-  font-size: 24px;
-  font-weight: 700;
-  color: #0f172a;
-  letter-spacing: -0.02em;
-}
-
-.page-subtitle {
-  color: #64748b;
-  font-size: 14px;
-  margin-top: 4px;
-}
-
-.card {
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
-  padding: 24px;
-}
-
-.form-card {
-  border-left: 4px solid #1a56db;
-}
-
-.form-heading {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 18px;
-}
-
-.form-title {
-  font-size: 1rem;
-  font-weight: 700;
-  color: #1e293b;
-}
-
-.form-copy {
-  margin-top: 4px;
-  font-size: 0.8125rem;
-  color: #64748b;
-}
-
-.month-filter {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.month-filter label {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #64748b;
-  font-weight: 700;
-}
-
-.month-filter input {
-  border: 1px solid #dbe3ef;
-  border-radius: 8px;
-  padding: 8px 10px;
-  background: #f8fafc;
-}
-
-.expense-form {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.form-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
-.form-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.form-group label {
-  font-size: 0.8125rem;
-  font-weight: 700;
-  color: #475569;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.form-group input,
-.form-group select {
-  padding: 10px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 0.9375rem;
-  color: #1e293b;
-  background: #f8fafc;
-}
-
-.form-group input:focus,
-.form-group select:focus {
-  outline: none;
-  border-color: #1a56db;
-  box-shadow: 0 0 0 3px rgba(26, 86, 219, 0.1);
-}
-
-.form-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.btn-primary {
-  padding: 10px 20px;
-  background: #1a56db;
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  font-size: 0.875rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.btn-primary:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.section-header {
-  display: flex;
-  justify-content: space-between;
+/* --- Month stepper ------------------------------------------------------ */
+.exp__month {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
-  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  background: var(--surface);
 }
 
-.section-header h3 {
-  font-size: 1rem;
-  font-weight: 700;
-  color: #1e293b;
+.exp__step {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--r-tag);
+  background: none;
+  color: var(--ink-4);
+  cursor: pointer;
+  transition: background-color var(--dur-state) ease, color var(--dur-state) ease;
+}
+.exp__step:hover { background: var(--divider); color: var(--ink); }
+.exp__step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.exp__month-label { padding: 0 var(--sp-10); font-size: var(--text-body-sm); font-weight: 800; color: var(--ink); }
+
+/* --- Layout ------------------------------------------------------------- */
+.exp__grid { display: grid; grid-template-columns: 344px 1fr; gap: var(--sp-18); align-items: start; }
+.exp__right { display: flex; flex-direction: column; gap: var(--sp-18); min-width: 0; }
+
+.exp__kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-14); }
+
+.exp__kpi {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-8);
+  padding: var(--sp-16);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-inset);
+  box-shadow: var(--shadow-card);
 }
 
-.section-hint {
-  font-size: 0.8125rem;
-  color: #64748b;
-}
+.exp__kpi-label { font-size: var(--text-meta-sm); font-weight: 700; color: var(--ink-4); }
 
-.month-total {
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: #1e293b;
-}
-
-.table-wrap {
-  overflow-x: auto;
-}
-
-.expenses-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
-
-.expenses-table th,
-.expenses-table td {
-  border-bottom: 1px solid #e2e8f0;
-  padding: 10px 8px;
-  text-align: left;
-}
-
-.expenses-table th {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #64748b;
-}
-
-.amount-cell {
+.exp__kpi-value {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
-  color: #dc2626;
+}
+.exp__kpi-value--ink { color: var(--ink); }
+.exp__kpi-value--magenta { color: var(--magenta); }
+/* "Electricity" is a word, not a figure: tabular digits and tight tracking are
+   for numbers, and a long description has to be allowed to wrap. */
+.exp__kpi-value--text {
+  font-variant-numeric: normal;
+  letter-spacing: var(--tracking-h2);
+  overflow-wrap: anywhere;
+}
+
+.exp__kpi-sub { font-size: var(--text-meta-sm); color: var(--ink-5); min-height: 1em; }
+
+/* --- Cards -------------------------------------------------------------- */
+.exp__card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.exp__card--pad { padding: var(--sp-20); }
+
+.exp__card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-12);
+  padding: var(--sp-14) var(--sp-20);
+  border-bottom: 1px solid var(--divider);
+}
+
+.exp__card-title { font-size: var(--text-h2); font-weight: 800; letter-spacing: var(--tracking-h2); }
+.exp__card-meta { font-size: var(--text-meta); color: var(--ink-5); }
+
+/* --- By description ----------------------------------------------------- */
+.exp__bars { list-style: none; margin: var(--sp-14) 0 0; padding: 0; display: flex; flex-direction: column; }
+
+.exp__bar-row { display: flex; align-items: center; gap: var(--sp-12); padding: var(--sp-6) 0; }
+
+.exp__bar-label {
+  width: 96px;
+  flex: none;
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exp__bar-track {
+  flex: 1;
+  min-width: 0;
+  height: 9px;
+  border-radius: var(--r-pill);
+  background: var(--divider);
+  overflow: hidden;
+}
+
+.exp__bar-fill { display: block; height: 100%; background: var(--magenta); transform-origin: left; }
+
+.exp__bar-amount {
+  width: 88px;
+  flex: none;
+  text-align: right;
+  font-size: var(--text-body-sm);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+/* --- The table ---------------------------------------------------------- */
+.exp__table { width: 100%; border-collapse: collapse; }
+
+.exp__table th {
+  text-align: left;
+  padding: var(--sp-10) var(--sp-20);
+  background: var(--surface-subtle);
+  border-bottom: 1px solid var(--divider);
+  font-size: var(--text-meta-sm);
   font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--ink-5);
 }
 
-.state-message {
-  text-align: center;
-  color: #64748b;
-  padding: 22px 8px;
+.exp__table td {
+  padding: var(--sp-10) var(--sp-20);
+  border-bottom: 1px solid var(--divider);
+  font-size: var(--text-body-sm);
+  color: var(--ink-4);
+}
+.exp__table tr:last-child td { border-bottom: 0; }
+
+.exp__date { color: var(--ink-4); white-space: nowrap; }
+.exp__desc { font-weight: 700; color: var(--ink); }
+.exp__no-note { color: var(--ink-6); }
+
+.exp__num { text-align: right; }
+.exp__amount { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--magenta-darkest); }
+
+.exp__rows { display: flex; flex-direction: column; }
+.exp__row-skeleton { height: 46px; border-radius: 0; }
+
+.exp__empty { padding: var(--sp-22) var(--sp-20); font-size: var(--text-body-sm); color: var(--ink-5); }
+
+.exp__error {
+  margin: var(--sp-16) var(--sp-20);
+  padding: var(--sp-10) var(--sp-12);
+  border-radius: var(--r-inset);
+  background: var(--magenta-tint);
+  border: 1px solid var(--magenta-border);
+  font-size: var(--text-body-sm);
+  color: var(--magenta-darkest);
 }
 
-.form-error {
-  color: #dc2626;
-  font-size: 0.8125rem;
+@media (max-width: 900px) {
+  .exp__grid { grid-template-columns: 1fr; }
+  .exp__head { flex-direction: column; align-items: stretch; gap: var(--sp-12); }
+  .exp__month { align-self: flex-start; }
 }
 
-.form-success {
-  color: #0f766e;
-  font-size: 0.8125rem;
-}
-
-@media (max-width: 720px) {
-  .page-container {
-    padding: 20px 12px;
-  }
-
-  .form-row {
-    grid-template-columns: 1fr;
-  }
+@media (max-width: 620px) {
+  .exp__kpis { grid-template-columns: 1fr; }
+  .exp__bar-label { width: 72px; }
+  .exp__bar-amount { width: 76px; }
+  /* The note is the first thing to go on a phone: the date, what it was and
+     how much are the row. */
+  .exp__table th:nth-child(3),
+  .exp__table td:nth-child(3) { display: none; }
 }
 </style>

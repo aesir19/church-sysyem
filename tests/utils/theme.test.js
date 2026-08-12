@@ -1,10 +1,23 @@
+// Theme resolution.
+//
+// REWRITTEN FOR A THREE-STATE MODEL. The previous suite tested two themes and a
+// `nextTheme` toggle. The mockups' profile page offers Light / Dark / System and
+// makes System the default, so `system` is now a stored value in its own right
+// rather than the absence of one. Every behaviour the old suite defended is
+// still asserted below — the storage key, explicit-beats-system, an
+// unrecognised value not becoming a third theme, and hostile storage not
+// throwing — plus the one the new model adds, which is that `system` must reach
+// the DOM as NO attribute rather than as the literal string.
+
 import { describe, expect, it } from 'vitest'
 import {
   THEME_STORAGE_KEY,
-  nextTheme,
+  THEMES,
+  isTheme,
   readStoredTheme,
+  writeStoredTheme,
   resolveTheme,
-  storeTheme,
+  applyTheme,
 } from '../../src/utils/theme.js'
 
 /** Minimal stand-in for localStorage, matching tests/utils/checkinMemory.test.js. */
@@ -32,120 +45,115 @@ function hostileStorage() {
   }
 }
 
+/** Enough of an Element to see what applyTheme did. */
+function fakeRoot() {
+  const attrs = new Map()
+  return {
+    setAttribute: (k, v) => attrs.set(k, v),
+    removeAttribute: (k) => attrs.delete(k),
+    getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+    has: (k) => attrs.has(k),
+  }
+}
+
 describe('THEME_STORAGE_KEY', () => {
-  // Load-bearing, not cosmetic: this exact key is on
-  // sessionCleanup.js's do-not-clear list alongside udfc.checkin.recorded, so a
-  // theme preference outlives a sign-out. That list will name the key as a
-  // string; if this constant drifts, the two stop referring to the same thing
-  // and sign-out silently starts resetting the theme.
+  // Load-bearing, not cosmetic: this exact identifier is imported by
+  // sessionCleanup.js to build SESSION_SURVIVING_KEYS, so a theme preference
+  // outlives a sign-out. Renaming the export does not fail a build — the import
+  // resolves to undefined and sign-out quietly starts wiping the theme.
   it('is the key the do-not-clear list names', () => {
     expect(THEME_STORAGE_KEY).toBe('udfc.theme')
   })
 })
 
-describe('resolveTheme', () => {
-  it('prefers an explicit stored choice over the system setting', () => {
-    const dark = fakeStorage({ [THEME_STORAGE_KEY]: 'dark' })
-    expect(resolveTheme(dark, false)).toBe('dark')
-
-    const light = fakeStorage({ [THEME_STORAGE_KEY]: 'light' })
-    expect(resolveTheme(light, true)).toBe('light')
+describe('isTheme', () => {
+  it('accepts exactly the three states', () => {
+    expect(THEMES).toEqual(['light', 'dark', 'system'])
+    for (const t of THEMES) expect(isTheme(t)).toBe(true)
   })
 
-  it('follows the system setting when nothing has been chosen', () => {
-    expect(resolveTheme(fakeStorage(), true)).toBe('dark')
-    expect(resolveTheme(fakeStorage(), false)).toBe('light')
-  })
-
-  // A value that is not one of the two themes is not a third theme. Passing it
-  // through would put an unknown string on <html data-theme>, which matches no
-  // block in tokens.css and renders the light palette while claiming otherwise.
-  it('treats an unrecognised stored value as no choice at all', () => {
-    const junk = fakeStorage({ [THEME_STORAGE_KEY]: 'midnight' })
-    expect(resolveTheme(junk, true)).toBe('dark')
-    expect(resolveTheme(junk, false)).toBe('light')
-  })
-
-  it('is case-sensitive rather than guessing at intent', () => {
-    const shouty = fakeStorage({ [THEME_STORAGE_KEY]: 'DARK' })
-    expect(resolveTheme(shouty, false)).toBe('light')
-  })
-
-  it('falls back to the system setting when storage is unavailable', () => {
-    expect(resolveTheme(hostileStorage(), true)).toBe('dark')
-    expect(resolveTheme(undefined, true)).toBe('dark')
-    expect(resolveTheme(undefined, false)).toBe('light')
-  })
-
-  // matchMedia is absent in SSR and in the node test environment. Treating
-  // "unknown" as light is the safe default: it is the palette every view is
-  // authored against.
-  it('defaults to light when the system preference is unknown', () => {
-    expect(resolveTheme(fakeStorage(), undefined)).toBe('light')
-    expect(resolveTheme(fakeStorage(), null)).toBe('light')
+  it('rejects anything else, including the empty string and null', () => {
+    for (const bad of ['Dark', 'auto', '', null, undefined, 0]) {
+      expect(isTheme(bad)).toBe(false)
+    }
   })
 })
 
 describe('readStoredTheme', () => {
-  it('reports null when no choice has been made', () => {
-    expect(readStoredTheme(fakeStorage())).toBeNull()
-  })
-
   it('reports the stored choice', () => {
     expect(readStoredTheme(fakeStorage({ [THEME_STORAGE_KEY]: 'dark' }))).toBe('dark')
+    expect(readStoredTheme(fakeStorage({ [THEME_STORAGE_KEY]: 'light' }))).toBe('light')
   })
 
-  it('reports null for an unrecognised value', () => {
-    expect(readStoredTheme(fakeStorage({ [THEME_STORAGE_KEY]: 'midnight' }))).toBeNull()
+  // `system` is the default because it is the honest answer to "what do you
+  // want" before anyone has said. It is NOT a third colour scheme.
+  it('falls back to system when no choice has been made', () => {
+    expect(readStoredTheme(fakeStorage())).toBe('system')
   })
 
-  it('reports null rather than throwing when storage is unavailable', () => {
-    expect(readStoredTheme(hostileStorage())).toBeNull()
-    expect(readStoredTheme(undefined)).toBeNull()
+  it('falls back to system for an unrecognised value rather than trusting it', () => {
+    expect(readStoredTheme(fakeStorage({ [THEME_STORAGE_KEY]: 'midnight' }))).toBe('system')
+  })
+
+  it('falls back to system rather than throwing when storage is unavailable', () => {
+    expect(() => readStoredTheme(hostileStorage())).not.toThrow()
+    expect(readStoredTheme(hostileStorage())).toBe('system')
   })
 })
 
-describe('storeTheme', () => {
-  it('persists a choice that resolveTheme then reads back', () => {
+describe('writeStoredTheme', () => {
+  it('persists a choice that readStoredTheme then reads back', () => {
     const storage = fakeStorage()
-    storeTheme(storage, 'dark')
-    expect(resolveTheme(storage, false)).toBe('dark')
+    expect(writeStoredTheme('dark', storage)).toBe(true)
+    expect(readStoredTheme(storage)).toBe('dark')
   })
 
   it('refuses to write a value that is not a theme', () => {
     const storage = fakeStorage()
-    storeTheme(storage, 'midnight')
-    expect(storage.getItem(THEME_STORAGE_KEY)).toBeNull()
+    expect(writeStoredTheme('midnight', storage)).toBe(false)
+    expect(readStoredTheme(storage)).toBe('system')
   })
 
-  it('returns the theme now in effect', () => {
-    expect(storeTheme(fakeStorage(), 'dark')).toBe('dark')
-    expect(storeTheme(fakeStorage(), 'midnight')).toBeNull()
-  })
-
-  // A theme preference is the least important thing in the app. Losing it must
-  // never take a page down with it.
-  it('fails soft when the write is refused', () => {
-    expect(() => storeTheme(hostileStorage(), 'dark')).not.toThrow()
-    expect(() => storeTheme(undefined, 'dark')).not.toThrow()
+  it('reports failure rather than throwing when storage is unavailable', () => {
+    expect(() => writeStoredTheme('dark', hostileStorage())).not.toThrow()
+    expect(writeStoredTheme('dark', hostileStorage())).toBe(false)
   })
 })
 
-describe('nextTheme', () => {
-  it('toggles between the two themes', () => {
-    expect(nextTheme('light')).toBe('dark')
-    expect(nextTheme('dark')).toBe('light')
+describe('resolveTheme', () => {
+  it('prefers an explicit choice over the system setting', () => {
+    expect(resolveTheme('dark', false)).toBe('dark')
+    expect(resolveTheme('light', true)).toBe('light')
   })
 
-  it('round-trips', () => {
-    expect(nextTheme(nextTheme('light'))).toBe('light')
+  it('follows the system setting when the choice is system', () => {
+    expect(resolveTheme('system', true)).toBe('dark')
+    expect(resolveTheme('system', false)).toBe('light')
+  })
+})
+
+describe('applyTheme', () => {
+  it('stamps an explicit choice onto the root', () => {
+    const root = fakeRoot()
+    applyTheme('dark', root)
+    expect(root.getAttribute('data-theme')).toBe('dark')
+    applyTheme('light', root)
+    expect(root.getAttribute('data-theme')).toBe('light')
   })
 
-  // The toggle is rendered against whatever is currently applied. If that is
-  // ever unknown, offering "dark" is the useful move — the user is looking at
-  // the light palette by default.
-  it('treats an unknown current theme as light', () => {
-    expect(nextTheme(undefined)).toBe('dark')
-    expect(nextTheme('midnight')).toBe('dark')
+  // THE ONE THAT MATTERS. tokens.css expresses `system` as the ABSENCE of the
+  // attribute — dark is declared under `prefers-color-scheme` guarded by
+  // `:not([data-theme="light"])`. Writing the literal string "system" would land
+  // on a selector that matches nothing and pin every such user to light.
+  it('removes the attribute for system rather than writing the word', () => {
+    const root = fakeRoot()
+    applyTheme('dark', root)
+    applyTheme('system', root)
+    expect(root.has('data-theme')).toBe(false)
+    expect(root.getAttribute('data-theme')).toBe(null)
+  })
+
+  it('does nothing, and does not throw, without a root', () => {
+    expect(() => applyTheme('dark', null)).not.toThrow()
   })
 })

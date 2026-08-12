@@ -1,193 +1,260 @@
-// SSR smoke coverage for the Phase 1 shell and auth chrome.
+// SSR smoke coverage for the redesigned shell and auth chrome.
 //
 // Same constraints as tests/components/ui/primitives.test.js: no
 // @vue/test-utils, no DOM, so these render through vue/server-renderer. What is
 // asserted is the wiring that fails silently — a nav slot that links to a
-// screen that does not exist, an icon injected as markup, a footer note that
-// cannot be overridden.
+// screen that does not exist, a permission-gated item that vanishes instead of
+// explaining itself, an alert that announces at the wrong urgency.
 
 import { describe, expect, it, vi } from 'vitest'
 import { createSSRApp, h } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 
-// AppSidebar reaches useCurrentRole, which reaches the Supabase client at
-// import time. Nothing here needs a real one.
+// AppSidebar reaches useCurrentRole and useCurrentUser, both of which reach the
+// Supabase client at import time. Nothing here needs a real one.
+const permissions = { current: null }
+
 vi.mock('../../src/lib/supabase', () => ({
   supabase: {
     auth: {
-      getUser: () => Promise.resolve({ data: { user: null } }),
+      getUser: () => Promise.resolve({ data: { user: { email: 'grace.abad@udfc.org', user_metadata: {} } } }),
       onAuthStateChange: () => {},
       signOut: () => Promise.resolve({ error: null }),
     },
-    rpc: () => Promise.resolve({ data: null, maybeSingle: () => ({ data: null }) }),
+    rpc: () => ({
+      maybeSingle: () => Promise.resolve({ data: permissions.current }),
+      then: (resolve) => resolve({ data: [] }),
+    }),
   },
 }))
 
+// AppSidebar imports RouterLink by name rather than resolving it globally, so a
+// globally registered stub would never be reached. Replacing the module export
+// is what actually substitutes it.
+vi.mock('vue-router', () => ({
+  RouterLink: {
+    props: ['to'],
+    render() {
+      return h('a', { href: this.to, class: 'nav-item' }, this.$slots.default?.())
+    },
+  },
+  useRoute: () => currentRoute.value,
+  useRouter: () => ({ push: () => {} }),
+}))
+
+// AppTabBar decides which tab is current from the route, so the stub has to be
+// steerable rather than fixed.
+const currentRoute = { value: { fullPath: '/dashboard/overview', path: '/dashboard/overview' } }
+
 const AppSidebar = (await import('../../src/components/AppSidebar.vue')).default
+const AppTabBar = (await import('../../src/components/AppTabBar.vue')).default
 const AuthShell = (await import('../../src/components/AuthShell.vue')).default
 const Alert = (await import('../../src/components/ui/Alert.vue')).default
 const Input = (await import('../../src/components/ui/Input.vue')).default
 
-/** `router-link` is not registered outside a real router. */
-const ROUTER_LINK_STUB = {
-  props: ['to'],
-  render() {
-    return h('a', { href: this.to, class: 'nav-item' }, this.$slots.default?.())
-  },
-}
-
-async function render(component, props = {}, slots = {}) {
-  const app = createSSRApp(component, props)
-  app.component('RouterLink', ROUTER_LINK_STUB)
+// Slots go through a wrapper render function rather than renderToString's
+// second argument, which only reaches a root component's slots in some
+// configurations and silently drops them otherwise.
+async function render(component, props = {}, slots = null) {
+  const app = createSSRApp({
+    render: () => (slots ? h(component, props, slots) : h(component, props)),
+  })
   const errors = []
   const warnings = []
   app.config.errorHandler = (err) => errors.push(err)
   app.config.warnHandler = (msg) => warnings.push(msg)
-  const html = await renderToString(app, slots)
+  const html = await renderToString(app)
   return { html, errors, warnings }
 }
 
+// SSR escapes the apostrophe, so the raw string never appears in the output.
+const NAV_LABELS = [
+  'Overview', 'Members', 'Groups', 'Attendance',
+  'Collections', 'Expenses', 'Funds', 'Statistics', 'What&#39;s next',
+]
+
 describe('AppSidebar', () => {
   it('renders the nav without error', async () => {
-    const { errors, warnings } = await render(AppSidebar, { userName: 'Grace' })
+    const { errors, warnings } = await render(AppSidebar)
     expect(errors).toEqual([])
     expect(warnings).toEqual([])
   })
 
-  it('greets the signed-in user, and says User when the name has not arrived', async () => {
-    expect((await render(AppSidebar, { userName: 'Grace' })).html).toContain('Hello, Grace!')
-    expect((await render(AppSidebar)).html).toContain('Hello, User!')
-  })
-
-  // The point of the migration. Every icon used to be a string of SVG markup
-  // interpolated with v-html — the latent sink SECURITY.md §4.1 flags. If a
-  // future edit reintroduces one, the glyph renders identically and only this
-  // fails.
-  it('draws its icons as real <path> elements, never through v-html', async () => {
+  it('renders all nine nav items', async () => {
     const { html } = await render(AppSidebar)
-    expect(html).toContain('<path')
-    expect(html).toContain('<svg')
-    // The old strings carried their own width/height attributes on the svg,
-    // which Icon.vue binds instead. A literal `<svg xmlns=` inside a `<span>`
-    // is what v-html output looked like.
-    expect(html).not.toMatch(/<span[^>]*class="nav-icon"[^>]*><svg/)
-  })
-
-  // The IA ships whole so the sidebar stops churning, but a slot
-  // with no screen behind it must not be activatable. `aria-disabled` on an
-  // <a href> still lets a keyboard user follow it; a disabled <button> does not.
-  it('renders the unbuilt screens as disabled buttons badged Soon, not as links', async () => {
-    const { html } = await render(AppSidebar)
-
-    // The apostrophe arrives HTML-escaped, as it should.
-    for (const label of ['Overview', 'Statistics', 'What&#39;s next']) {
+    for (const label of NAV_LABELS) {
       expect(html, label).toContain(label)
     }
-    expect(html).toContain('Soon')
-    expect(html).not.toContain('href="/dashboard/overview"')
+  })
+
+  // THE RULE CHANGED, DELIBERATELY. The previous shell HID capability-gated
+  // items from a caller who lacked the capability. The design handoff is
+  // explicit that a permission failure is never silent — "show the no-access
+  // state with Request access" — and a nav that quietly shortens itself teaches
+  // a Secretariat user that Collections does not exist rather than that it is
+  // not theirs. So the item renders, carries a lock, and the screen behind it
+  // does the explaining.
+  it('renders capability-gated items for a caller with no permissions, marked rather than hidden', async () => {
+    permissions.current = null
+    const { html } = await render(AppSidebar)
+
+    for (const label of ['Attendance', 'Collections', 'Expenses', 'Funds']) {
+      expect(html, label).toContain(label)
+    }
+    expect(html).toContain('side__lock')
+  })
+
+  it('renders an unbuilt screen as a non-link badged Soon', async () => {
+    const { html } = await render(AppSidebar)
+    // Statistics has no route yet, so it must not be an anchor pointing nowhere.
     expect(html).not.toContain('href="/dashboard/statistics"')
-    expect(html).not.toContain('href="/dashboard/whats-next"')
-
-    const soonButtons = html.match(/nav-item-soon/g) ?? []
-    expect(soonButtons.length).toBe(3)
+    expect(html).toContain('Soon')
+    expect(html).toContain('New')
   })
 
-  // Presentation only — RLS is the enforcement (ADR-0001). With no session the
-  // capability flags are all false, which is the case that must not leak a
-  // finance or attendance link.
-  it('hides capability-gated items from a caller with no permissions', async () => {
+  it('links every built screen to a route that exists', async () => {
     const { html } = await render(AppSidebar)
+    for (const path of [
+      '/dashboard/overview', '/dashboard/members', '/dashboard/groups',
+      '/dashboard/attendance', '/dashboard/collections', '/dashboard/expenses',
+      '/dashboard/funds', '/dashboard/whats-next',
+    ]) {
+      expect(html, path).toContain(`href="${path}"`)
+    }
+  })
+})
 
-    expect(html).toContain('Members')
-    expect(html).toContain('Groups')
-    expect(html).not.toContain('Attendance')
-    expect(html).not.toContain('Collections')
-    expect(html).not.toContain('Expenses')
+describe('AppTabBar', () => {
+  it('renders five targets: four routes and More', async () => {
+    const { html, errors, warnings } = await render(AppTabBar)
+
+    expect(errors).toEqual([])
+    expect(warnings).toEqual([])
+    for (const label of ['Home', 'People', 'Check in', 'Funds', 'More']) {
+      expect(html, label).toContain(label)
+    }
   })
 
-  it('labels the theme toggle with the action it performs', async () => {
-    const { html } = await render(AppSidebar)
-    // Not "Theme" or an unlabelled sun: the control has to say what pressing
-    // it does, since the icon alone is ambiguous about which state it shows.
-    expect(html).toContain('Switch to dark theme')
+  // Same rule the sidebar states: a permission failure is never silent. A bar
+  // that dropped Check in would teach four of the seven roles that this app has
+  // no attendance, rather than that it is not theirs.
+  it('marks capability-gated tabs rather than hiding them', async () => {
+    permissions.current = null
+    const { html } = await render(AppTabBar)
+
+    expect(html).toContain('Check in')
+    expect(html).toContain('Funds')
+    expect(html).toContain('is-locked')
+    expect(html).toContain('tabs__lock')
+  })
+
+  it('points every tab at a route that exists', async () => {
+    const { html } = await render(AppTabBar)
+    for (const path of [
+      '/dashboard/overview', '/dashboard/members',
+      '/dashboard/attendance', '/dashboard/funds',
+    ]) {
+      expect(html, path).toContain(`href="${path}"`)
+    }
+  })
+
+  // Groups, Collections, Expenses and What's next have no tab of their own. The
+  // bar must still show where you are, or a phone user on Groups sees five dark
+  // tabs and no answer to "where am I".
+  it('marks More as current on a screen with no tab of its own', async () => {
+    currentRoute.value = { fullPath: '/dashboard/groups', path: '/dashboard/groups' }
+    const { html } = await render(AppTabBar)
+    expect(html).toContain('is-current')
+
+    currentRoute.value = { fullPath: '/dashboard/overview', path: '/dashboard/overview' }
+    const onTabbed = await render(AppTabBar)
+    expect(onTabbed.html).not.toContain('is-current')
+  })
+
+  it('marks More as current while the drawer is open', async () => {
+    const { html } = await render(AppTabBar, { menuOpen: true })
+    expect(html).toContain('is-current')
+    expect(html).toContain('aria-expanded="true"')
   })
 })
 
 describe('AuthShell', () => {
-  it('renders the mark, the heading and the standing footer note', async () => {
-    const { html, errors, warnings } = await render(AuthShell, { title: 'UDFC Dashboard' })
+  it('renders the mark, the heading and the slotted content', async () => {
+    const { html, errors } = await render(
+      AuthShell,
+      { title: 'Welcome back', subtitle: 'Sign in to the UDFC dashboard.' },
+      { default: () => h('p', 'form goes here') },
+    )
     expect(errors).toEqual([])
-    expect(warnings).toEqual([])
-    expect(html).toContain('UDFC Dashboard')
-    expect(html).toContain('United Door of Faith Church')
-    expect(html).toContain('Protected system for authorized church staff only.')
+    expect(html).toContain('Welcome back')
+    expect(html).toContain('Sign in to the UDFC dashboard.')
+    expect(html).toContain('form goes here')
+    // The mark is inline SVG, never an <img> — there is no photography anywhere
+    // in this app and nothing should start fetching one.
+    expect(html).toContain('<svg')
+    expect(html).not.toContain('<img')
   })
 
-  it('lets a page replace the footer note', async () => {
-    const host = {
-      render: () =>
-        h(AuthShell, { title: '404' }, { footer: () => h('p', 'United Door of Faith Church') }),
-    }
-    const { html } = await render(host)
-    expect(html).not.toContain('Protected system')
-  })
+  it('renders the footnote slot when given one, and nothing when not', async () => {
+    const withNote = await render(
+      AuthShell,
+      { title: 'x' },
+      { footnote: () => 'Protected system for authorised church staff only.' },
+    )
+    expect(withNote.html).toContain('Protected system for authorised church staff only.')
 
-  it('carries no hardcoded hex, so the whole family follows the theme', async () => {
-    const { html } = await render(AuthShell, { title: 'Set Your Password' })
-    expect(html).not.toMatch(/#[0-9a-f]{6}/i)
+    const without = await render(AuthShell, { title: 'x' })
+    expect(without.html).not.toContain('auth__foot')
   })
 })
 
 describe('Alert', () => {
-  it('announces an error assertively and a standing note not at all', async () => {
-    const asError = {
-      render: () => h(Alert, { tone: 'error' }, { default: () => 'Invalid login credentials' }),
-    }
-    const { html, warnings } = await render(asError)
-    expect(warnings).toEqual([])
-    expect(html).toContain('role="alert"')
-    expect(html).toContain('Invalid login credentials')
+  // Urgency is chosen from the tone rather than hardcoded. Announcing a
+  // "check-in is open" banner as assertively as an offline warning trains
+  // people to ignore both.
+  it('announces a failure assertively and a standing note politely', async () => {
+    const danger = await render(Alert, { tone: 'danger' }, { default: () => 'You are offline.' })
+    expect(danger.html).toContain('aria-live="assertive"')
 
-    // A permanent informational block that interrupts the screen reader every
-    // time the page renders is worse than one that waits to be read.
-    const asInfo = { render: () => h(Alert, { tone: 'info' }, { default: () => 'Waiting.' }) }
-    expect((await render(asInfo)).html).not.toContain('role="alert"')
+    const neutral = await render(Alert, { tone: 'neutral' }, { default: () => 'View only.' })
+    expect(neutral.html).toContain('aria-live="polite"')
   })
 
-  it('renders every documented tone with its own icon', async () => {
-    for (const tone of ['info', 'success', 'warning', 'error']) {
-      const host = { render: () => h(Alert, { tone }, { default: () => 'x' }) }
-      const { html, warnings } = await render(host)
+  it('renders every documented tone without a validator warning', async () => {
+    for (const tone of ['neutral', 'live', 'warning', 'danger', 'success']) {
+      const { warnings, errors } = await render(Alert, { tone }, { default: () => 'x' })
       expect(warnings, tone).toEqual([])
-      expect(html, tone).toContain(`alert-${tone}`)
-      expect(html, tone).toContain('<path')
+      expect(errors, tone).toEqual([])
     }
+  })
+
+  it('offers a dismiss control only when it is dismissible', async () => {
+    const on = await render(Alert, { tone: 'success', dismissible: true }, { default: () => 'x' })
+    expect(on.html).toContain('Dismiss')
+
+    const off = await render(Alert, { tone: 'success' }, { default: () => 'x' })
+    expect(off.html).not.toContain('alert__dismiss')
   })
 })
 
-describe('Input attribute passthrough', () => {
-  // Regression. The wrapper is a <div>, so without `inheritAttrs: false` every
-  // unnamed attribute landed on IT: `autocomplete="current-password"` on a
-  // div is ignored silently, and the password manager simply stops filling
-  // the form. Nothing about the rendered page looks wrong.
+describe('Input', () => {
+  // Regression guard. The root of this component is a wrapper <div>, so with
+  // Vue's default attribute fallthrough every undeclared attribute lands there
+  // and silently does nothing — a password field with minlength="12" happily
+  // accepts four characters, with no error and no warning.
   it('puts autocomplete and minlength on the control, not the wrapper', async () => {
-    const host = {
-      render: () =>
-        h(Input, {
-          label: 'Password',
-          type: 'password',
-          autocomplete: 'current-password',
-          minlength: '8',
-        }),
-    }
-    const { html } = await render(host)
+    const { html } = await render(Input, {
+      label: 'New password',
+      type: 'password',
+      autocomplete: 'new-password',
+      minlength: 12,
+    })
 
-    // `<input\s`, not `<input`: SSR renders the SFC's comments into the markup
-    // and one of them names `<input>` in prose.
-    const control = html.match(/<input\s[^>]*>/)?.[0]
-    expect(control).toBeTruthy()
-    expect(control).toContain('autocomplete="current-password"')
-    expect(control).toContain('minlength="8"')
-    expect(html).not.toMatch(/<div[^>]*autocomplete=/)
+    const input = html.slice(html.indexOf('<input'))
+    expect(input).toContain('autocomplete="new-password"')
+    expect(input).toContain('minlength="12"')
+
+    const wrapper = html.slice(0, html.indexOf('<input'))
+    expect(wrapper).not.toContain('minlength=')
   })
 })

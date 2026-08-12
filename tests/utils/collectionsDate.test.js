@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { getDefaultServiceDate, isWithinEditWindow, formatDateISO } from '../../src/utils/collectionsDate'
+import {
+  getDefaultServiceDate,
+  isWithinEditWindow,
+  formatDateISO,
+  recentServiceDates,
+  formatServiceDateShort,
+} from '../../src/utils/collectionsDate'
 
 describe('getDefaultServiceDate', () => {
   it('returns today when today is Sunday (day 0)', () => {
@@ -35,6 +41,62 @@ describe('getDefaultServiceDate', () => {
   it('returns previous Sunday when today is Thursday (day 4)', () => {
     const thursday = new Date('2026-07-02T10:00:00') // July 2 2026 is a Thursday
     expect(getDefaultServiceDate(thursday)).toBe('2026-06-28')
+  })
+})
+
+describe('recentServiceDates', () => {
+  it('leads with the default service date', () => {
+    const wednesday = new Date('2026-07-01T10:00:00')
+    expect(recentServiceDates({ today: wednesday })[0]).toBe('2026-06-28')
+  })
+
+  it('walks back a Sunday at a time', () => {
+    const sunday = new Date('2026-08-02T10:00:00')
+    expect(recentServiceDates({ today: sunday })).toEqual([
+      '2026-08-02',
+      '2026-07-26',
+      '2026-07-19',
+      '2026-07-12',
+    ])
+  })
+
+  // The case that makes stepping back from the PILL rather than from today
+  // matter: on a Friday the first pill is Friday itself, and the one before it
+  // is the Sunday five days earlier — not the Sunday before that.
+  it('follows a Friday default with the Sunday of that same week', () => {
+    const friday = new Date('2026-07-31T10:00:00')
+    const dates = recentServiceDates({ today: friday })
+    expect(dates[0]).toBe('2026-07-31')
+    expect(dates[1]).toBe('2026-07-26')
+  })
+
+  it('honours the requested count', () => {
+    const sunday = new Date('2026-08-02T10:00:00')
+    expect(recentServiceDates({ today: sunday, count: 2 })).toEqual(['2026-08-02', '2026-07-26'])
+  })
+
+  it('crosses a month and a year boundary correctly', () => {
+    const newYear = new Date('2027-01-03T10:00:00') // a Sunday
+    expect(recentServiceDates({ today: newYear, count: 3 })).toEqual([
+      '2027-01-03',
+      '2026-12-27',
+      '2026-12-20',
+    ])
+  })
+})
+
+describe('formatServiceDateShort', () => {
+  // D8 again: the bare string parses as UTC midnight, which is the day before
+  // in Manila for eight hours out of every day.
+  it('renders the date itself, not the day before it', () => {
+    expect(formatServiceDateShort('2026-08-02')).toBe('Aug 2')
+    expect(formatServiceDateShort('2026-01-01')).toBe('Jan 1')
+  })
+
+  it('renders nothing for a missing or unparseable date', () => {
+    expect(formatServiceDateShort('')).toBe('')
+    expect(formatServiceDateShort(null)).toBe('')
+    expect(formatServiceDateShort('nope')).toBe('')
   })
 })
 

@@ -45,34 +45,40 @@ const routes = [
     component: () => import('../layouts/DashboardLayout.vue'),
     meta: { requiresAuth: true },
     children: [
-      { path: '', redirect: '/dashboard/members' },
-      // Members and Ministry carry no capability gate: baseline users may view the
-      // directory and groups. What they cannot do (open PII detail, manage members)
-      // is gated inside the views. requiresCapability names a boolean key of the
-      // derived capabilities (src/utils/capabilities.js) and is enforced below.
-      { path: 'members', name: 'Members', component: () => import('../views/DashboardView.vue') },
-      { path: 'ministry', name: 'Ministry', component: () => import('../views/MinistrySmallGroupView.vue') },
+      { path: '', redirect: '/dashboard/overview' },
+
+      // THE FLAT NINE. The design's information architecture puts Collections,
+      // Expenses and Funds side by side as top-level siblings rather than
+      // nesting the first two inside the third behind a tab bar, and calls the
+      // groups screen "Groups" rather than "Ministry". IA is part of a design,
+      // not a detail underneath it, so it moves with the rest of the redesign.
+      //
+      // Members and Groups carry no capability gate: baseline users may view the
+      // directory and groups. What they cannot do (open PII detail, manage
+      // members) is gated inside the views. requiresCapability names a boolean
+      // key of the derived capabilities (src/utils/capabilities.js).
+      { path: 'overview', name: 'Overview', component: () => import('../views/OverviewView.vue') },
+      // `framed` hands the whole content frame to the view — no page padding
+      // and no shell scroll — because this screen owns a second full-height
+      // column (the member detail rail) that has to reach the top and bottom
+      // edges and scroll independently of the table. A view that only stacks
+      // blocks should never set it.
+      { path: 'members', name: 'Members', component: () => import('../views/MembersView.vue'), meta: { framed: true } },
+      { path: 'groups', name: 'Groups', component: () => import('../views/GroupsView.vue') },
       { path: 'attendance', name: 'Attendance', component: () => import('../views/AttendanceView.vue'), meta: { requiresCapability: 'canViewAttendance' } },
-      { path: 'funds', redirect: '/dashboard/funds/reports' },
-      { path: 'funds/reports', name: 'ChurchFunds', component: () => import('../views/ChurchFundsView.vue'), meta: { requiresCapability: 'canViewFinance' } },
-      { path: 'funds/collections', name: 'Collections', component: () => import('../views/CollectionsInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } },
-      { path: 'funds/expenses', name: 'Expenses', component: () => import('../views/ExpensesInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } }
+      { path: 'collections', name: 'Collections', component: () => import('../views/CollectionsInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } },
+      { path: 'expenses', name: 'Expenses', component: () => import('../views/ExpensesInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } },
+      { path: 'funds', name: 'ChurchFunds', component: () => import('../views/ChurchFundsView.vue'), meta: { requiresCapability: 'canViewFinance' } },
+      { path: 'whats-next', name: 'WhatsNext', component: () => import('../views/WhatsNextView.vue') },
+
+      // The old paths, kept as redirects. Someone has these bookmarked, and a
+      // dead bookmark is indistinguishable from a broken app.
+      { path: 'ministry', redirect: '/dashboard/groups' },
+      { path: 'funds/reports', redirect: '/dashboard/funds' },
+      { path: 'funds/collections', redirect: '/dashboard/collections' },
+      { path: 'funds/expenses', redirect: '/dashboard/expenses' }
     ]
   },
-  // The style-guide route exists only in `npm run dev`.
-  // `import.meta.env.DEV` is statically replaced by Vite, so in a production
-  // build this spreads an empty array and the `() => import(...)` inside it is
-  // unreachable — Rollup drops the view and its chunk entirely. The cost of
-  // having a rendered component preview is therefore exactly zero bytes to
-  // every real user, which is what priority 1 requires. No `meta.requiresAuth`:
-  // it renders no data and reaches no table.
-  ...(import.meta.env.DEV
-    ? [{
-        path: '/dev/style-guide',
-        name: 'StyleGuide',
-        component: () => import('../views/dev/StyleGuideView.vue')
-      }]
-    : []),
   {
     // Catch-all. Closes docs/DEFECTS.md D13: an unmatched path used to render a
     // blank white page. That stopped being cosmetic the moment check-in URLs
