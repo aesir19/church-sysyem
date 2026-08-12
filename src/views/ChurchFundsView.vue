@@ -1193,7 +1193,12 @@ function afterCollapse (el) {
 .fun__table tbody tr:hover th[scope='row'],
 .fun__table tbody tr:hover td { background: var(--surface-subtle-2); }
 
-.fun__num { text-align: right; white-space: nowrap; }
+/* The header selector has to be at least as specific as `.fun__table
+   th[scope='col']`, which sets text-align: left for the Metric column. Without
+   the th here, every money column's heading sat left while its figures sat
+   right — the one alignment error a table of money cannot afford. */
+.fun__num,
+.fun__table th[scope='col'].fun__num { text-align: right; white-space: nowrap; }
 
 /* The month column is the answer the whole row builds to. */
 .fun__month-col { color: var(--accent-darkest); font-weight: 800; }
