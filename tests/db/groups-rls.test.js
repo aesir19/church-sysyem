@@ -11,8 +11,8 @@
 
 import { describe, it, expect, afterAll } from 'vitest'
 import {
-  hasDatabase, withRollback, asPrincipal, asAnonymousAuthenticated, asOwner,
-  refused, isAuthorizationFailure, disconnect
+  hasDatabase, withRollback, asPrincipal, asAnonymousAuthenticated, asAnon, asOwner,
+  refusalMessage, isAuthorizationFailure, disconnect
 } from './helpers/database.js'
 import {
   makeChurch, makeMember, makePrincipal, makeMinistry, makeSmallGroup,
@@ -117,6 +117,24 @@ describe.skipIf(!hasDatabase())('groups — who can see what', () => {
       expect(seen.has(w.ministry)).toBe(false)
     })
   })
+
+  it('gives the public role no access to either table', async () => {
+    // `anon` is a different Postgres role from a claimless `authenticated`, with its own
+    // grants, so the test above says nothing about it. 0009 exists because revoking from
+    // PUBLIC does not remove anon's default EXECUTE — the repo has made this mistake
+    // once already, and the split re-issues every grant on these tables.
+    await withRollback(async tx => {
+      await twoChurchWorld(tx)
+      await asAnon(tx)
+
+      for (const table of ['groups', 'group_members']) {
+        const message = await refusalMessage(tx, () =>
+          tx.$queryRawUnsafe(`SELECT id FROM public.${table}`)
+        )
+        expect(isAuthorizationFailure(message), `anon reading ${table}`).toBe(true)
+      }
+    })
+  })
 })
 
 describe.skipIf(!hasDatabase())('group membership — who can see what', () => {
@@ -135,18 +153,69 @@ describe.skipIf(!hasDatabase())('group membership — who can see what', () => {
     })
   })
 
-  it('hides another church\'s memberships from a Pastor', async () => {
+  it('shows a Head Pastor memberships across churches', async () => {
     await withRollback(async tx => {
       const w = await twoChurchWorld(tx)
       const inA = await addToGroup(tx, w.groupA, w.memberA)
       const inB = await addToGroup(tx, w.groupB, w.memberB)
-      const { accountId } = await makePrincipal(tx, { role: 'pastor', churchId: w.churchA })
+      const { accountId } = await makePrincipal(tx, { role: 'head_pastor', churchId: w.churchA })
+
+      await asPrincipal(tx, accountId)
+      const seen = await visibleMembershipIds(tx)
+
+      expect(seen.has(inA)).toBe(true)
+      expect(seen.has(inB)).toBe(true)
+    })
+  })
+
+  it.each([
+    ['pastor'],
+    ['church_leader']
+  ])('scopes %s to their own church\'s memberships', async role => {
+    await withRollback(async tx => {
+      const w = await twoChurchWorld(tx)
+      const inA = await addToGroup(tx, w.groupA, w.memberA)
+      const inB = await addToGroup(tx, w.groupB, w.memberB)
+      const { accountId } = await makePrincipal(tx, { role, churchId: w.churchA })
 
       await asPrincipal(tx, accountId)
       const seen = await visibleMembershipIds(tx)
 
       expect(seen.has(inA)).toBe(true)
       expect(seen.has(inB)).toBe(false)
+    })
+  })
+
+  it('shows a Finance member their own church only, despite the ministry being global', async () => {
+    // A ministry's rows span every church, so a ministry member is exactly the case
+    // where a scope branch is easy to lose: the group is visible to them, the other
+    // church's people in it are not.
+    await withRollback(async tx => {
+      const w = await twoChurchWorld(tx)
+      const finance = await findSystemMinistry(tx, 'finance')
+      const person = await makePrincipal(tx, { role: 'member', churchId: w.churchA })
+      await addToGroup(tx, finance, person.memberId)
+      const ourside = await addToGroup(tx, finance, w.memberA)
+      const theirside = await addToGroup(tx, finance, w.memberB)
+
+      await asPrincipal(tx, person.accountId)
+      const seen = await visibleMembershipIds(tx)
+
+      expect(seen.has(ourside)).toBe(true)
+      expect(seen.has(theirside)).toBe(false)
+    })
+  })
+
+  it('shows an account with no member record no memberships at all', async () => {
+    await withRollback(async tx => {
+      const w = await twoChurchWorld(tx)
+      const inA = await addToGroup(tx, w.groupA, w.memberA)
+      const { accountId } = await makePrincipal(tx, { role: 'unassigned', churchId: null })
+
+      await asPrincipal(tx, accountId)
+      const seen = await visibleMembershipIds(tx)
+
+      expect(seen.has(inA)).toBe(false)
     })
   })
 })
@@ -174,7 +243,7 @@ describe.skipIf(!hasDatabase())('creating, renaming and deleting a small group',
       const { accountId } = await makePrincipal(tx, { role: 'church_leader', churchId: w.churchA })
 
       await asPrincipal(tx, accountId)
-      const message = await refused(tx, () => tx.$executeRawUnsafe(
+      const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
         `INSERT INTO public.groups (name, type, church_id)
          VALUES ('zz-test-cross-church', 'Small Group', $1::uuid)`,
         w.churchB
@@ -190,7 +259,7 @@ describe.skipIf(!hasDatabase())('creating, renaming and deleting a small group',
       const { accountId } = await makePrincipal(tx, { role: 'pastor', churchId: w.churchA })
 
       await asPrincipal(tx, accountId)
-      const message = await refused(tx, () => tx.$executeRawUnsafe(
+      const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
         `INSERT INTO public.groups (name, type, church_id)
          VALUES ('zz-test-by-pastor', 'Small Group', $1::uuid)`,
         w.churchA
@@ -208,7 +277,7 @@ describe.skipIf(!hasDatabase())('creating, renaming and deleting a small group',
       const { accountId } = await makePrincipal(tx, { role: 'super_admin', churchId: w.churchA })
 
       await asPrincipal(tx, accountId)
-      const message = await refused(tx, () => tx.$executeRawUnsafe(
+      const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
         `INSERT INTO public.groups (name, type) VALUES ('zz-test-new-ministry', 'Ministry')`
       ))
 
@@ -216,35 +285,23 @@ describe.skipIf(!hasDatabase())('creating, renaming and deleting a small group',
     })
   })
 
-  it('lets a Church Leader rename their own church\'s group', async () => {
+  it('lets a Church Leader rename their own church\'s group but not another\'s', async () => {
+    // Both halves in one test on purpose. Renaming another church's group is not an
+    // error — an invisible row is simply not matched — so the negative half alone would
+    // pass just as well if the UPDATE policy were deleted outright. Only the pair
+    // distinguishes "scoped correctly" from "nobody can rename anything".
     await withRollback(async tx => {
       const w = await twoChurchWorld(tx)
       const { accountId } = await makePrincipal(tx, { role: 'church_leader', churchId: w.churchA })
 
       await asPrincipal(tx, accountId)
-      const rows = await tx.$executeRawUnsafe(
-        `UPDATE public.groups SET name = 'zz-test-renamed' WHERE id = $1::uuid`,
-        w.groupA
-      )
 
-      expect(rows).toBe(1)
-    })
-  })
-
-  it('silently touches nothing when renaming another church\'s group', async () => {
-    // Not an error: an invisible row is simply not matched. Asserting the row count is
-    // the only way to tell this apart from a successful write.
-    await withRollback(async tx => {
-      const w = await twoChurchWorld(tx)
-      const { accountId } = await makePrincipal(tx, { role: 'church_leader', churchId: w.churchA })
-
-      await asPrincipal(tx, accountId)
-      const rows = await tx.$executeRawUnsafe(
-        `UPDATE public.groups SET name = 'zz-test-should-not-happen' WHERE id = $1::uuid`,
-        w.groupB
-      )
-
-      expect(rows).toBe(0)
+      expect(await tx.$executeRawUnsafe(
+        `UPDATE public.groups SET name = 'zz-test-should-not-happen' WHERE id = $1::uuid`, w.groupB
+      )).toBe(0)
+      expect(await tx.$executeRawUnsafe(
+        `UPDATE public.groups SET name = 'zz-test-renamed' WHERE id = $1::uuid`, w.groupA
+      )).toBe(1)
     })
   })
 
@@ -283,7 +340,7 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
       const { accountId } = await makePrincipal(tx, { role: 'pastor', churchId: w.churchA })
 
       await asPrincipal(tx, accountId)
-      const message = await refused(tx, () => tx.$executeRawUnsafe(
+      const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
         `INSERT INTO public.group_members (group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
         w.ministry, w.memberA
       ))
@@ -304,7 +361,7 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
       const leader = await makePrincipal(tx, { role: 'church_leader', churchId: w.churchA })
 
       await asPrincipal(tx, leader.accountId)
-      const message = await refused(tx, () => tx.$executeRawUnsafe(
+      const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
         `INSERT INTO public.group_members (group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
         finance, w.memberA
       ))
@@ -320,13 +377,17 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
     })
   })
 
-  it('refuses adding another church\'s member to a small group', async () => {
+  it('refuses a Church Leader reaching outside their own church', async () => {
+    // Named for what it actually exercises. The refusal comes from the church scope —
+    // is_member_in_my_church — and NOT from group_accepts_member: delete that function
+    // entirely and this still passes. The Super Admin twin below is the one that
+    // reaches the church-consistency rule, because Super Admin skips the scope branch.
     await withRollback(async tx => {
       const w = await twoChurchWorld(tx)
       const { accountId } = await makePrincipal(tx, { role: 'church_leader', churchId: w.churchA })
 
       await asPrincipal(tx, accountId)
-      const message = await refused(tx, () => tx.$executeRawUnsafe(
+      const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
         `INSERT INTO public.group_members (group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
         w.groupA, w.memberB
       ))
@@ -343,7 +404,7 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
       const { accountId } = await makePrincipal(tx, { role: 'super_admin', churchId: w.churchA })
 
       await asPrincipal(tx, accountId)
-      const message = await refused(tx, () => tx.$executeRawUnsafe(
+      const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
         `INSERT INTO public.group_members (group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
         w.groupB, w.memberA
       ))
@@ -352,8 +413,10 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
     })
   })
 
-  it('lets a Super Admin add a member to their own church\'s small group in any church', async () => {
+  it('lets a Super Admin add a member to a small group in a church that is not theirs', async () => {
     await withRollback(async tx => {
+      // The admin belongs to church A; both the group and the member are church B's.
+      // Cross-church reach and church-consistency in one statement.
       const w = await twoChurchWorld(tx)
       const { accountId } = await makePrincipal(tx, { role: 'super_admin', churchId: w.churchA })
 
@@ -373,7 +436,7 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
       const { accountId } = await makePrincipal(tx, { role: 'unassigned', churchId: null })
 
       await asPrincipal(tx, accountId)
-      const message = await refused(tx, () => tx.$executeRawUnsafe(
+      const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
         `INSERT INTO public.group_members (group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
         w.ministry, w.memberA
       ))

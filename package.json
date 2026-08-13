@@ -27,8 +27,7 @@
     "seed:redesign": "node scripts/prisma/with-env-file.js .env.staging npm run seed:redesign:run",
     "seed:redesign:run": "node scripts/prisma/db-execute.js scripts/sql/seed-staging-redesign.sql",
     "deploy:prod": "npx --yes netlify-cli@27.1.0 deploy --prod --dir=dist --no-build",
-    "test:db": "node scripts/prisma/with-env-file.js .env.staging npm run test:db:run",
-    "test:db:run": "vitest run tests/db --testTimeout=60000"
+    "test:db": "node scripts/prisma/with-env-file.js .env.staging node scripts/run-db-tests.js"
   },
   "dependencies": {
     "@fontsource-variable/manrope": "^5.3.0",

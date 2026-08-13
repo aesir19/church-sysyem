@@ -12,15 +12,31 @@ import {
   hasDatabase, withRollback, asPrincipal, asAnonymousAuthenticated, asOwner, disconnect
 } from './helpers/database.js'
 import {
-  makeChurch, makeMember, makePrincipal, makeMinistry, makeSmallGroup,
-  addToGroup, findSystemMinistry
+  makeChurch, makeMember, makePrincipal, makeMinistry, makeKeyedMinistry,
+  makeSmallGroup, addToGroup, findSystemMinistry
 } from './helpers/fixtures.js'
 
 afterAll(disconnect)
 
-/** Evaluate a no-argument boolean predicate as the current principal. */
-async function predicate (tx, name) {
-  const [row] = await tx.$queryRawUnsafe(`SELECT public.${name}() AS value`)
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Evaluate a boolean predicate as the current principal.
+ *
+ * Postgres will not resolve an overload from an untyped parameter, so every argument
+ * needs an explicit cast: `is_finance_group($1)` fails with 42883 where
+ * `is_finance_group($1::uuid)` succeeds. Between the two argument shapes any predicate
+ * here takes — a group id and a ministry key — the id is a uuid and the key never can
+ * be ('finance', 'secretariat', 'welcome', or a zz-test- slug), so matching the uuid
+ * shape decides it unambiguously.
+ */
+async function predicate (tx, name, ...args) {
+  const placeholders = args
+    .map((arg, i) => `$${i + 1}::${UUID_SHAPE.test(arg) ? 'uuid' : 'text'}`)
+    .join(', ')
+  const [row] = await tx.$queryRawUnsafe(
+    `SELECT public.${name}(${placeholders}) AS value`, ...args
+  )
   return row.value
 }
 
@@ -50,27 +66,30 @@ describe.skipIf(!hasDatabase())('ministry membership decides ministry roles', ()
     })
   })
 
-  it('does not let renaming the Finance ministry change who has finance access', async () => {
+  it('does not let renaming a ministry change who holds its role', async () => {
     // Defect D4. Authorization keys on the immutable ministry_key, never the display
     // name, so a rename cannot grant or revoke anything. The split moves this column to
     // another table, which is exactly when a rewrite might reach for `name` again.
+    //
+    // Deliberately on a throwaway slug rather than the real Finance ministry: renaming
+    // a seeded, global row that the rest of the system authorizes against takes a lock
+    // on it, and this suite runs against staging.
     await withRollback(async tx => {
       const church = await makeChurch(tx)
-      const finance = await findSystemMinistry(tx, 'finance')
-      const treasurer = await makePrincipal(tx, { role: 'member', churchId: church })
-      await addToGroup(tx, finance, treasurer.memberId)
+      const { id, ministryKey } = await makeKeyedMinistry(tx)
+      const holder = await makePrincipal(tx, { role: 'member', churchId: church })
+      await addToGroup(tx, id, holder.memberId)
 
-      await asPrincipal(tx, treasurer.accountId)
-      expect(await predicate(tx, 'is_finance_member')).toBe(true)
+      await asPrincipal(tx, holder.accountId)
+      expect(await predicate(tx, 'is_in_ministry', ministryKey)).toBe(true)
 
       await asOwner(tx)
       await tx.$executeRawUnsafe(
-        `UPDATE public.groups SET name = 'zz-test-renamed-finance' WHERE id = $1::uuid`,
-        finance
+        `UPDATE public.groups SET name = 'zz-test-renamed-ministry' WHERE id = $1::uuid`, id
       )
 
-      await asPrincipal(tx, treasurer.accountId)
-      expect(await predicate(tx, 'is_finance_member')).toBe(true)
+      await asPrincipal(tx, holder.accountId)
+      expect(await predicate(tx, 'is_in_ministry', ministryKey)).toBe(true)
     })
   })
 
@@ -83,14 +102,10 @@ describe.skipIf(!hasDatabase())('ministry membership decides ministry roles', ()
       const { accountId } = await makePrincipal(tx, { role: 'super_admin', churchId: church })
 
       await asPrincipal(tx, accountId)
-      const check = async id => {
-        const [row] = await tx.$queryRawUnsafe(`SELECT public.is_finance_group($1::uuid) AS value`, id)
-        return row.value
-      }
 
-      expect(await check(finance)).toBe(true)
-      expect(await check(otherMinistry)).toBe(false)
-      expect(await check(smallGroup)).toBe(false)
+      expect(await predicate(tx, 'is_finance_group', finance)).toBe(true)
+      expect(await predicate(tx, 'is_finance_group', otherMinistry)).toBe(false)
+      expect(await predicate(tx, 'is_finance_group', smallGroup)).toBe(false)
     })
   })
 })

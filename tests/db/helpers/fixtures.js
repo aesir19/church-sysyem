@@ -43,8 +43,8 @@ export async function makeMember (tx, churchId, label = 'member') {
  * role. Church comes from the member record and is never stored on the account —
  * that is the model, not a shortcut.
  *
- * `role: null` produces the unlinked baseline: an account that can sign in and has no
- * member and no role, which is what every new sign-up is until an admin acts.
+ * Pass `churchId: null` for the unlinked baseline: an account that can sign in and has
+ * no member record, which is what every new sign-up is until an admin acts.
  */
 export async function makePrincipal (tx, { role = 'member', churchId = null, memberId = null } = {}) {
   const accountId = randomUUID()
@@ -62,7 +62,7 @@ export async function makePrincipal (tx, { role = 'member', churchId = null, mem
      ON CONFLICT (id) DO UPDATE SET member_id = EXCLUDED.member_id, role = EXCLUDED.role`,
     accountId,
     linkedMember,
-    role ?? 'unassigned'
+    role
   )
 
   return { accountId, memberId: linkedMember }
@@ -84,6 +84,21 @@ export async function makeMinistry (tx, { label = 'ministry', ministryKey = null
     ministryKey
   )
   return row.id
+}
+
+/**
+ * A ministry carrying its own throwaway authorization slug.
+ *
+ * For testing the slug mechanism itself without touching Finance / Secretariat /
+ * Welcome. Those three are seeded, global, and shared with whatever else is using the
+ * database; renaming one — even inside a transaction that rolls back — takes a lock on
+ * a row the rest of the system authorizes against, which is a needless thing to do to
+ * a live environment.
+ */
+export async function makeKeyedMinistry (tx, label = 'keyed') {
+  const ministryKey = `zz-test-key-${nonce()}`
+  const id = await makeMinistry(tx, { label, ministryKey })
+  return { id, ministryKey }
 }
 
 /** A small group belonging to one church. */
@@ -118,7 +133,11 @@ export async function findSystemMinistry (tx, ministryKey) {
     `SELECT id FROM public.groups WHERE ministry_key = $1`,
     ministryKey
   )
-  return row?.id ?? null
+  // Throw rather than return null. A test that silently proceeds with an undefined
+  // group id asserts something other than what it claims to, and in a permissions
+  // suite that is the failure mode worth being loud about.
+  if (!row) throw new Error(`no ministry with key '${ministryKey}' — 0014 should have seeded it`)
+  return row.id
 }
 
 /** Ids of the groups the current principal can see. Order-independent by design. */

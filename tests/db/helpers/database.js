@@ -23,17 +23,55 @@
 // mode and hands out a different backend per transaction, which breaks `SET LOCAL`
 // and interactive transactions — the same reason scripts/prisma/db-execute.js exists.
 //
-// ON DEMAND, NOT IN CI. Rule 1 makes CI minutes a cost. `npm test` skips this whole
-// directory when no database URL is present; `npm run test:db` supplies one from
-// .env.staging.
+// ON DEMAND, NOT IN CI. Rule 1 makes CI minutes a cost. `npm run test:db` runs this
+// directory against .env.staging; `npm test` never does.
+//
+// THE OPT-IN IS A SAFETY GATE, NOT A CONVENIENCE. It would be easier to run whenever a
+// connection string happens to be present, and that is precisely the hole
+// scripts/prisma/with-env-file.js was written to close: dotenv never overwrites a
+// variable already in process.env, so an exported DATABASE_URL wins over every env
+// file, and "realistically, that is production". vitest.config.js globs
+// `tests/**/*.test.js`, so this directory is in the default suite — keyed on the
+// presence of a URL alone, a developer with DATABASE_URL exported would have had
+// `npm test` create auth users and rename the Finance ministry on production. Rolled
+// back, but holding locks on production and one defect away from not rolling back.
+// Fail closed (rule 2): run only when someone deliberately asked, via `npm run test:db`.
 
 import { PrismaClient } from '@prisma/client'
 
-const url = process.env.DIRECT_URL || process.env.DATABASE_URL
+// Set by the test:db script and by nothing else. Ambient environment cannot turn this
+// suite on.
+const requested = process.env.RUN_DB_TESTS === '1'
 
-/** Skip gate. `describe.skipIf(!hasDatabase())` keeps `npm test` green offline. */
+// DIRECT_URL specifically, with no fallback to DATABASE_URL. The pooler runs in
+// transaction mode and hands out a different backend per transaction, which breaks
+// `SET LOCAL` — and it breaks it *quietly*, as tests that fail for reasons having
+// nothing to do with the policy they name. Better to refuse to start.
+const url = process.env.DIRECT_URL
+
+if (requested && !url) {
+  throw new Error(
+    'RUN_DB_TESTS=1 but DIRECT_URL is not set. Run `npm run test:db`, which supplies it ' +
+    'from .env.staging. Refusing to start rather than reporting a pass for a suite that ' +
+    'asserted nothing.'
+  )
+}
+
+if (requested) {
+  // The same confirmation line with-env-file.js prints, for the same reason: which
+  // database is about to be touched should be visible, not inferred. Host only, never
+  // the credentials — split on the LAST '@', since Supabase passwords routinely
+  // contain an unencoded one.
+  const host = url.slice(url.lastIndexOf('@') + 1).match(/^([^:/?]+)/)?.[1] ?? '(unparseable)'
+  console.log(`[test:db] running against database host: ${host}`)
+}
+
+/**
+ * Skip gate. `describe.skipIf(!hasDatabase())` keeps `npm test` green and, more to the
+ * point, keeps it away from whatever database happens to be in the ambient environment.
+ */
 export function hasDatabase () {
-  return !!url
+  return requested && !!url
 }
 
 let client = null
@@ -110,6 +148,20 @@ export async function asAnonymousAuthenticated (tx) {
   await tx.$executeRawUnsafe('SET LOCAL ROLE authenticated')
 }
 
+/**
+ * The public role — nobody signed in at all.
+ *
+ * Distinct from asAnonymousAuthenticated, and the difference is the point: `anon` is a
+ * different Postgres role with different grants, so a policy that correctly returns
+ * nothing to a claimless `authenticated` request says nothing about what `anon` can
+ * reach. 0009 exists because revoking from PUBLIC does not remove anon's default
+ * EXECUTE, so this is a mistake the repo has already made once.
+ */
+export async function asAnon (tx) {
+  await tx.$queryRawUnsafe(`SELECT set_config('request.jwt.claims', '', true)`)
+  await tx.$executeRawUnsafe('SET LOCAL ROLE anon')
+}
+
 /** Back to the owner, so a test can build more fixtures after asserting as a role. */
 export async function asOwner (tx) {
   await tx.$executeRawUnsafe('RESET ROLE')
@@ -130,7 +182,7 @@ export async function asOwner (tx) {
  * followed by an assertion that something IS permitted would fail for the wrong
  * reason, which is exactly the shape of the Finance carve-out test.
  */
-export async function refused (tx, fn) {
+export async function refusalMessage (tx, fn) {
   const savepoint = `sp_${Math.random().toString(36).slice(2, 10)}`
   await tx.$executeRawUnsafe(`SAVEPOINT ${savepoint}`)
 
