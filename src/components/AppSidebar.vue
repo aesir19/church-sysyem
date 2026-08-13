@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import AppLogo from './AppLogo.vue'
 import ChurchSwitcher from './ChurchSwitcher.vue'
+import SettingsMenu from './SettingsMenu.vue'
 import Avatar from './ui/Avatar.vue'
 import Badge from './ui/Badge.vue'
 import Icon from './ui/icons/Icon.vue'
@@ -80,6 +81,12 @@ const ROLE_LABEL = {
 }
 
 const { displayName, load: loadUser } = useCurrentUser()
+
+// The gear replaces the standalone sign-out for anyone who has settings to reach,
+// because sign out lives inside the menu. Everyone else keeps the plain button: a gear
+// whose only entry is "Sign out" is a worse affordance than a sign-out button, and the
+// dashboard must always be signable-out-of on a shared church computer.
+const canOpenSettings = computed(() => caps.value.isSuperAdmin || caps.value.isHeadPastor)
 
 onMounted(loadUser)
 
@@ -194,14 +201,15 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
         />
       </button>
 
-      <!-- SIGN OUT LIVES HERE BECAUSE THE SCREEN IT BELONGS ON DOES NOT EXIST
-           YET. The handoff puts it on the profile page and in the mobile menu,
-           both of which are part of the administration set and are not built.
-           Leaving it out until they are would ship a dashboard holding member
-           PII that cannot be signed out of — on a shared church computer that
-           is the whole of the session control. It moves to the profile page
-           when that lands. -->
+      <!-- The gear from mockup 4c. Sign out now lives inside this menu, which is
+           where the handoff always put it. The standalone button below stays for
+           everyone the menu shows nothing else to, because a dashboard holding
+           member PII must always be signable-out-of — on a shared church computer
+           that is the whole of the session control. -->
+      <SettingsMenu v-if="canOpenSettings" />
+
       <button
+        v-else
         type="button"
         class="side__theme side__signout"
         aria-label="Sign out"

@@ -72,6 +72,26 @@ export const iconPaths = {
     ['line', { x1: 12, y1: 20, x2: 12, y2: 4 }],
     ['line', { x1: 6, y1: 20, x2: 6, y2: 14 }]
   ],
+  // The gear on the account card. Verbatim from mockup 4c, which is the only frame
+  // in the handoff that draws it.
+  settings: [
+    ['circle', { cx: 12, cy: 12, r: 3 }],
+    ['path', { d: 'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6h.09A1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z' }]
+  ],
+  // DRAWN. A church for the pastor assignment cards; the handoff uses two-letter
+  // initials tiles there instead, but the nav and the empty states need a glyph.
+  church: [
+    ['path', { d: 'M12 2v6' }],
+    ['path', { d: 'M9 5h6' }],
+    ['path', { d: 'M4 21V12l8-4 8 4v9' }],
+    ['path', { d: 'M10 21v-5a2 2 0 1 1 4 0v5' }],
+    ['line', { x1: 2, y1: 21, x2: 22, y2: 21 }]
+  ],
+  // DRAWN. Marks the leader on a small group card and in its roster — deliberately
+  // not the plain member avatar, because a leader is a different kind of thing.
+  star: [
+    ['path', { d: 'M12 3.5l2.6 5.3 5.9.9-4.2 4.1 1 5.8-5.3-2.8-5.3 2.8 1-5.8L3.5 9.7l5.9-.9z' }]
+  ],
   next: [
     ['path', { d: 'M4 21v-7' }],
     ['path', { d: 'M4 14V4' }],

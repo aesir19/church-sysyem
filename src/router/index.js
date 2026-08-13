@@ -71,6 +71,19 @@ const routes = [
       { path: 'funds', name: 'ChurchFunds', component: () => import('../views/ChurchFundsView.vue'), meta: { requiresCapability: 'canViewFinance' } },
       { path: 'whats-next', name: 'WhatsNext', component: () => import('../views/WhatsNextView.vue') },
 
+      // THE SETTINGS AREA. Reached from the gear on the account card, not from the
+      // nav — administration is not one of the flat nine.
+      //
+      // No `requiresCapability` on either, deliberately. The guard would bounce an
+      // unauthorised visitor to the dashboard, which reads as the app losing the
+      // page. These views render 4g's "not yours to open" instead, which is the
+      // difference between a permission failure that explains itself and one that
+      // looks like a bug. The database refuses regardless — list_accounts() and
+      // list_church_accounts() return zero rows to anyone who should not have them.
+      { path: 'settings/roles', name: 'SettingsRoles', component: () => import('../views/settings/RolesLinkingView.vue') },
+      { path: 'settings/pastors', name: 'SettingsPastors', component: () => import('../views/settings/PastorAssignmentView.vue') },
+      { path: 'settings', redirect: '/dashboard/settings/roles' },
+
       // The old paths, kept as redirects. Someone has these bookmarked, and a
       // dead bookmark is indistinguishable from a broken app.
       { path: 'ministry', redirect: '/dashboard/groups' },

@@ -598,12 +598,96 @@ describe.skipIf(!hasDatabase())('what a Small Group Leader may do', () => {
   })
 })
 
+describe.skipIf(!hasDatabase())('list_church_accounts', () => {
+  it('shows a Head Pastor the accounts they need, and withholds the e-mail address', async () => {
+    // The whole reason 0024 exists: a Head Pastor may appoint pastors but cannot call
+    // list_accounts(), so without this the pastor screen is empty for them.
+    await withRollback(async tx => {
+      const church = await makeChurch(tx)
+      const subject = await makePrincipal(tx, { role: 'pastor', churchId: church })
+      const head = await makePrincipal(tx, { role: 'head_pastor', churchId: church })
+
+      await asPrincipal(tx, head.accountId)
+      const rows = await call(tx,
+        `SELECT * FROM public.list_church_accounts($1::uuid)`, church)
+
+      const found = rows.find(r => r.account_id === subject.accountId)
+      expect(found).toBeTruthy()
+      expect(found.role).toBe('pastor')
+      expect(found.church_id).toBe(church)
+      // A Head Pastor is outside can_see_member_detail; this must not be a way round it.
+      expect(Object.keys(found)).not.toContain('email')
+    })
+  })
+
+  it('omits accounts with no member record', async () => {
+    await withRollback(async tx => {
+      const church = await makeChurch(tx)
+      const stranger = await makePrincipal(tx, { role: 'unassigned', churchId: null })
+      const admin = await makePrincipal(tx, { role: 'super_admin', churchId: church })
+
+      await asPrincipal(tx, admin.accountId)
+      const rows = await call(tx, `SELECT account_id FROM public.list_church_accounts(NULL)`)
+
+      expect(rows.some(r => r.account_id === stranger.accountId)).toBe(false)
+    })
+  })
+
+  it('scopes to one church when asked', async () => {
+    await withRollback(async tx => {
+      const here = await makeChurch(tx, 'here')
+      const there = await makeChurch(tx, 'there')
+      const mine = await makePrincipal(tx, { role: 'member', churchId: here })
+      const theirs = await makePrincipal(tx, { role: 'member', churchId: there })
+      const admin = await makePrincipal(tx, { role: 'super_admin', churchId: here })
+
+      await asPrincipal(tx, admin.accountId)
+      const rows = await call(tx, `SELECT account_id FROM public.list_church_accounts($1::uuid)`, here)
+      const ids = new Set(rows.map(r => r.account_id))
+
+      expect(ids.has(mine.accountId)).toBe(true)
+      expect(ids.has(theirs.accountId)).toBe(false)
+    })
+  })
+
+  it('reports how many groups each account leads', async () => {
+    await withRollback(async tx => {
+      const w = await groupWithCandidate(tx)
+      const admin = await makePrincipal(tx, { role: 'super_admin', churchId: w.church })
+
+      await asPrincipal(tx, admin.accountId)
+      await perform(tx, `SELECT public.assign_small_group_leader($1::uuid, $2::uuid)`,
+        w.candidate.accountId, w.group)
+
+      const rows = await call(tx, `SELECT account_id, leads_count FROM public.list_church_accounts($1::uuid)`, w.church)
+      const found = rows.find(r => r.account_id === w.candidate.accountId)
+
+      expect(found.leads_count).toBe(1)
+    })
+  })
+
+  it.each([
+    ['pastor'], ['church_leader'], ['member'], ['unassigned']
+  ])('returns zero rows to %s', async role => {
+    await withRollback(async tx => {
+      const church = await makeChurch(tx)
+      const { accountId } = await makePrincipal(tx, { role, churchId: church })
+
+      await asPrincipal(tx, accountId)
+      const rows = await call(tx, `SELECT account_id FROM public.list_church_accounts(NULL)`)
+
+      expect(rows).toHaveLength(0)
+    })
+  })
+})
+
 describe.skipIf(!hasDatabase())('the public role reaches none of it', () => {
   it.each([
     ['small_group_leaders table', `SELECT id FROM public.small_group_leaders`],
     ['list_accounts', `SELECT account_id FROM public.list_accounts()`],
     ['is_small_group_leader', `SELECT public.is_small_group_leader()`],
-    ['my_led_group_ids', `SELECT public.my_led_group_ids()`]
+    ['my_led_group_ids', `SELECT public.my_led_group_ids()`],
+    ['list_church_accounts', `SELECT account_id FROM public.list_church_accounts(NULL)`]
   ])('refuses anon on %s', async (_label, sql) => {
     await withRollback(async tx => {
       await asAnon(tx)
