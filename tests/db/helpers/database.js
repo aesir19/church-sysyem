@@ -197,6 +197,17 @@ export async function refusalMessage (tx, fn) {
   throw new Error('expected the statement to be refused, but it succeeded')
 }
 
+/**
+ * Force deferred constraint triggers to run now.
+ *
+ * A DEFERRABLE INITIALLY DEFERRED trigger fires at COMMIT, and this harness never
+ * commits — so without this, a test of a deferred rule would pass no matter what the
+ * rule said. Call it after the statement whose consequence you are asserting.
+ */
+export async function flushDeferredConstraints (tx) {
+  await tx.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE')
+}
+
 /** True when the refusal came from RLS or a column grant rather than a bad statement. */
 export function isAuthorizationFailure (message) {
   return /row-level security|permission denied|not authorized|42501/i.test(message)
