@@ -250,3 +250,32 @@ Production migrations and deploys are never run by hand from a laptop as part of
 If you need to run one manually (recovering from a failed workflow run, applying a `rollback.sql`),
 the existing procedure in [OPERATIONS.md](OPERATIONS.md) §2 still applies, and `npm run deploy:prod`
 covers a manual Netlify publish.
+
+## 4. Database-level tests
+
+`npm test` proves what the application does with a mocked Supabase. It cannot prove anything about
+authorization, because RLS is enforced in Postgres and a mock answers whatever it was told to. The
+suite in [`tests/db`](../tests/db) closes that gap: it signs in as each role against a real database
+and asserts what that role can and cannot actually do.
+
+```bash
+npm run test:db     # runs tests/db against .env.staging
+npm test            # skips tests/db entirely when no database URL is present
+```
+
+**It writes nothing.** Each test opens a transaction, builds its own churches, members, groups and
+sign-ins inside it, asserts, and rolls back. So it can be pointed at staging without seeding it, a
+failed run leaves nothing to clean up, and there are no standing test logins to keep in the
+repository — a principal is three inserts and ceases to exist with the rollback.
+
+It connects on `DIRECT_URL`, not `DATABASE_URL`. The pooler runs in transaction mode and hands out a
+different backend per transaction, which breaks `SET LOCAL` and interactive transactions — the same
+reason [`scripts/prisma/db-execute.js`](../scripts/prisma/db-execute.js) exists.
+
+**Run it before and after any migration that touches a policy or a predicate**, and treat a changed
+line as a permission that moved. That is what it is for: it was written so the `groups` split could
+be a refactor with a safety net rather than a rewrite of every rule protecting member PII with
+nothing checking the result.
+
+It is deliberately not in CI — Rule 1 makes CI minutes a cost, and it needs credentials CI does not
+have.
