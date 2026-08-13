@@ -392,7 +392,9 @@ describe.skipIf(!hasDatabase())('assigning a small group leader', () => {
           person.accountId, ministry)
       )
 
-      expect(message).toMatch(/only a small group can have a leader|not authorized/i)
+      // No alternation. The caller is a SuperAdmin, so 'not authorized' is unreachable
+      // here — allowing it would only widen what a broken trigger could still satisfy.
+      expect(message).toMatch(/only a small group can have a leader/i)
     })
   })
 
@@ -607,6 +609,131 @@ describe.skipIf(!hasDatabase())('the public role reaches none of it', () => {
       await asAnon(tx)
       const message = await refusalMessage(tx, () => call(tx, sql))
       expect(isAuthorizationFailure(message)).toBe(true)
+    })
+  })
+
+  // The writers, which are what the REVOKE block in the migration is actually about.
+  // A nil uuid is fine: the grant is checked before the body runs, so these never get
+  // far enough for the argument to matter.
+  it.each([
+    ['link_account_to_member', `SELECT public.link_account_to_member(
+       '00000000-0000-0000-0000-000000000000'::uuid, NULL)`],
+    ['set_user_role', `SELECT public.set_user_role(
+       '00000000-0000-0000-0000-000000000000'::uuid, 'super_admin')`],
+    ['assign_small_group_leader', `SELECT public.assign_small_group_leader(
+       '00000000-0000-0000-0000-000000000000'::uuid,
+       '00000000-0000-0000-0000-000000000000'::uuid)`],
+    ['unassign_small_group_leader', `SELECT public.unassign_small_group_leader(
+       '00000000-0000-0000-0000-000000000000'::uuid,
+       '00000000-0000-0000-0000-000000000000'::uuid)`]
+  ])('refuses anon on %s', async (_label, sql) => {
+    await withRollback(async tx => {
+      await asAnon(tx)
+      const message = await refusalMessage(tx, () => perform(tx, sql))
+      expect(isAuthorizationFailure(message)).toBe(true)
+    })
+  })
+})
+
+describe.skipIf(!hasDatabase())('0023 — the review fixes', () => {
+  it('lets an administrator account be deleted after they have assigned a leader', async () => {
+    // assigned_by was NOT NULL with a bare REFERENCES, which defaults to NO ACTION.
+    // user_accounts cascades from auth.users, so one assignment was enough to make the
+    // administrator permanently undeletable — an audit column blocking erasure of the
+    // person it names.
+    await withRollback(async tx => {
+      const w = await groupWithCandidate(tx)
+      const admin = await makePrincipal(tx, { role: 'super_admin', churchId: w.church })
+
+      await asPrincipal(tx, admin.accountId)
+      await perform(tx, `SELECT public.assign_small_group_leader($1::uuid, $2::uuid)`,
+        w.candidate.accountId, w.group)
+
+      await asOwner(tx)
+      await tx.$executeRawUnsafe(`DELETE FROM auth.users WHERE id = $1::uuid`, admin.accountId)
+
+      // The assignment survives, recording that its author is gone.
+      const [row] = await call(tx,
+        `SELECT assigned_by FROM public.small_group_leaders WHERE group_id = $1::uuid`, w.group)
+      expect(row.assigned_by).toBeNull()
+    })
+  })
+
+  it('refuses to unlink an account that still leads a group', async () => {
+    // Otherwise is_small_group_leader() stays true for an account with no member record,
+    // which keeps attendance open to someone with no church.
+    await withRollback(async tx => {
+      const w = await groupWithCandidate(tx)
+      const admin = await makePrincipal(tx, { role: 'super_admin', churchId: w.church })
+
+      await asPrincipal(tx, admin.accountId)
+      await perform(tx, `SELECT public.assign_small_group_leader($1::uuid, $2::uuid)`,
+        w.candidate.accountId, w.group)
+
+      const message = await refusalMessage(tx, () =>
+        perform(tx, `SELECT public.link_account_to_member($1::uuid, NULL)`, w.candidate.accountId)
+      )
+
+      expect(message).toMatch(/leads a small group/i)
+    })
+  })
+
+  it('refuses to point a leading account at a different member', async () => {
+    // The group would end up with a leader who was never on its roster — exactly the
+    // state the deferred trigger exists to prevent, reached by another door.
+    await withRollback(async tx => {
+      const w = await groupWithCandidate(tx)
+      const somebodyElse = await makeMember(tx, w.church, 'other')
+      const admin = await makePrincipal(tx, { role: 'super_admin', churchId: w.church })
+
+      await asPrincipal(tx, admin.accountId)
+      await perform(tx, `SELECT public.assign_small_group_leader($1::uuid, $2::uuid)`,
+        w.candidate.accountId, w.group)
+
+      const message = await refusalMessage(tx, () =>
+        perform(tx, `SELECT public.link_account_to_member($1::uuid, $2::uuid)`,
+          w.candidate.accountId, somebodyElse)
+      )
+
+      expect(message).toMatch(/leads a small group/i)
+    })
+  })
+
+  it('still allows relinking an account to the member it already has', async () => {
+    // Nothing moves, so there is nothing to protect against.
+    await withRollback(async tx => {
+      const w = await groupWithCandidate(tx)
+      const admin = await makePrincipal(tx, { role: 'super_admin', churchId: w.church })
+
+      await asPrincipal(tx, admin.accountId)
+      await perform(tx, `SELECT public.assign_small_group_leader($1::uuid, $2::uuid)`,
+        w.candidate.accountId, w.group)
+      await perform(tx, `SELECT public.link_account_to_member($1::uuid, $2::uuid)`,
+        w.candidate.accountId, w.candidate.memberId)
+
+      await asOwner(tx)
+      const [row] = await call(tx,
+        `SELECT member_id FROM public.user_accounts WHERE id = $1::uuid`, w.candidate.accountId)
+      expect(row.member_id).toBe(w.candidate.memberId)
+    })
+  })
+
+  it('unlinks cleanly once the leadership has been given up', async () => {
+    await withRollback(async tx => {
+      const w = await groupWithCandidate(tx)
+      const admin = await makePrincipal(tx, { role: 'super_admin', churchId: w.church })
+
+      await asPrincipal(tx, admin.accountId)
+      await perform(tx, `SELECT public.assign_small_group_leader($1::uuid, $2::uuid)`,
+        w.candidate.accountId, w.group)
+      await perform(tx, `SELECT public.unassign_small_group_leader($1::uuid, $2::uuid)`,
+        w.candidate.accountId, w.group)
+      await perform(tx, `SELECT public.link_account_to_member($1::uuid, NULL)`, w.candidate.accountId)
+
+      await asOwner(tx)
+      const [row] = await call(tx,
+        `SELECT member_id FROM public.user_accounts WHERE id = $1::uuid`, w.candidate.accountId)
+      expect(row.member_id).toBeNull()
     })
   })
 })

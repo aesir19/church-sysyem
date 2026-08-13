@@ -37,8 +37,12 @@ DROP TABLE IF EXISTS public.small_group_leaders;
 
 DROP INDEX IF EXISTS public.user_accounts_member_id_key;
 
--- Restore can_view_attendance() to its 0016 form (without the leader branch). This
--- must come after the table drop, because is_small_group_leader() reads it.
+-- Restore can_view_attendance() to its 0016 form (without the leader branch).
+--
+-- Ordered after the table drop for readability, not necessity: a LANGUAGE sql body in
+-- dollar quotes records no dependency on the tables it names, so Postgres would allow
+-- either order. Getting that wrong in a comment is worse than leaving it out, because
+-- the next person reading this file will believe it.
 CREATE OR REPLACE FUNCTION public.can_view_attendance()
 RETURNS boolean
 LANGUAGE sql SECURITY DEFINER SET search_path = public STABLE

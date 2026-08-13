@@ -759,11 +759,13 @@ model small_group_leaders {
   account_id  String        @db.Uuid
   group_id    String        @db.Uuid
   /// Who made the assignment and when. 0022 adds no audit table; these two columns are
-  /// the whole of the record.
-  assigned_by String        @db.Uuid
+  /// the whole of the record. Nullable since 0023 (ON DELETE SET NULL): as NOT NULL with
+  /// NO ACTION it made an administrator undeletable the moment they assigned anyone,
+  /// because user_accounts cascades from auth.users.
+  assigned_by String?       @db.Uuid
   assigned_at DateTime      @default(now()) @db.Timestamptz(6)
   account     user_accounts @relation("small_group_leader_account", fields: [account_id], references: [id], onDelete: Cascade)
-  assigner    user_accounts @relation("small_group_leader_assigned_by", fields: [assigned_by], references: [id])
+  assigner    user_accounts? @relation("small_group_leader_assigned_by", fields: [assigned_by], references: [id], onDelete: SetNull)
   groups      groups        @relation(fields: [group_id], references: [id], onDelete: Cascade)
 
   @@unique([account_id, group_id], map: "small_group_leaders_account_group_key")
