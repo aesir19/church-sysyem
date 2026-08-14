@@ -496,7 +496,7 @@ describe.skipIf(!hasDatabase())('a leader cannot be dropped from the roster they
 
       const message = await refusalMessage(tx, async () => {
         await tx.$executeRawUnsafe(
-          `DELETE FROM public.group_members WHERE group_id = $1::uuid AND member_id = $2::uuid`,
+          `DELETE FROM public.small_group_members WHERE small_group_id = $1::uuid AND member_id = $2::uuid`,
           w.group, w.candidate.memberId)
         // The rule is a deferred constraint trigger; without this it would not run
         // until COMMIT, which this harness never reaches.
@@ -518,12 +518,12 @@ describe.skipIf(!hasDatabase())('a leader cannot be dropped from the roster they
 
       await asOwner(tx)
       await tx.$executeRawUnsafe(
-        `DELETE FROM public.group_members WHERE group_id = $1::uuid AND member_id = $2::uuid`,
+        `DELETE FROM public.small_group_members WHERE small_group_id = $1::uuid AND member_id = $2::uuid`,
         w.group, w.candidate.memberId)
       await flushDeferredConstraints(tx)
 
       const rows = await call(tx,
-        `SELECT id FROM public.group_members WHERE group_id = $1::uuid`, w.group)
+        `SELECT id FROM public.small_group_members WHERE small_group_id = $1::uuid`, w.group)
       expect(rows).toHaveLength(0)
     })
   })
@@ -540,7 +540,7 @@ describe.skipIf(!hasDatabase())('a leader cannot be dropped from the roster they
       await perform(tx, `SELECT public.assign_small_group_leader($1::uuid, $2::uuid)`, w.candidate.accountId, w.group)
 
       await asOwner(tx)
-      await tx.$executeRawUnsafe(`DELETE FROM public.groups WHERE id = $1::uuid`, w.group)
+      await tx.$executeRawUnsafe(`DELETE FROM public.small_groups WHERE id = $1::uuid`, w.group)
       await flushDeferredConstraints(tx)
 
       const rows = await call(tx,

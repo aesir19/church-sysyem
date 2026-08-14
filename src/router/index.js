@@ -65,6 +65,26 @@ const routes = [
       // blocks should never set it.
       { path: 'members', name: 'Members', component: () => import('../views/MembersView.vue'), meta: { framed: true } },
       { path: 'groups', name: 'Groups', component: () => import('../views/GroupsView.vue') },
+      // NO requiresCapability, deliberately. Group visibility is decided by RLS, and a
+      // group the caller cannot see returns no row — which the view renders as its
+      // not-found state. That is the correct answer for a church that should not learn
+      // another church's small groups exist, and a capability gate here would instead
+      // announce "you are not allowed to see this one", which is more than they should
+      // be told.
+      // Named, not numbered: /dashboard/groups/cogon/thursday-group. The church segment
+      // is not decoration — a small group's name is unique only within its church, so
+      // two churches may both have a "Thursday Group" and the group name alone cannot
+      // say which. It also describes what the page shows, since a ministry's roster is
+      // church-scoped even though the ministry itself is global.
+      //
+      // The cost, accepted deliberately: renaming a group breaks its old links, which
+      // land on the page's not-found state. The alternative was appending characters to
+      // keep a stable id in the path, which reads as noise.
+      {
+        path: 'groups/:church/:group',
+        name: 'GroupDetail',
+        component: () => import('../views/GroupDetailView.vue')
+      },
       { path: 'attendance', name: 'Attendance', component: () => import('../views/AttendanceView.vue'), meta: { requiresCapability: 'canViewAttendance' } },
       { path: 'collections', name: 'Collections', component: () => import('../views/CollectionsInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } },
       { path: 'expenses', name: 'Expenses', component: () => import('../views/ExpensesInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } },

@@ -1,17 +1,14 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import Button from '../components/ui/Button.vue'
 import Icon from '../components/ui/icons/Icon.vue'
-import Modal from '../components/ui/Modal.vue'
 import GroupCard from '../components/groups/GroupCard.vue'
 import GroupFormModal from '../components/groups/GroupFormModal.vue'
-import GroupDetailModal from '../components/groups/GroupDetailModal.vue'
 import { useActiveChurch } from '../composables/useActiveChurch'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { listGroups, countMembersInNoGroup } from '../lib/data/groups'
-import { supabase } from '../lib/supabase'
-import { write } from '../lib/data/write'
-import { showToast } from '../composables/useToast'
+import { slugify } from '../lib/data/group'
 
 // Ministries & groups — a wall of cards, one per group.
 //
@@ -26,12 +23,9 @@ import { showToast } from '../composables/useToast'
 // restyled as the same pills the members roll uses rather than the old tab bar,
 // so the two screens filter the same way.
 
-const { activeChurchId, ensureLoaded } = useActiveChurch()
-const {
-  canManageSmallGroups,
-  canManageGroupMembers,
-  canSeeMemberDetail
-} = useCurrentRole()
+const router = useRouter()
+const { activeChurchId, activeChurchName, ensureLoaded } = useActiveChurch()
+const { canManageSmallGroups, canSeeMemberDetail } = useCurrentRole()
 
 const groups = ref([])
 const assignments = ref(0)
@@ -42,11 +36,8 @@ const errorMessage = ref('')
 const activeFilter = ref('all')
 const search = ref('')
 
-const detailOpen = ref(false)
 const formOpen = ref(false)
 const formMode = ref('create')
-const deleteOpen = ref(false)
-const deleting = ref(false)
 const selectedGroup = ref(null)
 
 const FILTERS = [
@@ -82,18 +73,6 @@ const subtitle = computed(() => {
   return parts.join(' · ')
 })
 
-// Whether the caller may add or remove members for the group that is open. The
-// Finance ministry is Pastor-only, and that rule lives in capabilities.js.
-const canManageOpenGroup = computed(() =>
-  canManageGroupMembers({ isFinanceGroup: selectedGroup.value?.ministry_key === 'finance' })
-)
-
-const canEditOpenGroup = computed(() =>
-  canManageSmallGroups.value
-  && selectedGroup.value?.type === 'Small Group'
-  && selectedGroup.value?.church_id === activeChurchId.value
-)
-
 async function load () {
   if (!activeChurchId.value) return
   loading.value = true
@@ -122,9 +101,14 @@ async function load () {
   loading.value = false
 }
 
+// A card now goes to the group's own page rather than opening a dialog (#76). The
+// group is addressable, so it can be linked to and bookmarked, and the back button
+// returns here — which is what a card that looks like a link has always implied.
 function openGroup (group) {
-  selectedGroup.value = group
-  detailOpen.value = true
+  router.push({
+    name: 'GroupDetail',
+    params: { church: slugify(activeChurchName.value), group: slugify(group.name) }
+  })
 }
 
 function openCreate () {
@@ -135,21 +119,6 @@ function openCreate () {
   selectedGroup.value = null
   formMode.value = 'create'
   formOpen.value = true
-}
-
-// Rename and delete both hand over from the detail dialog rather than opening
-// on top of it — one focus trap at a time.
-function openRename (group) {
-  selectedGroup.value = group
-  formMode.value = 'edit'
-  detailOpen.value = false
-  formOpen.value = true
-}
-
-function openDelete (group) {
-  selectedGroup.value = group
-  detailOpen.value = false
-  deleteOpen.value = true
 }
 
 function onSaved ({ row, mode }) {
@@ -166,56 +135,12 @@ function onSaved ({ row, mode }) {
   }
 }
 
-// The detail dialog changed a membership; correct the card without re-reading
-// the whole grid.
-function onMembershipChanged ({ groupId, delta }) {
-  const group = groups.value.find(g => g.id === groupId)
-  if (group) group.member_count = Math.max(0, group.member_count + delta)
-  assignments.value = Math.max(0, assignments.value + delta)
-  // `inNoGroup` cannot be corrected arithmetically — a member may belong to
-  // several groups, so removing one does not necessarily put them in none.
-  // Rather than print a number that has quietly drifted, drop the clause until
-  // the next full load.
-  inNoGroup.value = null
-}
-
-async function confirmDelete () {
-  const group = selectedGroup.value
-  if (!group) return
-  deleting.value = true
-
-  const result = await write(
-    supabase
-      .from('groups')
-      .delete()
-      .eq('id', group.id)
-      .eq('church_id', activeChurchId.value)
-      .eq('type', 'Small Group'),
-    { columns: 'id', messages: { blocked: 'That group could not be deleted. It may belong to another church.' } }
-  )
-
-  deleting.value = false
-
-  if (!result.ok) {
-    showToast(result.message, 'error')
-    return
-  }
-
-  assignments.value = Math.max(0, assignments.value - group.member_count)
-  groups.value = groups.value.filter(g => g.id !== group.id)
-  inNoGroup.value = null
-  deleteOpen.value = false
-  selectedGroup.value = null
-  showToast({ title: 'Group deleted.', body: `${group.name} is off the roll.`, type: 'success' })
-}
-
 onMounted(async () => {
   await ensureLoaded()
   load()
 })
 
 watch(activeChurchId, () => {
-  detailOpen.value = false
   selectedGroup.value = null
   load()
 })
@@ -347,17 +272,9 @@ watch(activeChurchId, () => {
       />
     </div>
 
-    <GroupDetailModal
-      v-model:open="detailOpen"
-      :group="selectedGroup"
-      :church-id="activeChurchId"
-      :can-manage-members="canManageOpenGroup"
-      :can-edit-group="canEditOpenGroup"
-      @request-rename="openRename"
-      @request-delete="openDelete"
-      @changed="onMembershipChanged"
-    />
-
+    <!-- GroupDetailModal is gone (#76). A card opens the group's own page now, and the
+         roster, add-members, rename and delete all live there. What is left here is
+         creating a group, which belongs to the grid rather than to any one group. -->
     <GroupFormModal
       v-if="canManageSmallGroups"
       v-model:open="formOpen"
@@ -367,37 +284,8 @@ watch(activeChurchId, () => {
       @saved="onSaved"
     />
 
-    <Modal
-      v-if="canManageSmallGroups"
-      :open="deleteOpen"
-      :title="`Delete ${selectedGroup?.name}?`"
-      description="The group is removed and everyone in it is unassigned. Members themselves are not affected, and attendance already recorded is kept."
-      width="sm"
-      layout="stack"
-      footer-layout="even"
-      icon="archive"
-      icon-tone="magenta"
-      :close-on-outside-click="false"
-      @update:open="deleteOpen = $event"
-    >
-      <template #footer>
-        <Button
-          block
-          :disabled="deleting"
-          @click="deleteOpen = false"
-        >
-          Keep group
-        </Button>
-        <Button
-          block
-          variant="danger"
-          :loading="deleting"
-          @click="confirmDelete"
-        >
-          Delete group
-        </Button>
-      </template>
-    </Modal>
+    <!-- Deleting moved to the group's page too: it is an action on one group, and the
+         page is where a group's actions live now. -->
   </div>
 </template>
 

@@ -9,6 +9,12 @@
 // PostgREST refused every embed against it with PGRST200 because a union view
 // participates in no foreign key. Direct SQL against that same view worked perfectly.
 //
+// That finding is why 0026 split the tables for real and moved the compatibility seam
+// into src/lib/data/groups.js instead. Every query below now names one of the four new
+// tables and every embed follows a real foreign key — which is precisely the property
+// this file exists to keep true. If someone reintroduces a view over these tables to
+// tidy up the two-query reads, these tests are what will fail.
+//
 // So this file exists to hold the other end of the contract. After a schema change,
 // the sibling suites answer "does everyone still have exactly the permissions they
 // had", and this one answers "can the application still ask its questions at all".
@@ -21,7 +27,8 @@
 // The queries are copied from the call sites and should be kept in step with them:
 //   src/lib/data/groups.js          — the group card grid
 //   src/lib/data/members.js         — MEMBER_GROUPS_EMBED, the members table
-//   src/components/groups/GroupDetailModal.vue — the group roster
+//   src/lib/data/overview.js        — the "in no group" tile
+//   src/lib/data/group.js           — the group page's roster and leader
 //
 // It signs in with the standing staging account in .env.staging rather than creating a
 // principal, because a REST request needs a real JWT from the auth service and there
@@ -78,24 +85,56 @@ async function get (query) {
 describe.skipIf(!configured)('the queries the application makes are expressible', () => {
   it.each([
     [
-      'group card grid — memberships with member names (lib/data/groups.js)',
-      'group_members?select=group_id,member_id,members!inner(first_name,last_name,member_of)&limit=1'
+      'group card grid — ministry memberships with member names (lib/data/groups.js)',
+      'ministry_members?select=ministry_id,member_id,members!inner(first_name,last_name,member_of)&limit=1'
     ],
     [
-      'group roster — one group\'s memberships with names (GroupDetailModal.vue)',
-      'group_members?select=id,member_id,members!inner(first_name,last_name,member_of)&limit=1'
+      'group card grid — small group memberships with member names (lib/data/groups.js)',
+      'small_group_members?select=small_group_id,member_id,members!inner(first_name,last_name,member_of)&limit=1'
     ],
     [
-      'members table — the nested groups embed (MEMBER_GROUPS_EMBED, lib/data/members.js)',
-      'members?select=id,first_name,last_name,group_members(groups(id,name,type))&limit=1'
+      'group roster — one ministry\'s memberships with names (lib/data/group.js)',
+      'ministry_members?select=id,member_id,members!inner(first_name,last_name,member_of)&limit=1'
     ],
     [
-      'group card grid — the groups themselves, with the type/church union filter',
-      'groups?select=id,name,type,church_id,color_slot,ministry_key&limit=1'
+      'group roster — one small group\'s memberships with names (lib/data/group.js)',
+      'small_group_members?select=id,member_id,members!inner(first_name,last_name,member_of)&limit=1'
     ],
     [
-      'overview — bare membership ids (lib/data/overview.js)',
-      'group_members?select=member_id&limit=1'
+      'members table — both group embeds (MEMBER_GROUPS_EMBED, lib/data/members.js)',
+      'members?select=id,first_name,last_name,ministry_members(ministries(id,name)),small_group_members(small_groups(id,name))&limit=1'
+    ],
+    [
+      'group card grid — the ministries themselves, unscoped because global',
+      'ministries?select=id,name,ministry_key&limit=1'
+    ],
+    [
+      'group card grid — this church\'s small groups',
+      'small_groups?select=id,name,church_id&limit=1'
+    ],
+    [
+      'group page — the leader, resolved from account to member (lib/data/group.js)',
+      'small_group_leaders?select=account_id,user_accounts!small_group_leaders_account_id_fkey(member_id,members(first_name,last_name))&limit=1'
+    ],
+    [
+      'overview — bare membership ids, both tables (lib/data/overview.js)',
+      'ministry_members?select=member_id&limit=1'
+    ],
+    [
+      'overview — bare membership ids, small groups (lib/data/overview.js)',
+      'small_group_members?select=member_id&limit=1'
+    ],
+    [
+      'group page — leader candidates for a small group, via RPC (lib/data/group.js)',
+      'rpc/list_small_group_leader_candidates?p_group=00000000-0000-0000-0000-000000000000'
+    ],
+    [
+      'group page — the current leader, resolved to a name via RPC (lib/data/group.js)',
+      'rpc/get_small_group_leader?p_group=00000000-0000-0000-0000-000000000000'
+    ],
+    [
+      'group roster — names only, without member detail, via directory_search (lib/data/group.js)',
+      'rpc/directory_search?p_church_id=00000000-0000-0000-0000-000000000000&p_limit=1000'
     ]
   ])('%s', async (_label, query) => {
     const result = await get(query)
@@ -111,9 +150,18 @@ describe.skipIf(!configured)('the queries the application makes are expressible'
   it('reports a genuinely unresolvable embed rather than passing everything', async () => {
     // The canary. Without it, a harness that silently returned ok for every request
     // would look identical to one that works, and this whole file would be theatre.
-    const result = await get('group_members?select=id,churches!inner(name)&limit=1')
+    //
+    // The table has to be one that EXISTS with an embed that cannot resolve. Naming a
+    // dropped table instead gets PGRST205 — "table not found" — which would pass a
+    // loose assertion while proving nothing about relationship resolution. That is
+    // exactly what happened when this said `group_members` after 0026 dropped it.
+    const result = await get('ministry_members?select=id,churches!inner(name)&limit=1')
 
     expect(result.ok).toBe(false)
-    expect(result.detail).toContain('PGRST200')
+    expect(
+      result.detail,
+      `expected PGRST200 (no such relationship). PGRST205 means the TABLE is missing, ` +
+      `which makes this canary vacuous.\n${result.detail}`
+    ).toContain('PGRST200')
   })
 })

@@ -239,7 +239,6 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
   padding: var(--sp-18) var(--sp-14) var(--sp-14);
   background: var(--surface);
   border-right: 1px solid var(--border);
-  overflow-y: auto;
 }
 
 .side__brand { padding: 0 var(--sp-6) var(--sp-10); }
@@ -275,6 +274,19 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
 .side__church-chev { color: var(--ink-5); }
 
 /* --- Nav -------------------------------------------------------------- */
+/* THE SCROLLING LIVES HERE, NOT ON .side. It used to be `overflow-y: auto` on the
+   sidebar itself, which quietly clipped the gear menu: `overflow-y: auto` against
+   an `overflow-x: visible` is not a legal pair, so the browser promotes x to
+   `auto` too. The sidebar became a scroll container on both axes and every
+   popover wider than --nav-width was cut off mid-word — with no way to scroll to
+   the rest of it, since nothing overflows vertically at a normal height.
+   Scrolling the list alone puts the account card and its menu outside the
+   scroller, so the menu can overhang the sidebar as designed.
+
+   No flex-grow on purpose: .side__user is pinned by margin-top:auto, and growing
+   this list would fight that and unpin the card. Shrink-only plus min-height:0
+   (a flex child will not shrink below its content without it) means the list
+   scrolls exactly when the viewport is too short and is inert otherwise. */
 .side__nav {
   list-style: none;
   margin: 0;
@@ -282,6 +294,8 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .side__item {

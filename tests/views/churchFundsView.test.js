@@ -85,7 +85,14 @@ async function render() {
   return { html, errors }
 }
 
-describe('ChurchFundsView', () => {
+// A GENEROUS TIMEOUT, AND WHY. Each test here server-renders a whole view and then
+// waits for its mocked queries to settle. That is comfortably under a second on its own,
+// but vitest runs files in parallel and the render competes with every other worker for
+// the CPU — so under a full `npm test` it intermittently crossed the 5s default and
+// failed as a timeout rather than an assertion. The work is bounded; the deadline was
+// the wrong one. Raised here rather than globally, so a genuine hang elsewhere still
+// fails fast.
+describe('ChurchFundsView', { timeout: 20000 }, () => {
   it('runs setup and its month load without raising', async () => {
     const { errors } = await render()
     expect(errors).toEqual([])

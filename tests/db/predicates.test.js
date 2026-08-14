@@ -85,7 +85,7 @@ describe.skipIf(!hasDatabase())('ministry membership decides ministry roles', ()
 
       await asOwner(tx)
       await tx.$executeRawUnsafe(
-        `UPDATE public.groups SET name = 'zz-test-renamed-ministry' WHERE id = $1::uuid`, id
+        `UPDATE public.ministries SET name = 'zz-test-renamed-ministry' WHERE id = $1::uuid`, id
       )
 
       await asPrincipal(tx, holder.accountId)

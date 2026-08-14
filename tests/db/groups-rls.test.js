@@ -36,6 +36,91 @@ async function twoChurchWorld (tx) {
   return { churchA, churchB, ministry, groupA, groupB, memberA, memberB }
 }
 
+// THE POINT OF THE SPLIT, ASSERTED AS SHAPE RATHER THAN BEHAVIOUR.
+//
+// Everything else in this file tests what a role may do. These test what the schema
+// now makes impossible, which is the return #74 was bought for: rules that used to
+// live in a CHECK constraint, two partial indexes and a trigger are structural, and a
+// future migration that quietly reintroduces a nullable church_id or drops a foreign
+// key would pass every behavioural test above while undoing the refactor.
+describe.skipIf(!hasDatabase())('the split itself', () => {
+  it('gives a ministry no church column at all, so it cannot be scoped by accident', async () => {
+    await withRollback(async tx => {
+      const rows = await tx.$queryRawUnsafe(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'ministries'`
+      )
+      const columns = rows.map(r => r.column_name)
+
+      expect(columns).not.toContain('church_id')
+      // Not merely nullable — absent. A NULL-able column would still let a future
+      // insert scope a ministry to a church.
+      expect(columns).toEqual(expect.arrayContaining(['id', 'name', 'ministry_key']))
+    })
+  })
+
+  it('makes a small group\'s church mandatory, so it cannot be global by accident', async () => {
+    await withRollback(async tx => {
+      const [row] = await tx.$queryRawUnsafe(
+        `SELECT is_nullable FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'small_groups'
+           AND column_name = 'church_id'`
+      )
+      expect(row?.is_nullable).toBe('NO')
+    })
+  })
+
+  it('keeps ministry_key off small groups, so the column describes only what it can', async () => {
+    await withRollback(async tx => {
+      const rows = await tx.$queryRawUnsafe(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'small_groups'`
+      )
+      expect(rows.map(r => r.column_name)).not.toContain('ministry_key')
+    })
+  })
+
+  it('gives each membership table a real foreign key to its own parent', async () => {
+    // The orphan-membership rule. `group_members.group_id` could not be a foreign key
+    // while it pointed at two kinds of row; now each half can be, and is.
+    await withRollback(async tx => {
+      const rows = await tx.$queryRawUnsafe(
+        `SELECT tc.table_name, kcu.column_name, ccu.table_name AS references_table
+         FROM information_schema.table_constraints tc
+         JOIN information_schema.key_column_usage kcu
+           ON kcu.constraint_name = tc.constraint_name
+         JOIN information_schema.constraint_column_usage ccu
+           ON ccu.constraint_name = tc.constraint_name
+         WHERE tc.constraint_type = 'FOREIGN KEY'
+           AND tc.table_schema = 'public'
+           AND tc.table_name IN ('ministry_members', 'small_group_members', 'small_group_leaders')`
+      )
+      const pairs = rows.map(r => `${r.table_name}.${r.column_name} -> ${r.references_table}`)
+
+      expect(pairs).toContain('ministry_members.ministry_id -> ministries')
+      expect(pairs).toContain('small_group_members.small_group_id -> small_groups')
+      // The payoff #74 predicted: "a leader cannot lead a ministry" was a trigger with
+      // a subquery because the old schema could not state it. It is a foreign key now.
+      expect(pairs).toContain('small_group_leaders.group_id -> small_groups')
+    })
+  })
+
+  it('leaves no trace of the two tables it replaced', async () => {
+    // Including as views. #74's original design would have left `groups` and
+    // `group_members` in place as union views, which is the thing PostgREST could not
+    // embed through — see tests/db/postgrest-contract.test.js. If either name comes
+    // back, that decision is being re-litigated and the contract suite should be the
+    // one to say whether it works.
+    await withRollback(async tx => {
+      const rows = await tx.$queryRawUnsafe(
+        `SELECT table_name FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name IN ('groups', 'group_members')`
+      )
+      expect(rows).toEqual([])
+    })
+  })
+})
+
 describe.skipIf(!hasDatabase())('groups — who can see what', () => {
   it('shows a Super Admin every church\'s small groups', async () => {
     await withRollback(async tx => {
@@ -127,7 +212,7 @@ describe.skipIf(!hasDatabase())('groups — who can see what', () => {
       await twoChurchWorld(tx)
       await asAnon(tx)
 
-      for (const table of ['groups', 'group_members']) {
+      for (const table of ['ministries', 'small_groups', 'ministry_members', 'small_group_members']) {
         const message = await refusalMessage(tx, () =>
           tx.$queryRawUnsafe(`SELECT id FROM public.${table}`)
         )
@@ -228,8 +313,8 @@ describe.skipIf(!hasDatabase())('creating, renaming and deleting a small group',
 
       await asPrincipal(tx, accountId)
       const rows = await tx.$executeRawUnsafe(
-        `INSERT INTO public.groups (name, type, church_id)
-         VALUES ('zz-test-created-by-leader', 'Small Group', $1::uuid)`,
+        `INSERT INTO public.small_groups (name, church_id)
+         VALUES ('zz-test-created-by-leader', $1::uuid)`,
         w.churchA
       )
 
@@ -244,8 +329,8 @@ describe.skipIf(!hasDatabase())('creating, renaming and deleting a small group',
 
       await asPrincipal(tx, accountId)
       const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
-        `INSERT INTO public.groups (name, type, church_id)
-         VALUES ('zz-test-cross-church', 'Small Group', $1::uuid)`,
+        `INSERT INTO public.small_groups (name, church_id)
+         VALUES ('zz-test-cross-church', $1::uuid)`,
         w.churchB
       ))
 
@@ -260,8 +345,8 @@ describe.skipIf(!hasDatabase())('creating, renaming and deleting a small group',
 
       await asPrincipal(tx, accountId)
       const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
-        `INSERT INTO public.groups (name, type, church_id)
-         VALUES ('zz-test-by-pastor', 'Small Group', $1::uuid)`,
+        `INSERT INTO public.small_groups (name, church_id)
+         VALUES ('zz-test-by-pastor', $1::uuid)`,
         w.churchA
       ))
 
@@ -272,13 +357,18 @@ describe.skipIf(!hasDatabase())('creating, renaming and deleting a small group',
   it('refuses everyone creating a Ministry, Super Admin included', async () => {
     // Ministries are seeded by migration and are not client-creatable at all. Worth
     // pinning: it is easy to widen this by accident when rewriting the insert policy.
+    //
+    // Since 0026 the refusal comes from a missing GRANT rather than a policy branch —
+    // `authenticated` holds SELECT on `ministries` and nothing else — which is a
+    // stronger no than the old `type = 'Small Group'` check, and this test does not
+    // care which mechanism says it, only that somebody does.
     await withRollback(async tx => {
       const w = await twoChurchWorld(tx)
       const { accountId } = await makePrincipal(tx, { role: 'super_admin', churchId: w.churchA })
 
       await asPrincipal(tx, accountId)
       const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
-        `INSERT INTO public.groups (name, type) VALUES ('zz-test-new-ministry', 'Ministry')`
+        `INSERT INTO public.ministries (name) VALUES ('zz-test-new-ministry')`
       ))
 
       expect(isAuthorizationFailure(message)).toBe(true)
@@ -297,10 +387,10 @@ describe.skipIf(!hasDatabase())('creating, renaming and deleting a small group',
       await asPrincipal(tx, accountId)
 
       expect(await tx.$executeRawUnsafe(
-        `UPDATE public.groups SET name = 'zz-test-should-not-happen' WHERE id = $1::uuid`, w.groupB
+        `UPDATE public.small_groups SET name = 'zz-test-should-not-happen' WHERE id = $1::uuid`, w.groupB
       )).toBe(0)
       expect(await tx.$executeRawUnsafe(
-        `UPDATE public.groups SET name = 'zz-test-renamed' WHERE id = $1::uuid`, w.groupA
+        `UPDATE public.small_groups SET name = 'zz-test-renamed' WHERE id = $1::uuid`, w.groupA
       )).toBe(1)
     })
   })
@@ -312,8 +402,8 @@ describe.skipIf(!hasDatabase())('creating, renaming and deleting a small group',
 
       await asPrincipal(tx, accountId)
 
-      expect(await tx.$executeRawUnsafe(`DELETE FROM public.groups WHERE id = $1::uuid`, w.groupB)).toBe(0)
-      expect(await tx.$executeRawUnsafe(`DELETE FROM public.groups WHERE id = $1::uuid`, w.groupA)).toBe(1)
+      expect(await tx.$executeRawUnsafe(`DELETE FROM public.small_groups WHERE id = $1::uuid`, w.groupB)).toBe(0)
+      expect(await tx.$executeRawUnsafe(`DELETE FROM public.small_groups WHERE id = $1::uuid`, w.groupA)).toBe(1)
     })
   })
 })
@@ -326,7 +416,7 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
 
       await asPrincipal(tx, accountId)
       const rows = await tx.$executeRawUnsafe(
-        `INSERT INTO public.group_members (group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
+        `INSERT INTO public.ministry_members (ministry_id, member_id) VALUES ($1::uuid, $2::uuid)`,
         w.ministry, w.memberA
       )
 
@@ -341,7 +431,7 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
 
       await asPrincipal(tx, accountId)
       const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
-        `INSERT INTO public.group_members (group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
+        `INSERT INTO public.ministry_members (ministry_id, member_id) VALUES ($1::uuid, $2::uuid)`,
         w.ministry, w.memberA
       ))
 
@@ -362,7 +452,7 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
 
       await asPrincipal(tx, leader.accountId)
       const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
-        `INSERT INTO public.group_members (group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
+        `INSERT INTO public.ministry_members (ministry_id, member_id) VALUES ($1::uuid, $2::uuid)`,
         finance, w.memberA
       ))
       expect(isAuthorizationFailure(message)).toBe(true)
@@ -370,7 +460,7 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
       await asOwner(tx)
       await asPrincipal(tx, pastor.accountId)
       const rows = await tx.$executeRawUnsafe(
-        `INSERT INTO public.group_members (group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
+        `INSERT INTO public.ministry_members (ministry_id, member_id) VALUES ($1::uuid, $2::uuid)`,
         finance, w.memberA
       )
       expect(rows).toBe(1)
@@ -388,7 +478,7 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
 
       await asPrincipal(tx, accountId)
       const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
-        `INSERT INTO public.group_members (group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
+        `INSERT INTO public.small_group_members (small_group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
         w.groupA, w.memberB
       ))
 
@@ -405,7 +495,7 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
 
       await asPrincipal(tx, accountId)
       const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
-        `INSERT INTO public.group_members (group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
+        `INSERT INTO public.small_group_members (small_group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
         w.groupB, w.memberA
       ))
 
@@ -422,7 +512,7 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
 
       await asPrincipal(tx, accountId)
       const rows = await tx.$executeRawUnsafe(
-        `INSERT INTO public.group_members (group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
+        `INSERT INTO public.small_group_members (small_group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
         w.groupB, w.memberB
       )
 
@@ -437,7 +527,7 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
 
       await asPrincipal(tx, accountId)
       const message = await refusalMessage(tx, () => tx.$executeRawUnsafe(
-        `INSERT INTO public.group_members (group_id, member_id) VALUES ($1::uuid, $2::uuid)`,
+        `INSERT INTO public.ministry_members (ministry_id, member_id) VALUES ($1::uuid, $2::uuid)`,
         w.ministry, w.memberA
       ))
 
@@ -454,8 +544,10 @@ describe.skipIf(!hasDatabase())('adding and removing group members', () => {
 
       await asPrincipal(tx, accountId)
 
-      expect(await tx.$executeRawUnsafe(`DELETE FROM public.group_members WHERE id = $1::uuid`, inB)).toBe(0)
-      expect(await tx.$executeRawUnsafe(`DELETE FROM public.group_members WHERE id = $1::uuid`, inA)).toBe(1)
+      // groupA and groupB are small groups, so both memberships live in
+      // small_group_members. addToGroup() routed them there.
+      expect(await tx.$executeRawUnsafe(`DELETE FROM public.small_group_members WHERE id = $1::uuid`, inB)).toBe(0)
+      expect(await tx.$executeRawUnsafe(`DELETE FROM public.small_group_members WHERE id = $1::uuid`, inA)).toBe(1)
     })
   })
 })
