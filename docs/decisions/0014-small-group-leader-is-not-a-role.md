@@ -1,6 +1,6 @@
-# ADR-0004 — Small Group Leader is derived from leadership, not a role
+# ADR-0014 — Small Group Leader is derived from leadership, not a role
 
-Status: accepted · Migrations: `0022_admin_access`, `0027_leader_candidates`
+**Status:** Accepted · **Date:** 2026-08-14 · **Migrations:** `0022_admin_access`, `0027_leader_candidates`
 
 ## Context
 

@@ -1,6 +1,6 @@
-# ADR-0005 — A names-only directory for roles that may not see PII
+# ADR-0015 — A names-only directory for roles that may not see PII
 
-Status: accepted · Migrations: `0015_members_rbac`, `0022_admin_access` · Story 20
+**Status:** Accepted · **Date:** 2026-08-14 · **Migrations:** `0015_members_rbac`, `0022_admin_access` · Story 20
 
 ## Context
 
@@ -28,3 +28,7 @@ not see who."
   directory function.
 - A restricted caller gets a leader marked "assigned" with no name, never a false "no
   leader." Withholding the name is correct; inventing one is the bug this prevents.
+
+This decision is an application of [ADR-0001](0001-rls-is-the-only-authz.md): the SECURITY
+DEFINER functions are the enforced boundary; the `detail` flag is only how the UI presents
+what the boundary returned.

@@ -54,7 +54,7 @@ is *defined* — never what it's *allowed to do* (that's RLS/capabilities).
 
 - **Small Group Leader** — **not a role.** It comes from leading at least one small group
   (`small_group_leaders`, `0022`); a leader's `role` stays whatever it was. Anything that
-  keys on the role string alone will miss it. See `ADR-0004`.
+  keys on the role string alone will miss it. See `docs/decisions/0014`.
 
 - **Group** — an umbrella word only. There is no `groups` table since `0026`. A group is
   one of two distinct things:
@@ -68,7 +68,7 @@ is *defined* — never what it's *allowed to do* (that's RLS/capabilities).
 
 - **Pastor / Head Pastor** — pastoral roles. A pastor is a member of the church they
   pastor, so the church follows from their member record, and a church may have more than
-  one. Assignment is additive (no handover) — see `ADR-0003`.
+  one. Assignment is additive (no handover) — see `docs/decisions/0013`.
 
 - **Journey** — a member's discipleship milestones (baptised, one-to-one, turning point).
   Flags on `members`; aggregated for a group in `src/lib/data/group.js` (`journeyFor`).
@@ -76,7 +76,7 @@ is *defined* — never what it's *allowed to do* (that's RLS/capabilities).
 - **Directory** — names-and-groups without PII, readable by roles that may *not* see
   member detail (e.g. Head Pastor). Backed by `directory_search()` (SECURITY DEFINER).
   This is why a roster can show *who* is in a group without exposing their records.
-  See `ADR-0005`.
+  See `docs/decisions/0015`.
 
 ---
 
@@ -92,7 +92,7 @@ is *defined* — never what it's *allowed to do* (that's RLS/capabilities).
   in `src/lib/data/*`. When a write's rule leaks into a `.vue`, that's the drift to fix.
 
 - **Capabilities gate the UI; RLS enforces.** A capability being false hides a control; it
-  is not a security boundary. The database is. See `ADR-0002`.
+  is not a security boundary. The database is. See `docs/decisions/0001`.
 
 - **`Soon` marks a drawn-but-dataless surface.** `src/components/ui/Soon.vue`. Some mockup
   elements (meetings, audit log, match confidence) have no table behind them and are shown
@@ -102,5 +102,7 @@ is *defined* — never what it's *allowed to do* (that's RLS/capabilities).
 
 ## Decisions
 
-Load-bearing choices and their *why* live in `docs/adr/`. Read them before re-proposing
-something the project already weighed — that's what they're for.
+Load-bearing choices and their *why* live in `docs/decisions/`. Read them before
+re-proposing something the project already weighed — that's what they're for. The
+admin-access work added `0012`–`0015` (group split, additive pastor assignment, Small
+Group Leader as derived, names-only directory).

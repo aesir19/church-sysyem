@@ -1,6 +1,6 @@
-# ADR-0003 — Pastor assignment is additive, with no handover
+# ADR-0013 — Pastor assignment is additive, with no handover
 
-Status: accepted · Migration: `0022_admin_access` · Screen: Pastor assignment (mockup 4b)
+**Status:** Accepted · **Date:** 2026-08-14 · **Migration:** `0022_admin_access` · Screen: Pastor assignment (mockup 4b)
 
 ## Context
 
@@ -20,6 +20,6 @@ touches the church roll. A church row lists the pastors it has, or says it has n
 - The mockup's step 2 disappears; "handover history" has no table and is drawn as `Soon`.
 - A Head Pastor can drive this screen without seeing PII: candidates come from
   `list_church_accounts()` (names + roles, no e-mail), not `list_accounts()`. See
-  `ADR-0005` for the names-without-PII pattern.
+  [ADR-0015](0015-names-only-directory-without-pii.md) for the names-without-PII pattern.
 - What was kept from 4b is purely visual (the compact rows, the dashed inset panel, the
   radio candidate list) — see `src/views/settings/PastorAssignmentView.vue`.
