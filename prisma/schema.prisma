@@ -516,19 +516,14 @@ model attendance {
   guest_contact   String?
   /// GENERATED ALWAYS ... STORED. Materialized rather than left as an expression
   /// index so ON CONFLICT can infer it by plain column name. Never written directly.
-  guest_name_norm String?
+  guest_name_norm String?  @default(dbgenerated("lower(regexp_replace(btrim(guest_name), '\\s+'::text, ' '::text, 'g'::text))"))
   source          String   @default("staff")
   recorded_by     String?  @db.Uuid
   created_at      DateTime @default(now()) @db.Timestamptz(6)
-  churches        churches @relation(fields: [church_id], references: [id], onDelete: Cascade)
-  members         members? @relation(fields: [member_id], references: [id], onDelete: Cascade)
-  /// Composite FK, not a plain reference to services.id. Carrying church_id into
-  /// the key is what stops one church attaching attendance to another church's
-  /// service — the RLS policy cannot see the service's church cheaply, so the
-  /// constraint does that half of the work.
-  services        services @relation(fields: [service_id, church_id], references: [id, church_id], onDelete: Cascade)
+  churches        churches @relation(fields: [church_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  members         members? @relation(fields: [member_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  services        services @relation(fields: [service_id, church_id], references: [id, church_id], onDelete: Cascade, onUpdate: NoAction, map: "attendance_service_fkey")
 
-  @@index([member_id, created_at(sort: Desc)], map: "attendance_member_idx")
   @@index([service_id, created_at], map: "attendance_service_idx")
   @@schema("public")
 }
@@ -543,15 +538,15 @@ model churches {
   /// database. Never selected by the SPA — it is reachable only through the
   /// get_my_checkin_link() RPC, because `churches` has held zero table grants for
   /// both roles since 0009_narrow_grants.
-  checkin_token            String              @unique(map: "churches_checkin_token_key")
-  checkin_token_rotated_at DateTime?           @db.Timestamptz(6)
+  checkin_token            String              @unique @default(dbgenerated("translate((gen_random_uuid())::text, '-'::text, ''::text)"))
+  checkin_token_rotated_at DateTime?           @default(now()) @db.Timestamptz(6)
   attendance               attendance[]
   collections              collections[]
   expenses                 expenses[]
-  groups                   groups[]
   members                  members[]
   service_schedules        service_schedules[]
   services                 services[]
+  small_groups             small_groups[]
 
   @@schema("public")
 }
@@ -566,12 +561,9 @@ model collections {
   amount      Float    @default(0) @db.Real
   is_tithes   Boolean  @default(true)
   collectedOn DateTime @db.Date
-  created_at  DateTime @default(now()) @db.Timestamptz(6)
   from_church String   @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
   churches    churches @relation(fields: [from_church], references: [id], onDelete: Cascade)
-  /// Stays Cascade deliberately. SetNull would reclassify a deleted member's
-  /// gifts as anonymous rather than removing them, silently corrupting the
-  /// ledger now that NULL carries meaning.
   members     members? @relation(fields: [from], references: [id], onDelete: Cascade)
 
   @@schema("public")
@@ -587,7 +579,7 @@ model expenses {
   notes       String?
   created_at  DateTime @default(now()) @db.Timestamptz(6)
   created_by  String?  @db.Uuid
-  churches    churches @relation(fields: [from_church], references: [id], onDelete: Cascade)
+  churches    churches @relation(fields: [from_church], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([from_church, spent_on(sort: Desc)], map: "expenses_church_spent_on_idx")
   @@index([from_church, spent_on, description], map: "expenses_month_description_idx")
@@ -595,75 +587,34 @@ model expenses {
 }
 
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model group_members {
-  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  member_id String  @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  group_id  String  @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  groups    groups  @relation(fields: [group_id], references: [id], onDelete: Cascade)
-  members   members @relation(fields: [member_id], references: [id], onDelete: Cascade)
-
-  @@unique([group_id, member_id], map: "group_members_group_id_member_id_key")
-  @@index([member_id], map: "group_members_member_id_idx")
-  @@schema("public")
-}
-
-/// The database also enforces partial case-insensitive unique indexes for global
-/// ministry names and church-scoped small-group names; Prisma cannot model them.
-/// The color_slot range check and automatic BEFORE INSERT assignment trigger are
-/// also enforced in PostgreSQL because Prisma cannot model either behavior.
-/// This table contains check constraints and requires additional setup for migrations.
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model groups {
-  id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name          String          @db.VarChar
-  type          String          @db.VarChar
-  church_id     String?         @db.Uuid
-  color_slot    Int             @unique(map: "groups_color_slot_key")
-  /// Stable slug for the system ministries that authorization keys on ('finance',
-  /// 'secretariat', 'welcome'). Set only on the three global Ministry rows; NULL for
-  /// every small group and any non-system ministry. Keyed on rather than `name` so a
-  /// ministry rename cannot grant or revoke access — see 0014 and docs/DEFECTS.md D4.
-  /// Not in the authenticated INSERT/UPDATE column grants, so it is system-managed only.
-  ministry_key  String?         @db.Text
-  churches      churches?       @relation(fields: [church_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  group_members group_members[]
-
-  @@index([church_id, type], map: "groups_church_type_idx")
-  @@schema("public")
-}
-
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model members {
-  id                            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  first_name                    String          @db.VarChar
-  last_name                     String          @db.VarChar
-  middle_name                   String?         @db.VarChar
-  birthdate                     DateTime        @db.Date
-  gender                        String          @db.VarChar
-  address                       String?         @db.VarChar
-  date_joined                   DateTime?       @db.Date
-  contact_number                Decimal?        @db.Decimal
-  email                         String?         @db.VarChar
-  member_of                     String          @default(dbgenerated("auth.uid()")) @db.Uuid
-  archived_at                   DateTime?       @db.Timestamptz(6)
+  id                            String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  first_name                    String                @db.VarChar
+  last_name                     String                @db.VarChar
+  middle_name                   String?               @db.VarChar
+  birthdate                     DateTime              @db.Date
+  gender                        String                @db.VarChar
+  address                       String?               @db.VarChar
+  date_joined                   DateTime?             @db.Date
+  contact_number                String?
+  email                         String?               @db.VarChar
+  member_of                     String                @default(dbgenerated("auth.uid()")) @db.Uuid
+  archived_at                   DateTime?             @db.Timestamptz(6)
   archived_reason               String?
-  wedding_anniversarry          DateTime?       @db.Date
-  facebook_link                 String?         @db.VarChar
-  is_one_to_one_completed       Boolean         @default(false)
-  is_turning_point_completed    Boolean         @default(false)
-  is_baptized                   Boolean         @default(false)
-  marital_status                String          @default("Single") @db.VarChar
-  has_submitted_membership_form Boolean         @default(false)
+  wedding_anniversarry          DateTime?             @db.Date
+  facebook_link                 String?               @db.VarChar
+  is_one_to_one_completed       Boolean               @default(false)
+  is_turning_point_completed    Boolean               @default(false)
+  is_baptized                   Boolean               @default(false)
+  marital_status                String                @default("Single") @db.VarChar
+  has_submitted_membership_form Boolean               @default(false)
   attendance                    attendance[]
   collections                   collections[]
-  group_members                 group_members[]
-  churches                      churches        @relation(fields: [member_of], references: [id], onDelete: SetNull)
+  churches                      churches              @relation(fields: [member_of], references: [id], onDelete: SetNull)
+  ministry_members              ministry_members[]
+  small_group_members           small_group_members[]
   user_accounts                 user_accounts[]
 
-  /// Added by 0013 for the anonymous check-in name match, which runs on the public
-  /// hot path. The expression — lower(regexp_replace(btrim(first_name || ' ' ||
-  /// last_name), '\s+', ' ', 'g')) — and the archived_at IS NULL predicate cannot be
-  /// modelled by Prisma, so the index is invisible here. It exists; see 0013.
   @@schema("public")
 }
 
@@ -685,7 +636,7 @@ model service_schedules {
   is_active  Boolean    @default(true)
   created_at DateTime   @default(now()) @db.Timestamptz(6)
   created_by String?    @db.Uuid
-  churches   churches   @relation(fields: [church_id], references: [id], onDelete: Cascade)
+  churches   churches   @relation(fields: [church_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   services   services[]
 
   @@unique([id, church_id], map: "service_schedules_id_church_key")
@@ -712,12 +663,12 @@ model services {
   /// GENERATED ALWAYS AS ((opens_at AT TIME ZONE 'Asia/Manila')::date) STORED.
   /// Derived in the database so no client can compute it — that is defect D8, and
   /// current_date in SQL is the same bug because PostgREST's session TimeZone is UTC.
-  service_date      DateTime           @db.Date
+  service_date      DateTime?          @default(dbgenerated("((opens_at AT TIME ZONE 'Asia/Manila'::text))::date")) @db.Date
   created_at        DateTime           @default(now()) @db.Timestamptz(6)
   created_by        String?            @db.Uuid
   attendance        attendance[]
-  churches          churches           @relation(fields: [church_id], references: [id], onDelete: Cascade)
-  service_schedules service_schedules? @relation(fields: [schedule_id, church_id], references: [id, church_id], onDelete: Restrict)
+  churches          churches           @relation(fields: [church_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  service_schedules service_schedules? @relation(fields: [schedule_id, church_id], references: [id, church_id], onUpdate: NoAction, map: "services_schedule_fkey")
 
   @@unique([id, church_id], map: "services_id_church_key")
   @@index([church_id, opens_at], map: "services_church_open_idx")
@@ -726,13 +677,103 @@ model services {
 }
 
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+/// The partial unique index on member_id (0022) — one member, one login — cannot be
+/// modelled by Prisma, because @unique has no WHERE clause and an unlinked account
+/// holding NULL is the normal state. It exists; see 0022_admin_access.
 model user_accounts {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  member_id String?  @db.Uuid
-  role      String   @default("unassigned") @db.VarChar
-  users     users    @relation(fields: [id], references: [id], onDelete: Cascade)
-  members   members? @relation(fields: [member_id], references: [id])
+  id                 String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  member_id          String?               @db.Uuid
+  role               String                @default("unassigned") @db.VarChar
+  led_small_groups   small_group_leaders[] @relation("small_group_leader_account")
+  leader_assignments small_group_leaders[] @relation("small_group_leader_assigned_by")
+  users              users                 @relation(fields: [id], references: [id], onDelete: Cascade)
+  members            members?              @relation(fields: [member_id], references: [id])
 
+  @@schema("public")
+}
+
+/// Which login leads which small group (0022).
+///
+/// Account-targeted, not member-targeted: leading is something a sign-in does, so the
+/// powers follow the login. One account may hold several rows.
+///
+/// Two things Prisma cannot express and which are enforced in PostgreSQL:
+/// a BEFORE INSERT/UPDATE trigger rejecting any group that is not a Small Group, and a
+/// DEFERRABLE constraint trigger on group_members that refuses to remove a person from
+/// the roster of a group they still lead. There are also no INSERT/UPDATE/DELETE
+/// policies at all — every write goes through assign_small_group_leader() /
+/// unassign_small_group_leader(), which are the only doors.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model small_group_leaders {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  account_id  String         @db.Uuid
+  group_id    String         @db.Uuid
+  /// Who made the assignment and when. 0022 adds no audit table; these two columns are
+  /// the whole of the record. Nullable since 0023 (ON DELETE SET NULL): as NOT NULL with
+  /// NO ACTION it made an administrator undeletable the moment they assigned anyone,
+  /// because user_accounts cascades from auth.users.
+  assigned_by String?        @db.Uuid
+  assigned_at DateTime       @default(now()) @db.Timestamptz(6)
+  account     user_accounts  @relation("small_group_leader_account", fields: [account_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  assigner    user_accounts? @relation("small_group_leader_assigned_by", fields: [assigned_by], references: [id], onUpdate: NoAction)
+  groups      small_groups   @relation(fields: [group_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([account_id, group_id], map: "small_group_leaders_account_group_key")
+  @@index([group_id], map: "small_group_leaders_group_idx")
+  @@index([account_id], map: "small_group_leaders_account_idx")
+  @@schema("public")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model ministries {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String             @db.VarChar
+  ministry_key     String?
+  ministry_members ministry_members[]
+
+  @@schema("public")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model ministry_members {
+  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ministry_id String     @db.Uuid
+  member_id   String     @db.Uuid
+  members     members    @relation(fields: [member_id], references: [id], onDelete: Cascade)
+  ministries  ministries @relation(fields: [ministry_id], references: [id], onDelete: Cascade)
+
+  @@unique([ministry_id, member_id])
+  @@index([member_id], map: "ministry_members_member_idx")
+  @@schema("public")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model small_group_members {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  small_group_id String       @db.Uuid
+  member_id      String       @db.Uuid
+  members        members      @relation(fields: [member_id], references: [id], onDelete: Cascade)
+  small_groups   small_groups @relation(fields: [small_group_id], references: [id], onDelete: Cascade)
+
+  @@unique([small_group_id, member_id], map: "small_group_members_group_id_member_id_key")
+  @@index([member_id], map: "small_group_members_member_idx")
+  @@schema("public")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model small_groups {
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                String                @db.VarChar
+  church_id           String                @db.Uuid
+  small_group_leaders small_group_leaders[]
+  small_group_members small_group_members[]
+  churches            churches              @relation(fields: [church_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([church_id], map: "small_groups_church_idx")
   @@schema("public")
 }
 

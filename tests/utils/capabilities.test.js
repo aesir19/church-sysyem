@@ -16,6 +16,7 @@ function perm(role, flags = {}) {
     is_finance: false,
     is_secretariat: false,
     is_welcome: false,
+    is_small_group_leader: false,
     ...flags,
   }
 }
@@ -27,9 +28,44 @@ describe('deriveCapabilities', () => {
     for (const key of [
       'canSeeMemberDetail', 'canWriteMembers', 'canViewFinance', 'canWriteFinance',
       'canViewAttendance', 'canManageAttendance', 'canManageSmallGroups', 'isCrossChurch',
+      'isSmallGroupLeader',
     ]) {
       expect(c[key]).toBe(false)
     }
+  })
+
+  // 0022. Leading a small group is not an account role — it comes from a row in
+  // small_group_leaders — so `role` stays 'member' throughout this block. Anything that
+  // keys on the role string alone will miss this user entirely.
+  describe('Small Group Leader', () => {
+    const leader = deriveCapabilities(perm('member', { is_small_group_leader: true }))
+
+    it('is derived from leading a group, not from the account role', () => {
+      expect(leader.role).toBe('member')
+      expect(leader.isSmallGroupLeader).toBe(true)
+    })
+
+    it('gains attendance, which is its only widening', () => {
+      expect(leader.canViewAttendance).toBe(true)
+    })
+
+    it('gets nothing to do with money — not the pages, not the totals', () => {
+      expect(leader.canViewFinance).toBe(false)
+      expect(leader.canWriteFinance).toBe(false)
+    })
+
+    it('cannot open a member record, manage attendance, or touch groups', () => {
+      expect(leader.canSeeMemberDetail).toBe(false)
+      expect(leader.canWriteMembers).toBe(false)
+      expect(leader.canManageAttendance).toBe(false)
+      expect(leader.canManageSmallGroups).toBe(false)
+      expect(leader.isCrossChurch).toBe(false)
+    })
+
+    it('does not let a plain member reach attendance', () => {
+      // The control for the test above: without the flag the same role gets nothing.
+      expect(deriveCapabilities(perm('member')).canViewAttendance).toBe(false)
+    })
   })
 
   it('SuperAdmin gets every capability and is cross-church', () => {

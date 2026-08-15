@@ -171,9 +171,47 @@ describe('listRecords', () => {
     // projection is enumerated and excludes what must never be fetched, not
     // that nothing may ever be embedded alongside it.
     expect(columns.startsWith(MEMBER_COLUMNS)).toBe(true)
-    expect(columns).toContain('group_members(groups(')
+    // Two flat embeds since 0026, replacing the nested
+    // `group_members(groups(...))`. The nested form is what PostgREST could not
+    // resolve once those two names became union views — it answered PGRST200 —
+    // which is why the split reached the application at all. Asserted as an
+    // absence too, so nobody reintroduces the shape that cannot work.
+    expect(columns).toContain('ministry_members(ministries(')
+    expect(columns).toContain('small_group_members(small_groups(')
+    expect(columns).not.toContain('group_members(groups(')
     expect(columns).not.toContain('*')
     expect(columns).not.toContain('archived_reason')
+  })
+
+  // The two embeds are folded back into one `group_members: [{ groups }]` list
+  // so the members table and its Groups column never learn that storage changed.
+  it('folds both embeds into the single group list the table renders', async () => {
+    resolvesTo({
+      data: [{
+        id: 'm1',
+        first_name: 'Juan',
+        last_name: 'Cruz',
+        ministry_members: [{ ministries: { id: 'g1', name: 'Worship Team' } }],
+        small_group_members: [{ small_groups: { id: 'g2', name: 'Thursday Group' } }],
+      }],
+      error: null,
+    })
+
+    const result = await listRecords({ churchId: CHURCH, canSeeDetail: true })
+    expect(result.rows[0].group_members).toEqual([
+      { groups: { id: 'g1', name: 'Worship Team', type: 'Ministry' } },
+      { groups: { id: 'g2', name: 'Thursday Group', type: 'Small Group' } },
+    ])
+    // The storage-shaped keys do not survive, so nothing downstream can start
+    // depending on them.
+    expect(result.rows[0].ministry_members).toBeUndefined()
+    expect(result.rows[0].small_group_members).toBeUndefined()
+  })
+
+  it('gives a member in no group an empty list rather than undefined', async () => {
+    resolvesTo({ data: [{ id: 'm1', first_name: 'Ana', last_name: 'Reyes' }], error: null })
+    const result = await listRecords({ churchId: CHURCH, canSeeDetail: true })
+    expect(result.rows[0].group_members).toEqual([])
   })
 })
 

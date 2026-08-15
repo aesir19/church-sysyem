@@ -33,6 +33,16 @@ UI mockups for form/
 UI mockups for form.zip
 
 /src/generated/prisma
-.xlsx
+
+# Was `.xlsx`, which matches only a file literally named ".xlsx" — it protected
+# nothing. Spreadsheets reaching this repo are member exports, i.e. PII.
+*.xlsx
+
+# One-off member import from the Contact Information Google Form. Holds the
+# source spreadsheet, the reviewed name/group CSV, and its own node_modules —
+# real member PII and a script that writes to production. Never deployed, never
+# committed; deleted once the import is done.
+/upload-member-script/
+
 # Local Netlify folder
 .netlify

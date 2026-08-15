@@ -80,14 +80,21 @@ BEGIN
 END
 $$;
 
--- Delete in dependency order. group_members and collections cascade from members
--- anyway, but being explicit keeps the intent readable.
-DELETE FROM public.group_members WHERE member_id::text LIKE '5eed0000-%';
-DELETE FROM public.group_members WHERE group_id::text  LIKE '5eed0001-%';
+-- Delete in dependency order. The membership rows and collections cascade from
+-- members anyway, but being explicit keeps the intent readable.
+--
+-- Four tables where there were two, since 0026_split_groups. The seed ids keep one
+-- shared space — ords 1-4 are ministries, 5-7 small groups — so a LIKE on the
+-- prefix still reaches every seeded row in both tables.
+DELETE FROM public.ministry_members    WHERE member_id::text     LIKE '5eed0000-%';
+DELETE FROM public.small_group_members WHERE member_id::text     LIKE '5eed0000-%';
+DELETE FROM public.ministry_members    WHERE ministry_id::text   LIKE '5eed0001-%';
+DELETE FROM public.small_group_members WHERE small_group_id::text LIKE '5eed0001-%';
 DELETE FROM public.collections   WHERE "from"::text    LIKE '5eed0000-%';
 DELETE FROM public.attendance    WHERE member_id::text LIKE '5eed0000-%';
 DELETE FROM public.members       WHERE id::text        LIKE '5eed0000-%';
-DELETE FROM public.groups        WHERE id::text        LIKE '5eed0001-%';
+DELETE FROM public.ministries    WHERE id::text        LIKE '5eed0001-%';
+DELETE FROM public.small_groups  WHERE id::text        LIKE '5eed0001-%';
 
 -- ---------------------------------------------------------------------------
 -- 2. Name pools.
@@ -269,23 +276,34 @@ FROM seed_people sp;
 -- system ministries carrying ministry_key — they are what authorization keys on,
 -- and this file does not touch them.
 --
--- color_slot is omitted deliberately: 0005_group_color_slots installs a BEFORE
--- INSERT trigger that assigns one from 3240 slots and the column is globally
--- unique, so naming a slot here would be a collision waiting to happen.
-INSERT INTO public.groups (id, name, type, church_id)
+-- color_slot used to need a note here — 0005 assigned it by trigger from 3240
+-- globally unique slots, so naming one was a collision waiting to happen. The
+-- column is gone as of 0025_drop_group_color_slots and there is nothing to omit.
+-- Two inserts since 0026_split_groups, where there was one with a `type` column.
+-- The ord numbering is unchanged and still shared across both tables — 1-4 are
+-- ministries, 5-7 small groups — so every id below is byte-for-byte what it was
+-- before the split and section 5's grp hash keeps landing on the same groups.
+INSERT INTO public.ministries (id, name)
 SELECT
   ('5eed0001-0000-4000-8000-' || lpad(g.ord::text, 12, '0'))::uuid,
-  g.name, g.type,
-  CASE WHEN g.type = 'Small Group' THEN (SELECT id FROM seed_church) END
+  g.name
 FROM (VALUES
-  (1, 'Worship Team',       'Ministry'),
-  (2, 'Ushering Ministry',  'Ministry'),
-  (3, 'Youth Ministry',     'Ministry'),
-  (4, 'Prayer Warriors',    'Ministry'),
-  (5, 'Tuesday Group',      'Small Group'),
-  (6, 'Men''s Fellowship',  'Small Group'),
-  (7, 'Thursday Group',     'Small Group')
-) AS g(ord, name, type);
+  (1, 'Worship Team'),
+  (2, 'Ushering Ministry'),
+  (3, 'Youth Ministry'),
+  (4, 'Prayer Warriors')
+) AS g(ord, name);
+
+INSERT INTO public.small_groups (id, name, church_id)
+SELECT
+  ('5eed0001-0000-4000-8000-' || lpad(g.ord::text, 12, '0'))::uuid,
+  g.name,
+  (SELECT id FROM seed_church)
+FROM (VALUES
+  (5, 'Tuesday Group'),
+  (6, 'Men''s Fellowship'),
+  (7, 'Thursday Group')
+) AS g(ord, name);
 
 -- ---------------------------------------------------------------------------
 -- 5. Group membership.
@@ -297,10 +315,14 @@ FROM (VALUES
 --
 -- The rest get one or two groups, spread unevenly so the cards have visibly
 -- different sizes and the "+N more" avatar overflow appears on the large ones.
-INSERT INTO public.group_members (member_id, group_id)
-SELECT DISTINCT
-  a.id,
-  ('5eed0001-0000-4000-8000-' || lpad(a.grp::text, 12, '0'))::uuid
+-- MATERIALISED FIRST, THEN ROUTED. 0026 split the memberships into two tables, and
+-- which one a row belongs in is decided by its group ord — 1-4 ministries, 5-7 small
+-- groups. The assignment set has to be computed exactly once: it is driven by
+-- hashtext() over member ids, so recomputing it per table would be deterministic but
+-- would still make the two inserts two separate passes over the same logic, and any
+-- later edit to one would silently diverge from the other.
+CREATE TEMP TABLE seed_assignments ON COMMIT DROP AS
+SELECT DISTINCT a.id, a.grp
 FROM (
   SELECT
     sp.id,
@@ -312,9 +334,7 @@ FROM (
 WHERE a.rn > (SELECT members_in_no_group FROM seed_params)
 UNION
 -- A third of the assigned also carry a second group.
-SELECT DISTINCT
-  b.id,
-  ('5eed0001-0000-4000-8000-' || lpad(b.grp::text, 12, '0'))::uuid
+SELECT DISTINCT b.id, b.grp
 FROM (
   SELECT
     sp.id,
@@ -324,8 +344,19 @@ FROM (
   WHERE sp.is_active
 ) b
 WHERE b.rn > (SELECT members_in_no_group FROM seed_params)
-  AND (abs(hashtext(b.id::text)) % 3) = 0
-ON CONFLICT (group_id, member_id) DO NOTHING;
+  AND (abs(hashtext(b.id::text)) % 3) = 0;
+
+INSERT INTO public.ministry_members (member_id, ministry_id)
+SELECT id, ('5eed0001-0000-4000-8000-' || lpad(grp::text, 12, '0'))::uuid
+FROM seed_assignments
+WHERE grp <= 4
+ON CONFLICT (ministry_id, member_id) DO NOTHING;
+
+INSERT INTO public.small_group_members (member_id, small_group_id)
+SELECT id, ('5eed0001-0000-4000-8000-' || lpad(grp::text, 12, '0'))::uuid
+FROM seed_assignments
+WHERE grp >= 5
+ON CONFLICT (small_group_id, member_id) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- 6. Collections.
@@ -453,17 +484,25 @@ BEGIN
     INTO n_active, n_arch
     FROM public.members WHERE member_of = church;
 
-  SELECT count(*) INTO n_grp FROM public.groups WHERE church_id = church;
+  -- Small groups only, as before: this counted `groups WHERE church_id = church`,
+  -- and a ministry's church_id was always NULL, so ministries never fell in it.
+  -- After the split that filter is the table.
+  SELECT count(*) INTO n_grp FROM public.small_groups WHERE church_id = church;
 
   SELECT count(*) INTO n_asg
-    FROM public.group_members gm
+    FROM (
+      SELECT member_id FROM public.ministry_members
+      UNION ALL
+      SELECT member_id FROM public.small_group_members
+    ) gm
     JOIN public.members m ON m.id = gm.member_id
    WHERE m.member_of = church;
 
   SELECT count(*) INTO n_none
     FROM public.members m
    WHERE m.member_of = church AND m.archived_at IS NULL
-     AND NOT EXISTS (SELECT 1 FROM public.group_members gm WHERE gm.member_id = m.id);
+     AND NOT EXISTS (SELECT 1 FROM public.ministry_members gm WHERE gm.member_id = m.id)
+     AND NOT EXISTS (SELECT 1 FROM public.small_group_members gm WHERE gm.member_id = m.id);
 
   SELECT coalesce(sum(amount), 0), count(*) INTO col_jul, col_n
     FROM public.collections
@@ -486,8 +525,10 @@ $$;
 
 -- TEARDOWN — removes everything this file created, and nothing else.
 --
--- DELETE FROM public.group_members WHERE member_id::text LIKE '5eed0000-%';
--- DELETE FROM public.group_members WHERE group_id::text  LIKE '5eed0001-%';
+-- DELETE FROM public.ministry_members    WHERE member_id::text      LIKE '5eed0000-%';
+-- DELETE FROM public.small_group_members WHERE member_id::text      LIKE '5eed0000-%';
+-- DELETE FROM public.ministry_members    WHERE ministry_id::text    LIKE '5eed0001-%';
+-- DELETE FROM public.small_group_members WHERE small_group_id::text LIKE '5eed0001-%';
 -- DELETE FROM public.attendance    WHERE member_id::text LIKE '5eed0000-%';
 -- DELETE FROM public.collections   WHERE "from"::text    LIKE '5eed0000-%';
 -- DELETE FROM public.collections
@@ -496,5 +537,6 @@ $$;
 -- DELETE FROM public.expenses
 --   WHERE from_church = (SELECT id FROM public.churches WHERE name = 'Cogon')
 --     AND spent_on >= DATE '2026-07-01' AND spent_on < DATE '2026-09-01';
--- DELETE FROM public.members WHERE id::text LIKE '5eed0000-%';
--- DELETE FROM public.groups  WHERE id::text LIKE '5eed0001-%';
+-- DELETE FROM public.members      WHERE id::text LIKE '5eed0000-%';
+-- DELETE FROM public.ministries   WHERE id::text LIKE '5eed0001-%';
+-- DELETE FROM public.small_groups WHERE id::text LIKE '5eed0001-%';

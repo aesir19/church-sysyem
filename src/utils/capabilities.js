@@ -2,10 +2,14 @@
 // Postgres RLS policies (migrations 0014-0017) are the enforcement. It mirrors the
 // SQL capability composites in 0014 exactly; the two must not drift.
 //
-// Input is the row returned by the get_my_permissions() RPC (0017):
+// Input is the row returned by the get_my_permissions() RPC (0017, extended by 0022):
 //   { role, is_super_admin, is_head_pastor, is_pastor, is_church_leader,
-//     is_finance, is_secretariat, is_welcome }
+//     is_finance, is_secretariat, is_welcome, is_small_group_leader }
 // or null/undefined for an unresolved or unlinked user (everything fails closed).
+//
+// SMALL GROUP LEADER IS NOT A `role`. It comes from leading at least one small group
+// (0022's small_group_leaders table), so someone's `role` stays 'member' while
+// isSmallGroupLeader is true. Anything keying on the role string alone will miss it.
 
 export function deriveCapabilities(perm) {
   const p = perm || {}
@@ -16,6 +20,7 @@ export function deriveCapabilities(perm) {
   const isFinance = !!p.is_finance
   const isSecretariat = !!p.is_secretariat
   const isWelcome = !!p.is_welcome
+  const isSmallGroupLeader = !!p.is_small_group_leader
 
   return {
     role: p.role ?? null,
@@ -26,12 +31,17 @@ export function deriveCapabilities(perm) {
     isFinance,
     isSecretariat,
     isWelcome,
+    isSmallGroupLeader,
 
     // VIEW capabilities. Head Pastor is deliberately NOT in canSeeMemberDetail —
     // it sees only the name/group directory, never member PII (matches 0014/0015).
     canSeeMemberDetail: isSuperAdmin || isPastor || isChurchLeader || isSecretariat,
     canViewFinance: isSuperAdmin || isHeadPastor || isPastor || isChurchLeader || isFinance,
-    canViewAttendance: isSuperAdmin || isHeadPastor || isPastor || isChurchLeader || isWelcome,
+    // The Small Group Leader's one and only widening (0022). The database grants
+    // attendance church-wide; the screen narrows it to the groups they lead. Keeping
+    // the narrowing app-side means the day that rule tightens, it tightens in SQL and
+    // no UI changes.
+    canViewAttendance: isSuperAdmin || isHeadPastor || isPastor || isChurchLeader || isWelcome || isSmallGroupLeader,
 
     // WRITE capabilities — ministry-governed (+ SuperAdmin). Pastor is see-only.
     canWriteMembers: isSuperAdmin || isSecretariat,

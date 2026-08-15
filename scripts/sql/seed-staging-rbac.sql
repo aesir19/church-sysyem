@@ -41,10 +41,14 @@ WHERE NOT EXISTS (SELECT 1 FROM public.churches c WHERE c.name = s.church_name);
 -- The Finance ministry: 0014_rbac_predicates only *adopts* a pre-existing
 -- 'Finance Team' group from production's out-of-band history (docs/DEFECTS.md
 -- D4). A truly fresh database has nothing to adopt, so staging never got one.
-INSERT INTO public.groups (name, type, ministry_key)
-SELECT 'Finance Team', 'Ministry', 'finance'
+-- `ministries` since 0026_split_groups. The old guard also tested
+-- `type = 'Ministry' AND church_id IS NULL`; both halves are now structural — this
+-- table holds only ministries and has no church_id column — so the key is the whole
+-- condition.
+INSERT INTO public.ministries (name, ministry_key)
+SELECT 'Finance Team', 'finance'
 WHERE NOT EXISTS (
-  SELECT 1 FROM public.groups WHERE type = 'Ministry' AND church_id IS NULL AND ministry_key = 'finance'
+  SELECT 1 FROM public.ministries WHERE ministry_key = 'finance'
 );
 
 -- Members, one per seed row. birthdate/gender have no meaningful default and
@@ -75,10 +79,10 @@ SELECT auth_id, member_id, role FROM staging_seed
 ON CONFLICT (id) DO UPDATE SET member_id = EXCLUDED.member_id, role = EXCLUDED.role;
 
 -- Ministry membership (Finance/Secretariat/Welcome) for the rows that have one.
-INSERT INTO public.group_members (member_id, group_id)
+INSERT INTO public.ministry_members (member_id, ministry_id)
 SELECT s.member_id, g.id
 FROM staging_seed s
-JOIN public.groups g ON g.ministry_key = s.ministry_key AND g.type = 'Ministry' AND g.church_id IS NULL
+JOIN public.ministries g ON g.ministry_key = s.ministry_key
 WHERE s.ministry_key IS NOT NULL;
 
 -- Verify: one row per seed user, with role and (if any) ministry attached.
@@ -87,8 +91,8 @@ FROM staging_seed s
 JOIN public.user_accounts ua ON ua.id = s.auth_id
 JOIN public.members m ON m.id = ua.member_id
 JOIN public.churches c ON c.id = m.member_of
-LEFT JOIN public.group_members gm ON gm.member_id = m.id
-LEFT JOIN public.groups g ON g.id = gm.group_id AND g.type = 'Ministry'
+LEFT JOIN public.ministry_members gm ON gm.member_id = m.id
+LEFT JOIN public.ministries g ON g.id = gm.ministry_id
 ORDER BY c.name, ua.role;
 
 DROP TABLE staging_seed;

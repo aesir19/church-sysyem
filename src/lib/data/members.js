@@ -86,7 +86,44 @@ export const MEMBER_COLUMNS = `
 //
 // `type` comes along because a ministry and a small group are tagged
 // differently wherever they are listed.
-const MEMBER_GROUPS_EMBED = 'group_members(groups(id, name, type))'
+//
+// TWO EMBEDS SINCE 0026, WHERE THERE USED TO BE ONE NESTED ONE. This was
+// `group_members(groups(id, name, type))` — an embed through a join table into
+// another table. After the split there is no `groups` and no `group_members`, and
+// #74's plan to keep the names alive as union views is exactly what PostgREST
+// cannot embed through: it resolves embeds via foreign keys, and a union view has
+// none, so the nested form above returned PGRST200. Two ordinary embeds, each
+// following a real foreign key, resolve fine.
+//
+// `type` is no longer a column anywhere — it is which embed the row arrived in —
+// so normaliseGroups() below puts it back before anything downstream sees a row.
+const MEMBER_GROUPS_EMBED =
+  'ministry_members(ministries(id, name)), small_group_members(small_groups(id, name))'
+
+/**
+ * Fold the two embeds back into the single `group_members: [{ groups }]` shape
+ * the members table has always consumed, so MembersView and its tests do not
+ * have to know the storage changed. Ministries first, matching the Groups page.
+ */
+function normaliseGroups (row) {
+  const ministries = (row.ministry_members || [])
+    .map(m => m.ministries)
+    .filter(Boolean)
+    .map(g => ({ groups: { id: g.id, name: g.name, type: 'Ministry' } }))
+
+  const smallGroups = (row.small_group_members || [])
+    .map(m => m.small_groups)
+    .filter(Boolean)
+    .map(g => ({ groups: { id: g.id, name: g.name, type: 'Small Group' } }))
+
+  // The two embed keys are dropped rather than left alongside the folded result,
+  // so no caller can start depending on the storage shape by accident.
+  const rest = { ...row }
+  delete rest.ministry_members
+  delete rest.small_group_members
+
+  return { ...rest, group_members: [...ministries, ...smallGroups] }
+}
 
 const MESSAGES = {
   loadFailed: 'Failed to load members. Please try again.',
@@ -200,7 +237,7 @@ export async function listRecords({
     .range(from, to)
 
   if (error) return fail(MESSAGES.loadFailed, error, { total: 0 })
-  return ok(data || [], { total: count ?? 0 })
+  return ok((data || []).map(normaliseGroups), { total: count ?? 0 })
 }
 
 /**

@@ -71,8 +71,17 @@ export async function fetchNeedsAttention (churchId) {
     supabase.from('members').select('id')
       .eq('member_of', churchId).is('archived_at', null)
       .then(r => (r.data || []).map(m => m.id)),
-    supabase.from('group_members').select('member_id')
-      .then(r => (r.data || []).map(g => g.member_id))
+    // Both membership tables, since 0026 split them. Only the member ids matter
+    // here — this tile asks "is this person in any group at all", and a person in
+    // a ministry and a small group must not be counted as unassigned by one query
+    // just because the other found them.
+    Promise.all([
+      supabase.from('ministry_members').select('member_id'),
+      supabase.from('small_group_members').select('member_id')
+    ]).then(([ministries, smallGroups]) => [
+      ...(ministries.data || []).map(g => g.member_id),
+      ...(smallGroups.data || []).map(g => g.member_id)
+    ])
   ])
 
   const assigned = new Set(assignedIds)
