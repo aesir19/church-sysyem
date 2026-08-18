@@ -4,6 +4,9 @@ dist
 # must never depend on someone remembering to add a line here.
 .env
 .env.*
+# Exception: the E2E placeholder env is committed on purpose. It holds no real
+# credentials — the suite mocks every network call (see the file's own header).
+!.env.test
 
 # Lighthouse CI run output (lighthouserc.json writes reports here)
 .lighthouseci
@@ -46,3 +49,8 @@ UI mockups for form.zip
 
 # Local Netlify folder
 .netlify
+
+# Playwright E2E run output (reports, traces, screenshots) — regenerated per run.
+/test-results/
+/playwright-report/
+/playwright/.cache/

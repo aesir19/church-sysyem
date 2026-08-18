@@ -43,6 +43,44 @@ jobs:
       - name: Build app
         run: npm run build
 
+  e2e:
+    name: E2E (staging gate)
+    runs-on: ubuntu-latest
+    # Gate merges INTO staging only. Staging is where everything is fixed before
+    # it reaches production, so the heavier headless-browser run guards that
+    # integration point; feature-branch PRs and pushes still get the fast unit
+    # suite without paying for a browser. The suite mocks every network call
+    # (tests/e2e/support/mockSupabase.js) and serves the app under --mode test
+    # with the committed .env.test, so this job needs no secrets.
+    if: github.event_name == 'pull_request' && github.base_ref == 'staging'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Cache the browser binary across runs. Keyed on the lockfile so a
+      # Playwright version bump busts it. A cache hit still runs the install
+      # step, which then only wires up OS deps rather than downloading Chromium.
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Playwright (Chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+
   lighthouse:
     name: Lighthouse CI
     runs-on: ubuntu-latest
