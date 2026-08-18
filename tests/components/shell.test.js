@@ -6,7 +6,7 @@
 // screen that does not exist, a permission-gated item that vanishes instead of
 // explaining itself, an alert that announces at the wrong urgency.
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { createSSRApp, h } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 
@@ -42,6 +42,25 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push: () => {} }),
 }))
 
+// Nav items are now HIDDEN, not locked, when the caller lacks the capability
+// (ADR-0016). The real useCurrentRole resolves caps asynchronously from Supabase,
+// which an SSR render cannot await — so the caps would always read empty and every
+// gated item would vanish regardless. Mock it with a steerable caps object so a
+// test can render both a full-capability nav and a restricted one.
+const roleState = vi.hoisted(() => ({ caps: {}, role: 'super_admin' }))
+const ALL_CAPS = {
+  isSuperAdmin: true, isHeadPastor: false,
+  canViewAttendance: true, canWriteFinance: true, canViewFinance: true,
+}
+vi.mock('../../src/composables/useCurrentRole', () => ({
+  useCurrentRole: () => ({
+    caps: { value: roleState.caps },
+    role: { value: roleState.role },
+    // useActiveChurch reads this to decide whether to show the church switcher.
+    isCrossChurch: { value: !!(roleState.caps.isSuperAdmin || roleState.caps.isHeadPastor) },
+  }),
+}))
+
 // AppTabBar decides which tab is current from the route, so the stub has to be
 // steerable rather than fixed.
 const currentRoute = { value: { fullPath: '/dashboard/overview', path: '/dashboard/overview' } }
@@ -73,6 +92,13 @@ const NAV_LABELS = [
   'Collections', 'Expenses', 'Funds', 'Statistics', 'What&#39;s next',
 ]
 
+beforeEach(() => {
+  // Default to a full-capability caller, so the "everything is present" tests see the
+  // complete nav. Restricted-caller tests narrow this themselves.
+  roleState.caps = { ...ALL_CAPS }
+  roleState.role = 'super_admin'
+})
+
 describe('AppSidebar', () => {
   it('renders the nav without error', async () => {
     const { errors, warnings } = await render(AppSidebar)
@@ -87,21 +113,30 @@ describe('AppSidebar', () => {
     }
   })
 
-  // THE RULE CHANGED, DELIBERATELY. The previous shell HID capability-gated
-  // items from a caller who lacked the capability. The design handoff is
-  // explicit that a permission failure is never silent — "show the no-access
-  // state with Request access" — and a nav that quietly shortens itself teaches
-  // a Secretariat user that Collections does not exist rather than that it is
-  // not theirs. So the item renders, carries a lock, and the screen behind it
-  // does the explaining.
-  it('renders capability-gated items for a caller with no permissions, marked rather than hidden', async () => {
-    permissions.current = null
+  // THE RULE CHANGED, DELIBERATELY (ADR-0016). The shell now HIDES capability-gated
+  // items from a caller who lacks the capability — the owner does not want users shown
+  // navigation toward things that are not their job. No lock, no "request access", just
+  // absence. The route still redirects for anyone who deep-links.
+  it('hides capability-gated items from a caller who lacks them, with no lock', async () => {
+    roleState.caps = {} // a scopeless caller: no gated capability
     const { html } = await render(AppSidebar)
 
     for (const label of ['Attendance', 'Collections', 'Expenses', 'Funds']) {
+      expect(html, label).not.toContain(label)
+    }
+    // The ungated items are still there.
+    for (const label of ['Overview', 'Members', 'Groups']) {
       expect(html, label).toContain(label)
     }
-    expect(html).toContain('side__lock')
+    expect(html).not.toContain('side__lock')
+    expect(html).not.toContain('is-locked')
+  })
+
+  it('shows a gated item once the caller has its capability', async () => {
+    roleState.caps = { canViewAttendance: true }
+    const { html } = await render(AppSidebar)
+    expect(html).toContain('Attendance')
+    expect(html).not.toContain('Collections') // still lacks canWriteFinance
   })
 
   it('renders an unbuilt screen as a non-link badged Soon', async () => {
@@ -135,17 +170,19 @@ describe('AppTabBar', () => {
     }
   })
 
-  // Same rule the sidebar states: a permission failure is never silent. A bar
-  // that dropped Check in would teach four of the seven roles that this app has
-  // no attendance, rather than that it is not theirs.
-  it('marks capability-gated tabs rather than hiding them', async () => {
-    permissions.current = null
+  // Same rule the sidebar now states (ADR-0016): out-of-scope tabs are hidden, not
+  // locked. A caller lacking attendance and finance sees Home, People and More only.
+  it('hides capability-gated tabs from a caller who lacks them', async () => {
+    roleState.caps = {}
     const { html } = await render(AppTabBar)
 
-    expect(html).toContain('Check in')
-    expect(html).toContain('Funds')
-    expect(html).toContain('is-locked')
-    expect(html).toContain('tabs__lock')
+    expect(html).toContain('Home')
+    expect(html).toContain('People')
+    expect(html).toContain('More')
+    expect(html).not.toContain('Check in')
+    expect(html).not.toContain('Funds')
+    expect(html).not.toContain('is-locked')
+    expect(html).not.toContain('tabs__lock')
   })
 
   it('points every tab at a route that exists', async () => {

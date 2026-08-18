@@ -23,10 +23,14 @@ const SERVICE = {
   schedule_id: null,
 }
 
-// One guest row (linkable) and one member row, so the roster shows both states.
+// One guest row (linkable), one member row with its embed present, and one member
+// row whose members(...) embed came back NULL — the shape RLS produces for a caller
+// without member detail (Welcome Team). That last row's name must be resolved from
+// the directory, not rendered as "Unknown".
 const ROSTER = [
   { id: 'att-guest-1', member_id: null, guest_name: 'Ulysses Urbno', guest_contact: null, source: 'staff', created_at: NOW_ISO, members: null },
   { id: 'att-member-1', member_id: 'm-cora', guest_name: null, guest_contact: null, source: 'staff', created_at: NOW_ISO, members: { first_name: 'Cora', middle_name: null, last_name: 'Scribe' } },
+  { id: 'att-member-2', member_id: 'm-maria', guest_name: null, guest_contact: null, source: 'staff', created_at: NOW_ISO, members: null },
 ]
 
 // The member picker source (directory_search, not the members table — a Welcome
@@ -141,6 +145,14 @@ test.describe('Attendance', () => {
 
     await expect(page.getByText('Attendance recorded.')).toBeVisible()
     await expect(rosterName(page, 'Bella Guest')).toBeVisible()
+  })
+
+  // Regression for the Welcome-Team "Unknown" bug: a member attendee whose
+  // members(...) embed RLS blanked must be named from the directory the picker
+  // already loaded, not rendered as "Unknown".
+  test('resolves a member attendee name from the directory when the embed is blank', async ({ page }) => {
+    await expect(rosterName(page, 'Maria Abad')).toBeVisible()
+    await expect(page.locator('.att__name', { hasText: 'Unknown' })).toHaveCount(0)
   })
 
   test('shows the check-in QR', async ({ page }) => {

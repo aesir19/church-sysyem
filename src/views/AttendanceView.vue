@@ -17,6 +17,7 @@ import {
   formatClockTime,
   formatTimeRemaining,
   isWindowOpen,
+  memberDisplayName,
   summariseRoster
 } from '../utils/attendanceWindow'
 import {
@@ -100,6 +101,23 @@ const viewingLive = computed(
 )
 
 const summary = computed(() => summariseRoster(roster.value))
+
+// member_id -> display name, from the directory the picker already loaded. The
+// roster embeds members(...), which RLS blanks for a caller without member detail
+// (Welcome Team), so those rows would read "Unknown"; the directory is that same
+// caller's safe view of the names, so labelFor() resolves from it. See
+// attendeeLabel().
+const memberNameById = computed(() => {
+  const map = new Map()
+  // memberDisplayName so a resolved-from-directory name reads identically to one from
+  // the members(...) embed — same middle-name handling, no two rules for one roster.
+  for (const m of members.value) map.set(m.id, memberDisplayName(m))
+  return map
+})
+
+function labelFor (row) {
+  return attendeeLabel(row, memberNameById.value)
+}
 
 const subtitle = computed(() => {
   if (!selectedService.value) return 'No services yet'
@@ -193,11 +211,13 @@ async function loadContext () {
       supabase.rpc('get_checkin_link', { p_church_id: churchId }),
       supabase.from('services').select(SERVICE_COLUMNS).eq('church_id', churchId).order('opens_at', { ascending: false }).limit(12),
       supabase.from('service_schedules').select(SCHEDULE_COLUMNS).eq('church_id', churchId).order('weekday').order('starts_at'),
-      // Member picker source. Uses directory_search, NOT the members table: a
-      // Welcome Team member has no can_see_member_detail and cannot read
-      // `members` under RLS (0015), so the table select would be empty and the
-      // attendee picker unusable.
-      supabase.rpc('directory_search', { p_church_id: churchId }),
+      // Member picker source, AND the name map that resolves roster attendees whose
+      // members(...) embed RLS blanked (see memberNameById). Uses directory_search,
+      // NOT the members table: a Welcome Team member has no can_see_member_detail and
+      // cannot read `members` under RLS (0015), so the table select would be empty.
+      // p_limit 1000 (not the 200 default) so a church over 200 members does not leave
+      // later attendees rendering as "Unknown" — the same bound group.js uses.
+      supabase.rpc('directory_search', { p_church_id: churchId, p_limit: 1000 }),
       // Materialises today's service from the recurring schedule if the window
       // is open and nothing has created it yet, so "close now" and "record
       // attendee" always have a real service to work against.
@@ -211,6 +231,7 @@ async function loadContext () {
     : (membersResult.data || []).map((r) => ({
       id: r.member_id,
       first_name: r.first_name,
+      middle_name: r.middle_name,
       last_name: r.last_name
     }))
 
@@ -324,7 +345,7 @@ async function confirmRemove () {
 
   roster.value = roster.value.filter((entry) => entry.id !== row.id)
   removeRow.value = null
-  showToast(`Removed ${attendeeLabel(row)}.`)
+  showToast(`Removed ${labelFor(row)}.`)
 }
 
 async function closeNow () {
@@ -621,11 +642,11 @@ function formatRecordedAt (value) {
             class="att__row"
           >
             <Avatar
-              :name="attendeeLabel(row)"
+              :name="labelFor(row)"
               :size="30"
             />
             <span class="att__name">
-              {{ attendeeLabel(row) }}
+              {{ labelFor(row) }}
               <span
                 v-if="row.guest_contact"
                 class="att__contact"
@@ -659,7 +680,7 @@ function formatRecordedAt (value) {
               <button
                 type="button"
                 class="att__remove"
-                :aria-label="`Remove ${attendeeLabel(row)} from this service`"
+                :aria-label="`Remove ${labelFor(row)} from this service`"
                 @click="askRemove(row)"
               >
                 <Icon
@@ -718,7 +739,7 @@ function formatRecordedAt (value) {
     <Modal
       v-if="canManageAttendance"
       :open="!!removeRow"
-      :title="`Remove ${attendeeLabel(removeRow)}?`"
+      :title="`Remove ${labelFor(removeRow)}?`"
       description="The record is deleted and the totals for this service change. Recording them again is the only way back."
       width="sm"
       layout="stack"
