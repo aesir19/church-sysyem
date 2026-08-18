@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   roster: { ok: true, rows: [], count: 0, detail: 'full', message: '' },
   leader: { ok: true, leader: null },
   caps: {},
+  ledGroupIds: [],
   calls: []
 }))
 
@@ -42,6 +43,10 @@ vi.mock('../../src/lib/data/group', async () => {
     fetchLeader: vi.fn(async () => {
       state.calls.push('fetchLeader')
       return { message: '', cause: null, ...state.leader }
+    }),
+    fetchMyLedGroupIds: vi.fn(async () => {
+      state.calls.push('fetchMyLedGroupIds')
+      return { ok: true, ids: state.ledGroupIds ?? [], cause: null }
     })
   }
 })
@@ -64,6 +69,7 @@ vi.mock('../../src/composables/useCurrentRole', () => ({
     isSuperAdmin: { value: state.caps.isSuperAdmin ?? true },
     isHeadPastor: { value: state.caps.isHeadPastor ?? false },
     isPastor: { value: state.caps.isPastor ?? false },
+    canRecordJourney: { value: state.caps.canRecordJourney ?? false },
     canManageGroupMembers: () => state.caps.canManageGroupMembers ?? true
   })
 }))
@@ -108,6 +114,7 @@ beforeEach(() => {
   state.roster = { ok: true, rows: [], count: 0, detail: 'full', message: '' }
   state.leader = { ok: true, leader: null }
   state.caps = {}
+  state.ledGroupIds = []
   state.calls = []
   vi.clearAllMocks()
 })
@@ -242,6 +249,37 @@ describe('what a caller without member detail sees', () => {
     }
     const html = await renderLoaded()
     expect(html).not.toContain('Journey across the group')
+  })
+
+  // 0028: a small-group leader viewing a group THEY lead may record the one-to-one and
+  // turning-point milestones inline. The chips appear only when the caller leads this
+  // very group — set_member_journey() is the real gate, but a control that would bounce
+  // is not offered.
+  it('offers the journey toggles to a leader of THIS group', async () => {
+    state.caps = { canSeeMemberDetail: false, isSmallGroupLeader: true, canRecordJourney: true, isSuperAdmin: false, canManageSmallGroups: false, canManageGroupMembers: false }
+    state.ledGroupIds = ['g2'] // SMALL_GROUP.id
+    state.roster = {
+      ok: true,
+      rows: [member({ memberId: '1', name: 'Juan Cruz', age: null, joined: null })],
+      count: 1, detail: 'names', message: ''
+    }
+    const html = await renderLoaded()
+    expect(state.calls).toContain('fetchMyLedGroupIds')
+    expect(html).toContain('One-to-one')
+    expect(html).toContain('Turning Point')
+  })
+
+  it('withholds the journey toggles on a group the caller does NOT lead', async () => {
+    state.caps = { canSeeMemberDetail: false, isSmallGroupLeader: true, canRecordJourney: true, isSuperAdmin: false, canManageSmallGroups: false, canManageGroupMembers: false }
+    state.ledGroupIds = ['some-other-group']
+    state.roster = {
+      ok: true,
+      rows: [member({ memberId: '1', name: 'Juan Cruz', age: null, joined: null })],
+      count: 1, detail: 'names', message: ''
+    }
+    const html = await renderLoaded()
+    expect(html).not.toContain('One-to-one')
+    expect(html).not.toContain('Turning Point')
   })
 
   // No click-through to member detail for a names-only roster (story 21/22): the row is

@@ -1,6 +1,6 @@
 # ADR-0015 — A names-only directory for roles that may not see PII
 
-**Status:** Accepted · **Date:** 2026-08-14 · **Migrations:** `0015_members_rbac`, `0022_admin_access` · Story 20
+**Status:** Accepted · **Date:** 2026-08-14 · **Migrations:** `0015_members_rbac`, `0022_admin_access` · Story 20 · **Amended by** [ADR-0017](0017-directory-carries-operational-fields.md)
 
 ## Context
 
@@ -15,7 +15,9 @@ rather than "you may not see the records" — two very different statements.
 Names-without-PII come from SECURITY DEFINER functions that return names and group
 memberships and nothing protected — no birthdate, contact, or journey:
 `directory_search()` for the roster/directory, `list_church_accounts()` for the
-pastor-assignment candidates. Reads report which projection they returned
+pastor-assignment candidates. (Since [ADR-0017](0017-directory-carries-operational-fields.md)
+`directory_search()` also carries gender, middle name and the journey flags — ministry-
+operational fields the owner ruled are not PII — but still no birthdate/address/contact.) Reads report which projection they returned
 (`detail: 'full' | 'names'`) so the screen can distinguish "nobody is here" from "you may
 not see who."
 

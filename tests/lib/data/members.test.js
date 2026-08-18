@@ -105,16 +105,40 @@ describe('listDirectory', () => {
     expect(calledWith('rpc')[0][2].p_query).toBe(null)
   })
 
-  it('flattens the RPC shape into member rows', async () => {
+  it('flattens the RPC shape into member rows, including the 0028 safe fields', async () => {
     resolvesTo({
-      data: [{ member_id: 'm1', first_name: 'Juan', last_name: 'Cruz', ministries: null, small_groups: ['Youth'] }],
+      data: [{
+        member_id: 'm1', first_name: 'Juan', middle_name: 'D', last_name: 'Cruz',
+        gender: 'Male', ministries: null, small_groups: ['Youth'],
+        is_one_to_one_completed: true, is_turning_point_completed: false,
+        is_baptized: true, has_submitted_membership_form: false,
+      }],
       error: null,
     })
     const result = await listDirectory(CHURCH)
     expect(result.ok).toBe(true)
     expect(result.rows).toEqual([
-      { id: 'm1', first_name: 'Juan', last_name: 'Cruz', ministries: [], small_groups: ['Youth'] },
+      {
+        id: 'm1', first_name: 'Juan', middle_name: 'D', last_name: 'Cruz', gender: 'Male',
+        ministries: [], small_groups: ['Youth'],
+        // Synthesised so the members table's Groups column renders unchanged.
+        group_members: [{ groups: { name: 'Youth', type: 'Small Group' } }],
+        is_one_to_one_completed: true, is_turning_point_completed: false,
+        is_baptized: true, has_submitted_membership_form: false,
+      },
     ])
+  })
+
+  it('defaults the added fields when the RPC omits them, and coerces journey flags to booleans', async () => {
+    resolvesTo({
+      data: [{ member_id: 'm1', first_name: 'Ana', last_name: 'Reyes', ministries: ['Choir'], small_groups: null }],
+      error: null,
+    })
+    const row = (await listDirectory(CHURCH)).rows[0]
+    expect(row.middle_name).toBe(null)
+    expect(row.gender).toBe(null)
+    expect(row.is_baptized).toBe(false)
+    expect(row.group_members).toEqual([{ groups: { name: 'Choir', type: 'Ministry' } }])
   })
 
   it('fails without a church rather than querying for every church', async () => {

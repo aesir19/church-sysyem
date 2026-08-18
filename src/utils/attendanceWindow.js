@@ -67,15 +67,26 @@ export function memberDisplayName(member) {
 }
 
 /**
- * How an attendance row should be labelled in the roster. Mirrors the three
- * states the table can hold: a resolved member, a named guest, or a member row
- * whose embed came back empty because RLS hid it.
+ * How an attendance row should be labelled in the roster. Mirrors the states the
+ * table can hold: a named guest, a member resolved from the embed, a member
+ * resolved from the directory when the embed was empty, or genuinely unknown.
+ *
+ * `nameById` is an optional Map of member_id → display name, built from
+ * directory_search() (readable by every assigned role). The `members(...)` embed
+ * on the attendance row is blanked by RLS for a caller without member detail —
+ * Welcome Team above all — so without this a Welcome member sees every member
+ * attendee as "Unknown". The directory is the caller's own safe view of the same
+ * names, so resolving from it shows who actually attended rather than a wall of
+ * "Unknown"; a truly unmatched member_id still falls through to "Unknown".
  */
-export function attendeeLabel(row) {
+export function attendeeLabel(row, nameById = null) {
   if (row?.guest_name) return row.guest_name
   const embedded = row?.members
   if (embedded) return memberDisplayName(embedded)
-  if (row?.member_id) return 'Unknown'
+  if (row?.member_id && nameById) {
+    const resolved = nameById.get(row.member_id)
+    if (resolved) return resolved
+  }
   return 'Unknown'
 }
 

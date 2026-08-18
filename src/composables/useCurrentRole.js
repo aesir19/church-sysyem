@@ -97,6 +97,8 @@ export function useCurrentRole() {
     isSmallGroupLeader: c('isSmallGroupLeader'),
     // capabilities
     canSeeMemberDetail: c('canSeeMemberDetail'),
+    canBrowseDirectory: c('canBrowseDirectory'),
+    canRecordJourney: c('canRecordJourney'),
     canWriteMembers: c('canWriteMembers'),
     canViewFinance: c('canViewFinance'),
     canWriteFinance: c('canWriteFinance'),

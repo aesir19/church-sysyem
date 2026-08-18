@@ -16,14 +16,13 @@ import { useTheme } from '../composables/useTheme'
 // The 242px left nav: brand, church switcher, nine items, user card pinned to
 // the bottom by margin-top:auto.
 //
-// WHY EVERY ITEM RENDERS, INCLUDING ONES THE CALLER CANNOT USE. The handoff is
-// explicit: "Never hide a permission failure silently — show the no-access
-// state with Request access." A nav that quietly shortens itself teaches a
-// Secretariat user that Collections does not exist, rather than that it is not
-// theirs; then they ask why the app has no finance section. Gating happens at
-// the route and inside the screen, where it can explain itself. The one thing
-// the nav does carry is `requiresCapability`, so a locked item is marked rather
-// than merely disappointing.
+// ITEMS OUTSIDE THE CALLER'S SCOPE ARE HIDDEN, NOT LOCKED. This reverses the
+// original "never hide a permission failure silently — show it locked with Request
+// access" handoff, at the owner's direction: users should not be shown navigation
+// toward things that are not their job (a Welcome member has no reason to see
+// Church Funds). See docs/decisions/0016-hide-out-of-scope-nav.md. An item with a
+// `needs` key it fails is dropped from the list entirely; the route still redirects
+// as a backstop for anyone who deep-links.
 
 defineProps({
   // The mobile drawer renders the same nav; it just needs to close on navigate.
@@ -61,11 +60,10 @@ const NAV = [
   { key: 'next',        label: "What's next", icon: 'next',        to: '/dashboard/whats-next',  badge: 'New' }
 ]
 
+// Drop anything the caller lacks the capability for. Items with no `needs`
+// (Overview, Members, Groups, What's next, the "Soon" Statistics tile) always show.
 const items = computed(() =>
-  NAV.map(item => ({
-    ...item,
-    locked: !!item.needs && !caps.value[item.needs]
-  }))
+  NAV.filter(item => !item.needs || caps.value[item.needs])
 )
 
 // The user card's second line. Reads the real role rather than the mockups'
@@ -132,7 +130,6 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
           v-if="item.to"
           :to="item.to"
           class="side__item"
-          :class="{ 'is-locked': item.locked }"
           @click="emit('navigate')"
         >
           <Icon
@@ -142,15 +139,8 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
             class="side__icon"
           />
           <span class="side__label">{{ item.label }}</span>
-          <Icon
-            v-if="item.locked"
-            name="lock"
-            :size="13"
-            :width="2.2"
-            class="side__lock"
-          />
           <Badge
-            v-else-if="item.badge"
+            v-if="item.badge"
             tone="magenta"
             class="side__badge"
           >
@@ -331,11 +321,6 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
   color: var(--ink-4);
 }
 .side__item.is-soon:hover { background: transparent; color: var(--ink-4); }
-
-/* Locked, not hidden. The item still navigates — the screen behind it explains
-   the refusal and offers "Request access". */
-.side__item.is-locked .side__label { color: var(--ink-4); }
-.side__lock { color: var(--ink-5); }
 
 .side__badge { font-size: var(--text-meta-sm); padding: 2px 7px; }
 

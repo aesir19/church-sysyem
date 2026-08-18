@@ -15,7 +15,7 @@ import { showToast } from '../composables/useToast'
 import { MEMBERSHIP_TABLES, MEMBERSHIP_PARENT_KEY } from '../lib/data/groups'
 import { useActiveChurch } from '../composables/useActiveChurch'
 import { useCurrentRole } from '../composables/useCurrentRole'
-import { fetchGroupBySlug, fetchRoster, fetchLeader, fetchLeaderCandidates, journeyFor, slugify } from '../lib/data/group'
+import { fetchGroupBySlug, fetchRoster, fetchLeader, fetchLeaderCandidates, journeyFor, recordJourney, fetchMyLedGroupIds, slugify } from '../lib/data/group'
 import { assignSmallGroupLeader, unassignSmallGroupLeader } from '../lib/data/admin'
 
 // The group page — frame 3a. Replaces GroupDetailModal, whose own comment recorded the
@@ -43,7 +43,7 @@ const router = useRouter()
 const { activeChurchId, churches, ensureLoaded, setActiveChurch } = useActiveChurch()
 const {
   canSeeMemberDetail, canManageSmallGroups, isSmallGroupLeader, canManageGroupMembers,
-  isSuperAdmin, isHeadPastor, isPastor
+  canRecordJourney, isSuperAdmin, isHeadPastor, isPastor
 } = useCurrentRole()
 
 const group = ref(null)
@@ -57,11 +57,21 @@ const notFound = ref(false)
 const errorMessage = ref('')
 const rosterError = ref('')
 const showAll = ref(false)
+// The small groups this caller leads. The journey toggles below appear only for the
+// group they actually lead — set_member_journey() (0028) is the real gate, but an
+// action that would bounce should not be offered.
+const ledGroupIds = ref([])
 
 // What the roster shows before "Show all", matching the mockup's "Showing 5 of 27".
 const PREVIEW_ROWS = 5
 
 const isMinistry = computed(() => group.value?.type === 'Ministry')
+
+// May this caller record the two journey milestones on THIS group's roster? Only a
+// small-group leader of this very group (or, in principle, a SuperAdmin who leads it).
+const canRecordJourneyHere = computed(() =>
+  canRecordJourney.value && !!group.value && ledGroupIds.value.includes(group.value.id)
+)
 
 const journey = computed(() =>
   journeyFor({ rows: roster.value, detail: rosterDetail.value })
@@ -139,14 +149,19 @@ async function load () {
 
   group.value = found.group
 
-  const [rosterResult, leaderResult] = await Promise.all([
+  const [rosterResult, leaderResult, ledResult] = await Promise.all([
     fetchRoster({
       group: found.group,
       churchId: activeChurchId.value,
       canSeeMemberDetail: canSeeMemberDetail.value
     }),
-    fetchLeader({ group: found.group })
+    fetchLeader({ group: found.group }),
+    // Only a potential journey-recorder needs to know what they lead; everyone else
+    // skips the round-trip entirely.
+    canRecordJourney.value ? fetchMyLedGroupIds() : Promise.resolve({ ok: true, ids: [] })
   ])
+
+  ledGroupIds.value = ledResult.ids || []
 
   leader.value = leaderResult.leader
   // A failed lookup is not an absent leader. Without this the page states "No leader
@@ -339,6 +354,46 @@ function joinedLabel (iso) {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return null
   return d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })
+}
+
+// Toggle one of the two leader-writable milestones on a roster row. Optimistic:
+// the flag flips immediately and rolls back if the write is refused, so a leader
+// tapping through a group does not wait on a round-trip per tap. set_member_journey
+// sends BOTH flags (it sets both columns), so the untouched one is passed as-is.
+const savingJourney = ref(new Set())
+
+async function toggleJourney (row, key) {
+  if (!canRecordJourneyHere.value) return
+  if (savingJourney.value.has(row.memberId)) return
+
+  const before = {
+    oneToOne: row.isOneToOneCompleted,
+    turningPoint: row.isTurningPointCompleted
+  }
+  const next = {
+    oneToOne: key === 'oneToOne' ? !before.oneToOne : before.oneToOne,
+    turningPoint: key === 'turningPoint' ? !before.turningPoint : before.turningPoint
+  }
+
+  row.isOneToOneCompleted = next.oneToOne
+  row.isTurningPointCompleted = next.turningPoint
+  savingJourney.value = new Set(savingJourney.value).add(row.memberId)
+
+  const result = await recordJourney({
+    memberId: row.memberId,
+    oneToOne: next.oneToOne,
+    turningPoint: next.turningPoint
+  })
+
+  const pending = new Set(savingJourney.value)
+  pending.delete(row.memberId)
+  savingJourney.value = pending
+
+  if (!result.ok) {
+    row.isOneToOneCompleted = before.oneToOne
+    row.isTurningPointCompleted = before.turningPoint
+    showToast(result.message, 'error')
+  }
 }
 </script>
 
@@ -582,6 +637,12 @@ function joinedLabel (iso) {
                   <th scope="col">
                     Role
                   </th>
+                  <th
+                    v-if="canRecordJourneyHere"
+                    scope="col"
+                  >
+                    Journey
+                  </th>
                   <th scope="col">
                     <span class="gd__sr">Actions</span>
                   </th>
@@ -621,6 +682,33 @@ function joinedLabel (iso) {
                     <Badge :tone="row.isLeader ? 'accent' : 'neutral'">
                       {{ row.isLeader ? 'Leader' : 'Member' }}
                     </Badge>
+                  </td>
+                  <!-- The leader's two writable milestones (0028). Baptism and
+                       certification are not here — those stay a Secretariat write. The
+                       chips are pressed-state toggles, saved optimistically. -->
+                  <td v-if="canRecordJourneyHere">
+                    <div class="gd__jtoggles">
+                      <button
+                        type="button"
+                        class="gd__jchip"
+                        :class="{ 'is-on': row.isOneToOneCompleted }"
+                        :aria-pressed="row.isOneToOneCompleted"
+                        :disabled="savingJourney.has(row.memberId)"
+                        @click.stop="toggleJourney(row, 'oneToOne')"
+                      >
+                        One-to-one
+                      </button>
+                      <button
+                        type="button"
+                        class="gd__jchip"
+                        :class="{ 'is-on': row.isTurningPointCompleted }"
+                        :aria-pressed="row.isTurningPointCompleted"
+                        :disabled="savingJourney.has(row.memberId)"
+                        @click.stop="toggleJourney(row, 'turningPoint')"
+                      >
+                        Turning Point
+                      </button>
+                    </div>
                   </td>
                   <td>
                     <!-- Removing the leader is refused by the database (0022's deferred
@@ -934,6 +1022,27 @@ function joinedLabel (iso) {
 .gd__person-meta { margin: 0; font-size: var(--text-meta); color: var(--ink-4); }
 
 .gd__roster-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-12); padding-top: var(--sp-12); color: var(--ink-4); font-size: var(--text-meta); }
+
+/* The leader's journey toggles. Pressed chips, in the app's existing pill idiom
+   (see MembersView .pill) so the roster stays in the current visual language. */
+.gd__jtoggles { display: flex; gap: var(--sp-6); }
+.gd__jchip {
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  font-family: var(--font-sans);
+  font-size: var(--text-meta);
+  font-weight: 700;
+  color: var(--ink-3);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color var(--dur-state) ease, border-color var(--dur-state) ease, color var(--dur-state) ease;
+}
+.gd__jchip:hover { background: var(--surface-subtle-2); }
+.gd__jchip.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.gd__jchip:disabled { opacity: .55; cursor: default; }
+.gd__jchip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .gd__leader-form { display: flex; flex-direction: column; gap: var(--sp-8); max-height: 46vh; overflow-y: auto; }
 .gd__leader-option { display: flex; align-items: center; gap: var(--sp-10); padding: var(--sp-8); border-radius: var(--r-inset); cursor: pointer; }

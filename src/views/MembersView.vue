@@ -13,7 +13,7 @@ import { useActiveChurch } from '../composables/useActiveChurch'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { useMediaQuery } from '../composables/useMediaQuery'
-import { listRecords, countArchived, MEMBER_PAGE_SIZE } from '../lib/data/members'
+import { listRecords, listDirectory, countArchived, MEMBER_PAGE_SIZE } from '../lib/data/members'
 import { journeyProgress } from '../utils/journey'
 
 // The members roll.
@@ -32,7 +32,19 @@ import { journeyProgress } from '../utils/journey'
 // discovered later.
 
 const { activeChurchId, activeChurchName } = useActiveChurch()
-const { canSeeMemberDetail, canWriteMembers } = useCurrentRole()
+const { canSeeMemberDetail, canBrowseDirectory, canWriteMembers } = useCurrentRole()
+
+// Three ways this screen reads the roll:
+//   'full'      — canSeeMemberDetail: the base members table, PII, the detail rail.
+//   'directory' — canBrowseDirectory only: the safe directory (name, gender, groups,
+//                 journey) via directory_search(). No PII columns, no rail, no writes.
+//   'none'      — a scopeless account: an empty "no access yet" state, never the roll.
+// The database enforces all three (0015/0028); this only decides what to draw.
+const mode = computed(() =>
+  canSeeMemberDetail.value ? 'full'
+    : canBrowseDirectory.value ? 'directory'
+      : 'none'
+)
 const { displayName, load: loadUser } = useCurrentUser()
 const isWide = useMediaQuery('(min-width: 1180px)')
 
@@ -113,19 +125,41 @@ function groupsOf (m) {
 
 async function load () {
   if (!activeChurchId.value) return
+
+  // A scopeless account never queries: it has no directory to read, and asking
+  // would return an empty list that reads as "no members" rather than "not yours".
+  if (mode.value === 'none') {
+    rows.value = []
+    total.value = 0
+    archived.value = 0
+    selectedId.value = null
+    errorMessage.value = ''
+    loading.value = false
+    return
+  }
+
   loading.value = true
   errorMessage.value = ''
 
-  const [result, archivedCount] = await Promise.all([
-    listRecords({
-      churchId: activeChurchId.value,
-      canSeeDetail: canSeeMemberDetail.value,
-      page: page.value,
-      search: search.value
-    }),
-    countArchived(activeChurchId.value)
-  ])
-  archived.value = archivedCount
+  let result
+  if (mode.value === 'full') {
+    const [full, archivedCount] = await Promise.all([
+      listRecords({
+        churchId: activeChurchId.value,
+        canSeeDetail: true,
+        page: page.value,
+        search: search.value
+      }),
+      countArchived(activeChurchId.value)
+    ])
+    archived.value = archivedCount
+    result = full
+  } else {
+    // Directory mode: the safe list, paged only client-side (directory_search
+    // caps at its limit and has no offset), so there is no archived count to show.
+    archived.value = 0
+    result = await listDirectory(activeChurchId.value, { query: search.value })
+  }
 
   if (!result.ok) {
     errorMessage.value = result.message
@@ -133,7 +167,9 @@ async function load () {
     total.value = 0
   } else {
     rows.value = result.rows
-    total.value = result.total
+    // 'full' carries a server total for the pager; 'directory' is a single capped
+    // page, so its total is simply what came back.
+    total.value = mode.value === 'full' ? result.total : result.rows.length
     // A selection that is no longer on the page is not a selection.
     if (selectedId.value && !result.rows.some(m => m.id === selectedId.value)) {
       selectedId.value = null
@@ -310,8 +346,10 @@ watch(page, load)
         </Button>
       </header>
 
-      <!-- Search + filters -->
+      <!-- Search + filters. Hidden for a scopeless account: there is nothing to
+           search, and offering the controls implies a list they cannot see. -->
       <div
+        v-if="mode !== 'none'"
         class="mem__controls anim-rise"
         style="--i: 1"
       >
@@ -325,7 +363,7 @@ watch(page, load)
             :value="search"
             class="mem__search-input"
             type="search"
-            placeholder="Search by name, number or address…"
+            :placeholder="mode === 'full' ? 'Search by name, number or address…' : 'Search by name…'"
             aria-label="Search members"
             @input="onSearch($event.target.value)"
           >
@@ -373,6 +411,25 @@ watch(page, load)
         >
           {{ errorMessage }}
         </p>
+
+        <!-- No access yet: a scopeless account. Not an error and not "no members" —
+             the roll exists, it is simply not theirs until someone assigns them. -->
+        <div
+          v-else-if="mode === 'none'"
+          class="empty"
+        >
+          <span class="empty__tile"><Icon
+            name="lock"
+            :size="22"
+          /></span>
+          <h2 class="empty__title">
+            No access yet
+          </h2>
+          <p class="empty__body">
+            Your account has not been assigned to a ministry or role yet. Ask an
+            administrator to set you up, then the member directory will appear here.
+          </p>
+        </div>
 
         <!-- No results -->
         <div
@@ -433,12 +490,16 @@ watch(page, load)
                 Member
               </th>
               <th
+                v-if="mode === 'full'"
                 scope="col"
-                class="tbl__num"
+                class="tbl__num tbl__age"
               >
                 Age
               </th>
-              <th scope="col">
+              <th
+                scope="col"
+                class="tbl__groups"
+              >
                 Groups
               </th>
               <th scope="col">
@@ -467,21 +528,32 @@ watch(page, load)
                   />
                   <div class="who__text">
                     <span class="who__name">{{ nameOf(m) }}</span>
+                    <!-- Full mode shows the contact number (PII); directory mode has
+                         none, so it shows gender instead — part of the safe set. -->
+                    <template v-if="mode === 'full'">
+                      <span
+                        v-if="phoneOf(m)"
+                        class="who__phone"
+                      >{{ phoneOf(m) }}</span>
+                      <span
+                        v-else
+                        class="who__phone who__phone--empty"
+                      >No number on record</span>
+                    </template>
                     <span
-                      v-if="phoneOf(m)"
+                      v-else-if="m.gender"
                       class="who__phone"
-                    >{{ phoneOf(m) }}</span>
-                    <span
-                      v-else
-                      class="who__phone who__phone--empty"
-                    >No number on record</span>
+                    >{{ m.gender }}</span>
                   </div>
                 </div>
               </td>
-              <td class="tbl__num">
+              <td
+                v-if="mode === 'full'"
+                class="tbl__num tbl__age"
+              >
                 {{ ageOf(m) ?? '—' }}
               </td>
-              <td>
+              <td class="tbl__groups">
                 <span v-if="groupsOf(m).length">{{ groupsOf(m).map(g => g.name).join(', ') }}</span>
                 <span
                   v-else
@@ -493,9 +565,10 @@ watch(page, load)
           </tbody>
         </table>
 
-        <!-- Pager -->
+        <!-- Pager. Full mode only: directory_search returns one capped page with no
+             offset, so there is no page 2 to move to. -->
         <div
-          v-if="!loading && totalPages > 1"
+          v-if="!loading && mode === 'full' && totalPages > 1"
           class="pager"
         >
           <span class="pager__label">
@@ -868,10 +941,10 @@ watch(page, load)
   .mem__head { flex-direction: column; align-items: stretch; }
   .mem__search { max-width: none; }
   /* Age and Groups are the two columns a phone can live without; the name,
-     number and journey are what the roll is actually read for. */
-  .tbl thead th:nth-child(2),
-  .tbl thead th:nth-child(3),
-  .tbl td:nth-child(2),
-  .tbl td:nth-child(3) { display: none; }
+     number and journey are what the roll is actually read for. Hidden by class,
+     not nth-child, because directory mode drops the Age column and column indices
+     would otherwise shift onto Journey. */
+  .tbl__age,
+  .tbl__groups { display: none; }
 }
 </style>

@@ -36,6 +36,14 @@ export function deriveCapabilities(perm) {
     // VIEW capabilities. Head Pastor is deliberately NOT in canSeeMemberDetail —
     // it sees only the name/group directory, never member PII (matches 0014/0015).
     canSeeMemberDetail: isSuperAdmin || isPastor || isChurchLeader || isSecretariat,
+    // The safe directory — names, gender, group membership and journey — is open to
+    // every ASSIGNED role or ministry, but a scopeless account (plain member /
+    // unassigned with no ministry and no group to lead) sees nothing. Mirrors
+    // has_directory_access() (0028): the two must not drift. Gates the Members page
+    // for those accounts into a "no access yet" state rather than the congregation.
+    canBrowseDirectory:
+      isSuperAdmin || isHeadPastor || isPastor || isChurchLeader ||
+      isFinance || isSecretariat || isWelcome || isSmallGroupLeader,
     canViewFinance: isSuperAdmin || isHeadPastor || isPastor || isChurchLeader || isFinance,
     // The Small Group Leader's one and only widening (0022). The database grants
     // attendance church-wide; the screen narrows it to the groups they lead. Keeping
@@ -45,6 +53,12 @@ export function deriveCapabilities(perm) {
 
     // WRITE capabilities — ministry-governed (+ SuperAdmin). Pastor is see-only.
     canWriteMembers: isSuperAdmin || isSecretariat,
+    // A small-group leader may record the one-to-one and turning-point milestones
+    // (only) for members of a group they lead; SuperAdmin holds it too. The per-group
+    // row scope and the two-column restriction live in set_member_journey() (0028) —
+    // this flag only decides whether to render the roster toggles. Secretariat records
+    // journey through the full member form (canWriteMembers), not this.
+    canRecordJourney: isSuperAdmin || isSmallGroupLeader,
     canWriteFinance: isSuperAdmin || isFinance,
     canManageAttendance: isSuperAdmin || isWelcome,
     canManageSmallGroups: isSuperAdmin || isChurchLeader,

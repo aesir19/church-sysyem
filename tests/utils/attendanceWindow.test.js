@@ -84,10 +84,28 @@ describe('attendeeLabel', () => {
       .toBe('Juan Cruz')
   })
 
-  it('reports Unknown when the member embed came back empty', () => {
+  it('reports Unknown when the member embed came back empty and no directory is given', () => {
     // RLS hid the row rather than the join failing — a real data condition, not
     // a rendering bug. Mirrors contributorLabel() on the collections side.
     expect(attendeeLabel({ member_id: 'm1', members: null })).toBe('Unknown')
+  })
+
+  it('resolves the name from the directory map when the embed was blanked by RLS', () => {
+    // Welcome Team cannot read member detail, so members(...) comes back null; the
+    // directory (directory_search) is readable by them and carries the same names.
+    const nameById = new Map([['m1', 'Juan Cruz']])
+    expect(attendeeLabel({ member_id: 'm1', members: null }, nameById)).toBe('Juan Cruz')
+  })
+
+  it('still reports Unknown for a member_id absent from the directory map', () => {
+    const nameById = new Map([['m2', 'Ana Reyes']])
+    expect(attendeeLabel({ member_id: 'm1', members: null }, nameById)).toBe('Unknown')
+  })
+
+  it('prefers the embed over the directory map when both are present', () => {
+    const nameById = new Map([['m1', 'Directory Name']])
+    expect(attendeeLabel({ member_id: 'm1', members: { first_name: 'Embed', last_name: 'Name' } }, nameById))
+      .toBe('Embed Name')
   })
 })
 

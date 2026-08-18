@@ -28,10 +28,49 @@ describe('deriveCapabilities', () => {
     for (const key of [
       'canSeeMemberDetail', 'canWriteMembers', 'canViewFinance', 'canWriteFinance',
       'canViewAttendance', 'canManageAttendance', 'canManageSmallGroups', 'isCrossChurch',
-      'isSmallGroupLeader',
+      'isSmallGroupLeader', 'canBrowseDirectory', 'canRecordJourney',
     ]) {
       expect(c[key]).toBe(false)
     }
+  })
+
+  // 0028. The safe directory (names + gender + group + journey) is open to every
+  // ASSIGNED role/ministry, but a scopeless account sees nothing — mirrors
+  // has_directory_access() in SQL, and gates the Members page for such accounts.
+  describe('canBrowseDirectory', () => {
+    it('is granted to every assigned role and ministry', () => {
+      expect(deriveCapabilities(perm('super_admin', { is_super_admin: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('head_pastor', { is_head_pastor: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('pastor', { is_pastor: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('church_leader', { is_church_leader: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('member', { is_finance: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('member', { is_secretariat: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('member', { is_welcome: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('member', { is_small_group_leader: true })).canBrowseDirectory).toBe(true)
+    })
+
+    it('is withheld from a scopeless member/unassigned account (fail closed)', () => {
+      expect(deriveCapabilities(perm('member')).canBrowseDirectory).toBe(false)
+      expect(deriveCapabilities(perm('unassigned')).canBrowseDirectory).toBe(false)
+    })
+  })
+
+  // 0028. Small-group leaders may record the one-to-one and turning-point milestones
+  // (only) for members of groups they lead; the per-group scope is enforced in SQL by
+  // set_member_journey(). SuperAdmin also holds it. Nobody else gets it here —
+  // Secretariat records journey through the full member form (canWriteMembers).
+  describe('canRecordJourney', () => {
+    it('is held by SuperAdmin and small-group leaders', () => {
+      expect(deriveCapabilities(perm('super_admin', { is_super_admin: true })).canRecordJourney).toBe(true)
+      expect(deriveCapabilities(perm('member', { is_small_group_leader: true })).canRecordJourney).toBe(true)
+    })
+
+    it('is withheld from everyone else, including Secretariat and Church Leader', () => {
+      expect(deriveCapabilities(perm('member', { is_secretariat: true })).canRecordJourney).toBe(false)
+      expect(deriveCapabilities(perm('church_leader', { is_church_leader: true })).canRecordJourney).toBe(false)
+      expect(deriveCapabilities(perm('member', { is_welcome: true })).canRecordJourney).toBe(false)
+      expect(deriveCapabilities(perm('head_pastor', { is_head_pastor: true })).canRecordJourney).toBe(false)
+    })
   })
 
   // 0022. Leading a small group is not an account role — it comes from a row in

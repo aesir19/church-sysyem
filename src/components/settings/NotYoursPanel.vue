@@ -1,11 +1,11 @@
 <script setup>
 // Mockup 4g's second state: someone reached a settings page by URL that is not theirs.
 //
-// THIS IS WHY HIDING THE MENU ENTRY IS NOT A SILENT FAILURE. The nav shows a locked
-// item rather than removing it, because a nav that shortens itself teaches people the
-// feature does not exist. The settings menu does remove entries — but the page behind
-// them still says no out loud, so nothing is ever hidden in a way that leaves somebody
-// staring at a blank screen wondering what broke.
+// A DEEP-LINK BACKSTOP, NOT A NAV STATE. Out-of-scope navigation is hidden now, not
+// locked (docs/decisions/0016-hide-out-of-scope-nav.md) — the settings gear itself is
+// absent for anyone who cannot open it. This panel exists only for the case that
+// remains: someone typing or bookmarking a settings URL they may not use. It fails
+// closed with a sentence rather than a blank screen.
 
 import Button from '../ui/Button.vue'
 import Icon from '../ui/icons/Icon.vue'

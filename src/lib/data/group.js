@@ -36,6 +36,7 @@
 // table first.
 
 import { supabase } from '../supabase'
+import { writeRpc } from './write'
 import { GROUP_TABLES, MEMBERSHIP_TABLES, MEMBERSHIP_PARENT_KEY, asGroup } from './groups'
 
 const MESSAGES = {
@@ -176,8 +177,9 @@ export async function fetchRoster ({ group, churchId, canSeeMemberDetail }) {
   // STORY 20: names, not a bare count. A caller without member detail may still see WHO
   // is in the group — their names, and nothing else. `members!inner` returns them zero
   // rows (rule 3 above), so the names cannot come from the membership tables. They come
-  // from directory_search(), a SECURITY DEFINER read that returns names and each
-  // person's group memberships and nothing protected — no birthdate, contact or journey.
+  // from directory_search(), a SECURITY DEFINER read that returns names, group
+  // memberships and — since 0028 — gender and the journey flags (ministry-operational,
+  // not PII), but nothing protected: no birthdate, contact, address or marital status.
   //
   // It is church-scoped (its own `scope` CTE: the caller's church, or every church for a
   // global role, narrowed here to the active one by p_church_id), which is exactly
@@ -209,7 +211,13 @@ export async function fetchRoster ({ group, churchId, canSeeMemberDetail }) {
         // The columns a names-only row does not carry. The table template guards on
         // these being null, so the age/joined line renders empty rather than wrong.
         age: null,
-        joined: null
+        joined: null,
+        // Journey rides along on directory_search() since 0028 — it is ministry-
+        // operational, not PII — so a names-only roster (a small-group leader's view of
+        // their own group) can show and, for the two allowed milestones, record it.
+        isBaptized: !!r.is_baptized,
+        isOneToOneCompleted: !!r.is_one_to_one_completed,
+        isTurningPointCompleted: !!r.is_turning_point_completed
       }))
 
     return { ok: true, message: '', rows, count: rows.length, detail: 'names', cause: null }
@@ -370,6 +378,44 @@ export function journeyFor ({ rows, detail }) {
     // The mockup's third tile. Complete means all three, not any of them.
     complete: count(r => r.isBaptized && r.isOneToOneCompleted && r.isTurningPointCompleted)
   }
+}
+
+/**
+ * Record the one-to-one and turning-point milestones for a roster member.
+ *
+ * A small-group leader may write ONLY these two flags, and only for a member of a
+ * group they lead; SuperAdmin may too. The rule and the two-column restriction live
+ * in set_member_journey() (0028) — this is the app-side seam, not the enforcement.
+ * Baptism and membership certification are not writable here; they stay a
+ * Secretariat write through the member form.
+ *
+ * @param {{ memberId: string, oneToOne: boolean, turningPoint: boolean }} params
+ */
+export async function recordJourney ({ memberId, oneToOne, turningPoint }) {
+  return writeRpc(
+    supabase.rpc('set_member_journey', {
+      p_member_id: memberId,
+      p_one_to_one: oneToOne,
+      p_turning_point: turningPoint
+    }),
+    { messages: {
+      denied: 'You can only update the journey of members in a group you lead.',
+      failed: 'That journey step could not be saved. Please try again.'
+    } }
+  )
+}
+
+/**
+ * The small groups the signed-in caller leads, as an array of ids. Empty for
+ * everyone who leads none. Used to decide whether to offer the journey toggles on
+ * THIS group — set_member_journey() is the real gate, but a control that would
+ * bounce should not be shown (the roster-is-the-candidate-list rule, applied to
+ * journey writes).
+ */
+export async function fetchMyLedGroupIds () {
+  const { data, error } = await supabase.rpc('my_led_group_ids')
+  if (error) return { ok: false, ids: [], cause: error }
+  return { ok: true, ids: Array.isArray(data) ? data : [], cause: null }
 }
 
 /** Whole years, or null when the birthdate is absent — never 0, which reads as a baby. */

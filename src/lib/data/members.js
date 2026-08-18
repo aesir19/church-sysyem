@@ -138,9 +138,10 @@ const ok = (rows, extra = {}) => ({ ok: true, message: '', rows, cause: null, ..
 const fail = (message, cause = null, extra = {}) => ({ ok: false, message, rows: [], cause, ...extra })
 
 /**
- * Names and group membership for everyone in a church. Safe for every role —
- * the directory_search RPC returns no PII, and the base members table returns
- * baseline callers nothing at all under RLS.
+ * The safe directory for everyone in a church: names, gender, group membership
+ * and the four journey flags (0028) — but no birthdate, address, contact or other
+ * PII, which stay on the base table behind can_see_member_detail(). Safe for every
+ * ASSIGNED role; directory_search() returns a scopeless account no rows at all.
  *
  * Not paginated: the RPC takes a limit but no offset, and adding one is a
  * migration against a SECURITY DEFINER function that is the only thing standing
@@ -167,12 +168,26 @@ export async function listDirectory(churchId, { query = '', limit = DIRECTORY_LI
   })
   if (error) return fail(MESSAGES.loadFailed, error, { capped: false, limit })
 
+  // directory_search returns the safe fields only (0028): names, gender, group
+  // membership and the four journey flags — never birthdate/address/contact PII.
+  // group_members is synthesised from the ministry/small-group name arrays so the
+  // members table's Groups column renders unchanged, without a second round-trip.
   const rows = (data || []).map((row) => ({
     id: row.member_id,
     first_name: row.first_name,
+    middle_name: row.middle_name ?? null,
     last_name: row.last_name,
+    gender: row.gender ?? null,
     ministries: row.ministries || [],
     small_groups: row.small_groups || [],
+    group_members: [
+      ...(row.ministries || []).map((name) => ({ groups: { name, type: 'Ministry' } })),
+      ...(row.small_groups || []).map((name) => ({ groups: { name, type: 'Small Group' } })),
+    ],
+    is_one_to_one_completed: !!row.is_one_to_one_completed,
+    is_turning_point_completed: !!row.is_turning_point_completed,
+    is_baptized: !!row.is_baptized,
+    has_submitted_membership_form: !!row.has_submitted_membership_form,
   }))
 
   return ok(rows, { capped: rows.length >= limit, limit })
