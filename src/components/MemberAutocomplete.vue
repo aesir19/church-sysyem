@@ -265,6 +265,16 @@ defineExpose({ reset, focus: () => inputEl.value?.focus() })
     </div>
 
     <Teleport to="body">
+      <!-- @pointerdown.stop is load-bearing, not defensive. When this control is
+           used inside ui/Modal, Reka's dialog is a "dismissable layer": while it
+           is open it sets `body { pointer-events: none }` and re-enables pointer
+           events only on its own subtree. This list is teleported to <body>,
+           OUTSIDE that subtree, so (a) it needs `pointer-events: auto` below to
+           be clickable at all, and (b) once clickable, a pointerdown on an option
+           bubbles to Reka's document-level listener, which — seeing a target that
+           is not part of the dialog layer — treats it as an outside click and
+           dismisses the whole modal before the pick registers. Stopping the
+           pointerdown here keeps the interaction the list's own. -->
       <ul
         v-if="open"
         :id="listId"
@@ -272,6 +282,7 @@ defineExpose({ reset, focus: () => inputEl.value?.focus() })
         class="mac__list"
         :style="listStyle"
         role="listbox"
+        @pointerdown.stop
       >
         <li
           v-for="(option, index) in filtered"
@@ -378,6 +389,10 @@ defineExpose({ reset, focus: () => inputEl.value?.focus() })
   list-style: none;
   position: fixed;
   z-index: 70;
+  /* The dialog this can live inside disables pointer events on <body> while
+     open (see the template note); without this the teleported list inherits
+     that and none of the options can be clicked. */
+  pointer-events: auto;
   padding: var(--sp-6);
   background: var(--surface);
   border: 1px solid var(--border);
