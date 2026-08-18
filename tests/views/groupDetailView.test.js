@@ -19,6 +19,7 @@ const state = vi.hoisted(() => ({
   leader: { ok: true, leader: null },
   caps: {},
   ledGroupIds: [],
+  churches: null,
   calls: []
 }))
 
@@ -55,7 +56,10 @@ vi.mock('../../src/composables/useActiveChurch', () => ({
   useActiveChurch: () => ({
     activeChurchId: { value: 'church-1' },
     activeChurchName: { value: 'Cogon' },
-    churches: { value: [{ id: 'church-1', name: 'Cogon' }] },
+    // `churches` is [] for a single-church user; `homeChurch` is what the view must
+    // resolve the URL segment against for them. state.churches lets a test empty it.
+    churches: { value: state.churches ?? [{ id: 'church-1', name: 'Cogon' }] },
+    homeChurch: { value: { id: 'church-1', name: 'Cogon' } },
     ensureLoaded: async () => {},
     setActiveChurch: () => {}
   })
@@ -115,6 +119,7 @@ beforeEach(() => {
   state.leader = { ok: true, leader: null }
   state.caps = {}
   state.ledGroupIds = []
+  state.churches = null
   state.calls = []
   vi.clearAllMocks()
 })
@@ -293,6 +298,20 @@ describe('what a caller without member detail sees', () => {
     }
     const html = await renderLoaded()
     expect(html).not.toContain('is-clickable')
+  })
+})
+
+describe('church resolution from the URL', () => {
+  // Regression: a single-church user has `churches: []` (that list only drives the
+  // cross-church selector), so resolving the URL's church segment against it alone
+  // matched nothing and rendered "Group not found" for every single-church user.
+  // The view must fall back to their home church.
+  it('resolves the group for a single-church user (churches empty, homeChurch set)', async () => {
+    state.churches = [] // single-church user
+    state.group = SMALL_GROUP
+    const html = await renderLoaded()
+    expect(html).not.toContain('Group not found')
+    expect(html).toContain('Thursday Group')
   })
 })
 

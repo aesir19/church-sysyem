@@ -40,7 +40,20 @@ import { assignSmallGroupLeader, unassignSmallGroupLeader } from '../lib/data/ad
 
 const route = useRoute()
 const router = useRouter()
-const { activeChurchId, churches, ensureLoaded, setActiveChurch } = useActiveChurch()
+const { activeChurchId, churches, homeChurch, ensureLoaded, setActiveChurch } = useActiveChurch()
+
+// The churches this caller can resolve a URL segment against. A cross-church user
+// has the full `churches` list; a SINGLE-church user has `churches: []` (that list
+// exists only to drive the selector), so without folding in their home church the
+// URL's church segment matched nothing and every group page rendered "not found"
+// for them. homeChurch is populated by ensureLoaded() before load() reads this.
+const knownChurches = computed(() => {
+  const list = [...(churches.value || [])]
+  if (homeChurch.value && !list.some(c => c.id === homeChurch.value.id)) {
+    list.push(homeChurch.value)
+  }
+  return list
+})
 const {
   canSeeMemberDetail, canManageSmallGroups, isSmallGroupLeader, canManageGroupMembers,
   canRecordJourney, isSuperAdmin, isHeadPastor, isPastor
@@ -116,7 +129,7 @@ async function load () {
   //
   // A church slug the caller cannot see matches nothing, so they get the same not-found
   // as any other invisible group — the selector only ever holds churches RLS allowed.
-  const wantedChurch = (churches.value || []).find(c => slugify(c.name) === slugify(route.params.church))
+  const wantedChurch = knownChurches.value.find(c => slugify(c.name) === slugify(route.params.church))
   if (wantedChurch && wantedChurch.id !== activeChurchId.value) {
     setActiveChurch(wantedChurch.id)
   }
