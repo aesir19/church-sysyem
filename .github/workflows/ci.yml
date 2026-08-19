@@ -75,8 +75,22 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
+      # --with-deps shells out to apt-get for Chromium's system libraries, and
+      # GitHub's Ubuntu mirrors occasionally stall — one run hung here ~16 min
+      # before being cancelled. Bound each attempt with `timeout` and retry, so a
+      # flaky mirror recovers on the next try instead of hanging the whole gate.
       - name: Install Playwright (Chromium)
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 12
+        run: |
+          for attempt in 1 2 3; do
+            if timeout 240 npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "::warning::playwright install attempt $attempt failed or timed out; retrying in 15s"
+            sleep 15
+          done
+          echo "::error::playwright install failed after 3 attempts"
+          exit 1
 
       - name: Run E2E tests
         run: npm run test:e2e
