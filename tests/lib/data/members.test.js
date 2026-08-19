@@ -69,26 +69,31 @@ describe('listDirectory', () => {
     expect(calledWith('from')).toHaveLength(0)
   })
 
-  // directory_search's p_limit DEFAULTS to 200 and
-  // this module used to leave it unsent — so a church over 200 members showed
-  // baseline users and Head Pastors a truncated list with NO indication it was
-  // truncated. Passing it explicitly is what makes the cap something the caller
-  // can report.
-  it('passes p_limit explicitly so the cap is knowable', async () => {
+  // The directory shows the WHOLE roll now (0030): p_limit null means "no limit",
+  // so the 200-row cap that hid members past the 200th — and reported the capped
+  // page as the total — is gone.
+  it('sends p_limit null so the full roll comes back uncapped', async () => {
     resolvesTo({ data: [], error: null })
     await listDirectory(CHURCH)
     expect(calledWith('rpc')[0][2].p_limit).toBe(DIRECTORY_LIMIT)
+    expect(DIRECTORY_LIMIT).toBe(null)
   })
 
-  it('reports when the list came back capped, and when it did not', async () => {
+  it('never reports capped with the default (unlimited) read', async () => {
     resolvesTo({
-      data: Array.from({ length: DIRECTORY_LIMIT }, (_, i) => ({ member_id: `m${i}` })),
+      data: Array.from({ length: 500 }, (_, i) => ({ member_id: `m${i}` })),
       error: null,
     })
-    expect((await listDirectory(CHURCH)).capped).toBe(true)
-
-    resolvesTo({ data: [{ member_id: 'm1' }], error: null })
     expect((await listDirectory(CHURCH)).capped).toBe(false)
+  })
+
+  it('reports capped only when a caller passes an explicit bound it hits', async () => {
+    resolvesTo({
+      data: Array.from({ length: 10 }, (_, i) => ({ member_id: `m${i}` })),
+      error: null,
+    })
+    expect((await listDirectory(CHURCH, { limit: 10 })).capped).toBe(true)
+    expect((await listDirectory(CHURCH, { limit: 50 })).capped).toBe(false)
   })
 
   it('passes a sanitized search term through the RPC parameter', async () => {

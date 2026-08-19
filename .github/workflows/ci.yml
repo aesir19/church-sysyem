@@ -75,8 +75,18 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
 
+      # Chromium's binary only — NOT `--with-deps`. `--with-deps` shells out to
+      # apt-get for system libraries, and GitHub's Ubuntu mirrors intermittently
+      # stall there: one run hung ~16 min before being cancelled, and a bounded
+      # retry only deadlocked (a killed apt-get orphaned the /var/lib/apt lock).
+      # GitHub's ubuntu-latest image already ships Chromium's runtime libraries,
+      # so the apt step is redundant here; the binary comes from Playwright's CDN
+      # and is served from the actions/cache above. If a future Chromium ever needs
+      # a lib the image lacks, move this whole job onto the mcr.microsoft.com/
+      # playwright container rather than reintroducing apt on the runner.
       - name: Install Playwright (Chromium)
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 5
+        run: npx playwright install chromium
 
       - name: Run E2E tests
         run: npm run test:e2e

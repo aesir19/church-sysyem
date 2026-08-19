@@ -3,6 +3,7 @@ import {
   deriveCapabilities,
   canManageGroupMembers,
   routeAllowed,
+  roleLabel,
 } from '../../src/utils/capabilities'
 
 // Build a get_my_permissions() row. Pass the flags that are true.
@@ -210,6 +211,36 @@ describe('canManageGroupMembers (Finance = Pastor-only)', () => {
 
   it('null caps fail closed', () => {
     expect(canManageGroupMembers(null, { isFinanceGroup: false })).toBe(false)
+  })
+})
+
+describe('roleLabel', () => {
+  const label = (role, flags) => roleLabel(deriveCapabilities(perm(role, flags)))
+
+  it('labels ministry roles even though their account role stays member/unassigned', () => {
+    // The regression this fixes: a Welcome Team account has role 'member', so a
+    // label keyed on the role string alone showed "No role assigned".
+    expect(label('member', { is_welcome: true })).toBe('Welcome Team')
+    expect(label('member', { is_finance: true })).toBe('Finance')
+    expect(label('unassigned', { is_secretariat: true })).toBe('Secretariat')
+    expect(label('member', { is_small_group_leader: true })).toBe('Small Group Leader')
+  })
+
+  it('labels the senior account roles', () => {
+    expect(label('super_admin', { is_super_admin: true })).toBe('Super Admin')
+    expect(label('head_pastor', { is_head_pastor: true })).toBe('Head Pastor')
+    expect(label('pastor', { is_pastor: true })).toBe('Pastor')
+    expect(label('church_leader', { is_church_leader: true })).toBe('Church Leader')
+  })
+
+  it('prefers the senior role and joins multiple ministries', () => {
+    expect(label('church_leader', { is_church_leader: true, is_welcome: true })).toBe('Church Leader')
+    expect(label('member', { is_finance: true, is_welcome: true })).toBe('Finance · Welcome Team')
+  })
+
+  it('returns null for a genuinely scopeless account (caller supplies empty-state text)', () => {
+    expect(label('unassigned')).toBe(null)
+    expect(roleLabel(null)).toBe(null)
   })
 })
 

@@ -8,8 +8,9 @@ import Icon from '../components/ui/icons/Icon.vue'
 import { useActiveChurch } from '../composables/useActiveChurch'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { useCurrentUser } from '../composables/useCurrentUser'
+import { roleLabel as roleLabelFor } from '../utils/capabilities'
 import {
-  fetchMemberCounts, fetchNeedsAttention, fetchRecentServices,
+  fetchOverviewStats, fetchRecentServices,
   fetchMonthFunds, fetchOpenService
 } from '../lib/data/overview'
 
@@ -29,7 +30,7 @@ import {
 // clothes, so the visual language is the mockup's and the content is the app's.
 
 const { activeChurchId, activeChurchName } = useActiveChurch()
-const { caps, role } = useCurrentRole()
+const { caps } = useCurrentRole()
 const { firstName, load: loadUser } = useCurrentUser()
 
 const loading = ref(true)
@@ -92,20 +93,13 @@ const accessChips = computed(() => [
   { label: 'Small groups', on: caps.value.canManageSmallGroups }
 ])
 
-const ROLE_LABEL = {
-  super_admin: 'Super Admin',
-  head_pastor: 'Head Pastor',
-  pastor: 'Pastor',
-  church_leader: 'Church Leader',
-  finance: 'Finance',
-  secretariat: 'Secretariat',
-  welcome: 'Welcome Team'
-}
-
+// The role name is derived from the capability flags, not the account `role`
+// string — a Welcome/Finance/Secretariat/Small-Group-Leader account keeps role
+// 'member' but is not roleless. See roleLabel() in utils/capabilities.
 const accessSentence = computed(() => {
-  const name = ROLE_LABEL[role.value] || 'No role assigned'
+  const name = roleLabelFor(caps.value)
   const church = activeChurchName.value || 'this church'
-  if (!role.value) return `You have no role on ${church} yet. A pastor assigns one before the dashboard opens up.`
+  if (!name) return `You have no role on ${church} yet. A pastor assigns one before the dashboard opens up.`
   if (caps.value.isCrossChurch) return `${name}. You can see every church in the network; you are looking at ${church}.`
   return `${name} of ${church}.`
 })
@@ -116,15 +110,26 @@ async function load () {
   loading.value = true
   failed.value = false
   try {
-    const [c, a, s, f, open] = await Promise.all([
-      fetchMemberCounts(id),
-      fetchNeedsAttention(id),
-      fetchRecentServices(id, 10),
-      fetchMonthFunds(id, now),
-      fetchOpenService(id)
+    // Only fetch what this role can actually read: attendance and finance are
+    // capability-gated, so calling them for a role without the capability is a
+    // round-trip that RLS answers with nothing. The member stats always run —
+    // the function self-gates and returns zeros for a scopeless account.
+    const [stats, s, f, open] = await Promise.all([
+      fetchOverviewStats(id),
+      caps.value.canViewAttendance ? fetchRecentServices(id, 10) : Promise.resolve([]),
+      caps.value.canViewFinance ? fetchMonthFunds(id, now) : Promise.resolve({ total: 0 }),
+      caps.value.canViewAttendance ? fetchOpenService(id) : Promise.resolve(null)
     ])
-    counts.value = c
-    attention.value = a
+    counts.value = {
+      active: stats.active,
+      archived: stats.archived,
+      joinedThisMonth: stats.joinedThisMonth
+    }
+    attention.value = {
+      noOneToOne: stats.noOneToOne,
+      notBaptized: stats.notBaptized,
+      inNoGroup: stats.inNoGroup
+    }
     services.value = s
     funds.value = f
     openService.value = open
