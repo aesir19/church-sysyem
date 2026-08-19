@@ -9,7 +9,7 @@ import { useActiveChurch } from '../composables/useActiveChurch'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import {
-  fetchMemberCounts, fetchNeedsAttention, fetchRecentServices,
+  fetchOverviewStats, fetchRecentServices,
   fetchMonthFunds, fetchOpenService
 } from '../lib/data/overview'
 
@@ -116,15 +116,26 @@ async function load () {
   loading.value = true
   failed.value = false
   try {
-    const [c, a, s, f, open] = await Promise.all([
-      fetchMemberCounts(id),
-      fetchNeedsAttention(id),
-      fetchRecentServices(id, 10),
-      fetchMonthFunds(id, now),
-      fetchOpenService(id)
+    // Only fetch what this role can actually read: attendance and finance are
+    // capability-gated, so calling them for a role without the capability is a
+    // round-trip that RLS answers with nothing. The member stats always run —
+    // the function self-gates and returns zeros for a scopeless account.
+    const [stats, s, f, open] = await Promise.all([
+      fetchOverviewStats(id),
+      caps.value.canViewAttendance ? fetchRecentServices(id, 10) : Promise.resolve([]),
+      caps.value.canViewFinance ? fetchMonthFunds(id, now) : Promise.resolve({ total: 0 }),
+      caps.value.canViewAttendance ? fetchOpenService(id) : Promise.resolve(null)
     ])
-    counts.value = c
-    attention.value = a
+    counts.value = {
+      active: stats.active,
+      archived: stats.archived,
+      joinedThisMonth: stats.joinedThisMonth
+    }
+    attention.value = {
+      noOneToOne: stats.noOneToOne,
+      notBaptized: stats.notBaptized,
+      inNoGroup: stats.inNoGroup
+    }
     services.value = s
     funds.value = f
     openService.value = open
