@@ -32,15 +32,16 @@ import { buildMemberNameOrFilter, sanitizeMemberSearchTerm } from '../../utils/s
 export const MEMBER_PAGE_SIZE = 50
 
 /**
- * What `directory_search`'s `p_limit` is sent as. The function's own default is
- * 200 and this module used to leave it unsent — so a church over 200 members
- * showed baseline users and Head Pastors a truncated list with no indication it
- * was truncated. Sending it explicitly is what lets a caller say so.
- * Paginating that path properly needs a `p_offset` parameter on a SECURITY
- * DEFINER function, which is a migration and a security review, and is
- * deferred.
+ * The Members directory shows the WHOLE church roll, not a slice. Passing
+ * `p_limit: null` to directory_search means "no limit" (0030) — the old 200-row
+ * cap hid members past the 200th and reported the capped page as the total, which
+ * disagreed with the Overview's true count. The read is per-church and
+ * safe-fields-only, so it is bounded by the church's own membership.
+ *
+ * `null` rather than a big number on purpose: a fixed ceiling would be the same
+ * bug one order of magnitude out.
  */
-export const DIRECTORY_LIMIT = 200
+export const DIRECTORY_LIMIT = null
 
 /**
  * The columns a caller may order by.
@@ -143,14 +144,13 @@ const fail = (message, cause = null, extra = {}) => ({ ok: false, message, rows:
  * PII, which stay on the base table behind can_see_member_detail(). Safe for every
  * ASSIGNED role; directory_search() returns a scopeless account no rows at all.
  *
- * Not paginated: the RPC takes a limit but no offset, and adding one is a
- * migration against a SECURITY DEFINER function that is the only thing standing
- * between baseline users and the `members` table. That is deferred; this caps
- * honestly instead — `capped` is how the caller knows to say so.
+ * Returns the full roll: `limit` defaults to null (no cap). A caller may still
+ * pass a positive `limit` to bound the read; `capped` then reports whether the
+ * result hit that bound. With the default null limit `capped` is always false.
  *
  * @param {string} churchId
- * @param {{ query?: string, limit?: number }} [options]
- * @returns {Promise<{ ok: boolean, message: string, rows: object[], capped: boolean, limit: number, cause: unknown }>}
+ * @param {{ query?: string, limit?: number|null }} [options]
+ * @returns {Promise<{ ok: boolean, message: string, rows: object[], capped: boolean, limit: number|null, cause: unknown }>}
  */
 export async function listDirectory(churchId, { query = '', limit = DIRECTORY_LIMIT } = {}) {
   if (!churchId) return fail(MESSAGES.noChurch, null, { capped: false, limit })
@@ -190,7 +190,7 @@ export async function listDirectory(churchId, { query = '', limit = DIRECTORY_LI
     has_submitted_membership_form: !!row.has_submitted_membership_form,
   }))
 
-  return ok(rows, { capped: rows.length >= limit, limit })
+  return ok(rows, { capped: limit != null && rows.length >= limit, limit })
 }
 
 /**
