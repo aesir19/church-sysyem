@@ -12,6 +12,7 @@ import { useCurrentRole } from '../composables/useCurrentRole'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { useSession } from '../composables/useSession'
 import { useTheme } from '../composables/useTheme'
+import { roleLabel as roleLabelFor } from '../utils/capabilities'
 
 // The 242px left nav: brand, church switcher, nine items, user card pinned to
 // the bottom by margin-top:auto.
@@ -32,7 +33,7 @@ defineProps({
 const emit = defineEmits(['navigate'])
 
 const { activeChurchName, showChurchSelector } = useActiveChurch()
-const { caps, role } = useCurrentRole()
+const { caps } = useCurrentRole()
 const { isDark, toggleTheme } = useTheme()
 
 // The ONE sign-out path. `useSession().signOut()` clears the cached church,
@@ -66,18 +67,6 @@ const items = computed(() =>
   NAV.filter(item => !item.needs || caps.value[item.needs])
 )
 
-// The user card's second line. Reads the real role rather than the mockups'
-// three-role vocabulary — see the ADR on the seven-role capability set.
-const ROLE_LABEL = {
-  super_admin: 'Super Admin',
-  head_pastor: 'Head Pastor',
-  pastor: 'Pastor',
-  church_leader: 'Church Leader',
-  finance: 'Finance',
-  secretariat: 'Secretariat',
-  welcome: 'Welcome Team'
-}
-
 const { displayName, load: loadUser } = useCurrentUser()
 
 // The gear replaces the standalone sign-out for anyone who has settings to reach,
@@ -89,7 +78,10 @@ const canOpenSettings = computed(() => caps.value.isSuperAdmin || caps.value.isH
 onMounted(loadUser)
 
 const userName = computed(() => displayName.value || 'Signed in')
-const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
+// Derived from the capability flags, not the account `role` string — a ministry
+// account (Welcome / Finance / Secretariat / Small Group Leader) keeps role
+// 'member' but is not roleless. See roleLabel() in utils/capabilities.
+const roleLabel = computed(() => roleLabelFor(caps.value) || 'No role assigned')
 </script>
 
 <template>

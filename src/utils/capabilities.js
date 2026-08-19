@@ -68,6 +68,33 @@ export function deriveCapabilities(perm) {
   }
 }
 
+// A human label for the person's effective role, for identity lines like the
+// sidebar user card and the Overview "Your access" sentence.
+//
+// It is derived from the capability FLAGS, not the account `role` string. Welcome,
+// Finance, Secretariat and Small Group Leader are ministry-derived (they leave
+// `role` as 'member'/'unassigned' — see deriveCapabilities and the note above), so
+// keying a label map on `role` alone mislabels every ministry member as "No role
+// assigned". Senior account roles take precedence; a purely ministry account shows
+// its ministries joined. Returns null when the account is genuinely scopeless, so
+// the caller can choose its own empty-state wording.
+const MINISTRY_LABELS = [
+  ['isFinance', 'Finance'],
+  ['isSecretariat', 'Secretariat'],
+  ['isWelcome', 'Welcome Team'],
+  ['isSmallGroupLeader', 'Small Group Leader'],
+]
+
+export function roleLabel(caps) {
+  const c = caps || {}
+  if (c.isSuperAdmin) return 'Super Admin'
+  if (c.isHeadPastor) return 'Head Pastor'
+  if (c.isPastor) return 'Pastor'
+  if (c.isChurchLeader) return 'Church Leader'
+  const ministries = MINISTRY_LABELS.filter(([flag]) => c[flag]).map(([, label]) => label)
+  return ministries.length ? ministries.join(' · ') : null
+}
+
 // Membership management is group-specific because the Finance ministry is
 // Pastor-only. `isFinanceGroup` should be true when the target group is the global
 // Finance ministry. Mirrors can_manage_group_members() in 0014.
