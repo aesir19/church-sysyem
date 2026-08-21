@@ -2,104 +2,62 @@ import { supabase } from '../supabase'
 
 // Reads for the Overview screen.
 //
-// EGRESS IS THE CONSTRAINT, NOT LATENCY. Every count here is issued with
-// `head: true`, which asks PostgREST for the Content-Range header and NO rows.
-// The alternative — selecting a column and counting client-side — would put
-// roughly 1,800 attendance ids and 250 member ids on the wire on every visit to
-// the app's landing page. Rule 1 is a monthly bandwidth number, so a handful of
-// extra round-trips that each transfer nothing is the cheaper trade.
+// ONE ROUND-TRIP PER INTENT. The member figures and the recent-services chart
+// each come from a single database function (0029) rather than a fan-out of
+// PostgREST calls. This screen used to fire ~19 round-trips — three member
+// counts, four needs-attention queries, and one attendance COUNT per service —
+// and on free-tier Nano compute each round-trip pays full network latency, so
+// the fan-out, not egress, was the cost. The functions fold that work server-side.
 //
-// Everything is church-scoped explicitly. RLS returns every church to a
+// It also fixes a correctness gap: the counts were plain SELECTs on `members`,
+// subject to the members SELECT policy (can_see_member_detail). A Welcome Team
+// account fails that check, so every tile read 0 while the Members page — reading
+// through the SECURITY DEFINER directory_search() — showed a full roster.
+// overview_member_stats() is the matching definer-scoped read, so the two agree.
+//
+// Everything stays church-scoped explicitly. RLS returns every church to a
 // SuperAdmin or Head Pastor, so the app does the scoping — see useActiveChurch.
-
-const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000
 
 function isoDate (d) {
   return d.toISOString().slice(0, 10)
 }
 
-async function countOf (build) {
-  const { count, error } = await build()
+/**
+ * Every member-derived Overview figure — active/archived/joined-this-month plus
+ * the three "Needs attention" counts — in one call. Returned as a single row by
+ * overview_member_stats(), which is church-scoped and gated by
+ * has_directory_access() (a scopeless account gets zeros).
+ */
+export async function fetchOverviewStats (churchId) {
+  const { data, error } = await supabase
+    .rpc('overview_member_stats', { p_church_id: churchId })
+    .maybeSingle()
   if (error) throw error
-  return count ?? 0
-}
-
-/**
- * Active and archived member counts, plus how many joined this calendar month —
- * the tiles carry a delta, not just a figure, and "+6 joined this month" is the
- * line that makes 254 mean something.
- */
-export async function fetchMemberCounts (churchId) {
-  const monthStart = isoDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1))
-
-  const [active, archived, joinedThisMonth] = await Promise.all([
-    countOf(() => supabase.from('members')
-      .select('id', { count: 'exact', head: true })
-      .eq('member_of', churchId).is('archived_at', null)),
-    countOf(() => supabase.from('members')
-      .select('id', { count: 'exact', head: true })
-      .eq('member_of', churchId).not('archived_at', 'is', null)),
-    countOf(() => supabase.from('members')
-      .select('id', { count: 'exact', head: true })
-      .eq('member_of', churchId).is('archived_at', null)
-      .gte('date_joined', monthStart))
-  ])
-  return { active, archived, joinedThisMonth }
-}
-
-/**
- * The three "Needs attention" rows.
- *
- * "In no ministry or group" cannot be a count query: PostgREST has no NOT
- * EXISTS, and the relationship lives in a join table. It is derived from two id
- * lists instead — bounded by the roster size, and the only place on this screen
- * that transfers rows.
- */
-export async function fetchNeedsAttention (churchId) {
-  const cutoff = isoDate(new Date(Date.now() - NINETY_DAYS_MS))
-
-  const [noOneToOne, notBaptized, memberIds, assignedIds] = await Promise.all([
-    countOf(() => supabase.from('members')
-      .select('id', { count: 'exact', head: true })
-      .eq('member_of', churchId).is('archived_at', null)
-      .eq('is_one_to_one_completed', false)
-      .lt('date_joined', cutoff)),
-    countOf(() => supabase.from('members')
-      .select('id', { count: 'exact', head: true })
-      .eq('member_of', churchId).is('archived_at', null)
-      .eq('is_baptized', false)),
-    supabase.from('members').select('id')
-      .eq('member_of', churchId).is('archived_at', null)
-      .then(r => (r.data || []).map(m => m.id)),
-    supabase.from('group_members').select('member_id')
-      .then(r => (r.data || []).map(g => g.member_id))
-  ])
-
-  const assigned = new Set(assignedIds)
-  const inNoGroup = memberIds.filter(id => !assigned.has(id)).length
-
-  return { noOneToOne, notBaptized, inNoGroup }
+  const r = data || {}
+  return {
+    active: r.active ?? 0,
+    archived: r.archived ?? 0,
+    joinedThisMonth: r.joined_this_month ?? 0,
+    noOneToOne: r.no_one_to_one ?? 0,
+    notBaptized: r.not_baptized ?? 0,
+    inNoGroup: r.in_no_group ?? 0
+  }
 }
 
 /** The last `limit` services with a present-count each, oldest first. */
 export async function fetchRecentServices (churchId, limit = 10) {
   const { data, error } = await supabase
-    .from('services')
-    .select('id, label, service_date')
-    .eq('church_id', churchId)
-    .order('service_date', { ascending: false })
-    .limit(limit)
+    .rpc('overview_recent_services', { p_church_id: churchId, p_limit: limit })
   if (error) throw error
 
-  const services = (data || []).slice().reverse()
-
-  const counts = await Promise.all(
-    services.map(s => countOf(() => supabase.from('attendance')
-      .select('id', { count: 'exact', head: true })
-      .eq('service_id', s.id)))
-  )
-
-  return services.map((s, i) => ({ ...s, present: counts[i] }))
+  // The function returns newest-first (LIMIT wants an order); the chart reads
+  // left-to-right oldest-first.
+  return (data || []).slice().reverse().map(s => ({
+    id: s.id,
+    label: s.label,
+    service_date: s.service_date,
+    present: s.present ?? 0
+  }))
 }
 
 /**

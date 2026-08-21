@@ -65,11 +65,44 @@ const routes = [
       // blocks should never set it.
       { path: 'members', name: 'Members', component: () => import('../views/MembersView.vue'), meta: { framed: true } },
       { path: 'groups', name: 'Groups', component: () => import('../views/GroupsView.vue') },
+      // NO requiresCapability, deliberately. Group visibility is decided by RLS, and a
+      // group the caller cannot see returns no row — which the view renders as its
+      // not-found state. That is the correct answer for a church that should not learn
+      // another church's small groups exist, and a capability gate here would instead
+      // announce "you are not allowed to see this one", which is more than they should
+      // be told.
+      // Named, not numbered: /dashboard/groups/cogon/thursday-group. The church segment
+      // is not decoration — a small group's name is unique only within its church, so
+      // two churches may both have a "Thursday Group" and the group name alone cannot
+      // say which. It also describes what the page shows, since a ministry's roster is
+      // church-scoped even though the ministry itself is global.
+      //
+      // The cost, accepted deliberately: renaming a group breaks its old links, which
+      // land on the page's not-found state. The alternative was appending characters to
+      // keep a stable id in the path, which reads as noise.
+      {
+        path: 'groups/:church/:group',
+        name: 'GroupDetail',
+        component: () => import('../views/GroupDetailView.vue')
+      },
       { path: 'attendance', name: 'Attendance', component: () => import('../views/AttendanceView.vue'), meta: { requiresCapability: 'canViewAttendance' } },
       { path: 'collections', name: 'Collections', component: () => import('../views/CollectionsInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } },
       { path: 'expenses', name: 'Expenses', component: () => import('../views/ExpensesInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } },
       { path: 'funds', name: 'ChurchFunds', component: () => import('../views/ChurchFundsView.vue'), meta: { requiresCapability: 'canViewFinance' } },
       { path: 'whats-next', name: 'WhatsNext', component: () => import('../views/WhatsNextView.vue') },
+
+      // THE SETTINGS AREA. Reached from the gear on the account card, not from the
+      // nav — administration is not one of the flat nine.
+      //
+      // No `requiresCapability` on either, deliberately. The guard would bounce an
+      // unauthorised visitor to the dashboard, which reads as the app losing the
+      // page. These views render 4g's "not yours to open" instead, which is the
+      // difference between a permission failure that explains itself and one that
+      // looks like a bug. The database refuses regardless — list_accounts() and
+      // list_church_accounts() return zero rows to anyone who should not have them.
+      { path: 'settings/roles', name: 'SettingsRoles', component: () => import('../views/settings/RolesLinkingView.vue') },
+      { path: 'settings/pastors', name: 'SettingsPastors', component: () => import('../views/settings/PastorAssignmentView.vue') },
+      { path: 'settings', redirect: '/dashboard/settings/roles' },
 
       // The old paths, kept as redirects. Someone has these bookmarked, and a
       // dead bookmark is indistinguishable from a broken app.

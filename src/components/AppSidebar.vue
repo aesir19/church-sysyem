@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import AppLogo from './AppLogo.vue'
 import ChurchSwitcher from './ChurchSwitcher.vue'
+import SettingsMenu from './SettingsMenu.vue'
 import Avatar from './ui/Avatar.vue'
 import Badge from './ui/Badge.vue'
 import Icon from './ui/icons/Icon.vue'
@@ -11,18 +12,18 @@ import { useCurrentRole } from '../composables/useCurrentRole'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { useSession } from '../composables/useSession'
 import { useTheme } from '../composables/useTheme'
+import { roleLabel as roleLabelFor } from '../utils/capabilities'
 
 // The 242px left nav: brand, church switcher, nine items, user card pinned to
 // the bottom by margin-top:auto.
 //
-// WHY EVERY ITEM RENDERS, INCLUDING ONES THE CALLER CANNOT USE. The handoff is
-// explicit: "Never hide a permission failure silently — show the no-access
-// state with Request access." A nav that quietly shortens itself teaches a
-// Secretariat user that Collections does not exist, rather than that it is not
-// theirs; then they ask why the app has no finance section. Gating happens at
-// the route and inside the screen, where it can explain itself. The one thing
-// the nav does carry is `requiresCapability`, so a locked item is marked rather
-// than merely disappointing.
+// ITEMS OUTSIDE THE CALLER'S SCOPE ARE HIDDEN, NOT LOCKED. This reverses the
+// original "never hide a permission failure silently — show it locked with Request
+// access" handoff, at the owner's direction: users should not be shown navigation
+// toward things that are not their job (a Welcome member has no reason to see
+// Church Funds). See docs/decisions/0016-hide-out-of-scope-nav.md. An item with a
+// `needs` key it fails is dropped from the list entirely; the route still redirects
+// as a backstop for anyone who deep-links.
 
 defineProps({
   // The mobile drawer renders the same nav; it just needs to close on navigate.
@@ -32,7 +33,7 @@ defineProps({
 const emit = defineEmits(['navigate'])
 
 const { activeChurchName, showChurchSelector } = useActiveChurch()
-const { caps, role } = useCurrentRole()
+const { caps } = useCurrentRole()
 const { isDark, toggleTheme } = useTheme()
 
 // The ONE sign-out path. `useSession().signOut()` clears the cached church,
@@ -60,31 +61,27 @@ const NAV = [
   { key: 'next',        label: "What's next", icon: 'next',        to: '/dashboard/whats-next',  badge: 'New' }
 ]
 
+// Drop anything the caller lacks the capability for. Items with no `needs`
+// (Overview, Members, Groups, What's next, the "Soon" Statistics tile) always show.
 const items = computed(() =>
-  NAV.map(item => ({
-    ...item,
-    locked: !!item.needs && !caps.value[item.needs]
-  }))
+  NAV.filter(item => !item.needs || caps.value[item.needs])
 )
 
-// The user card's second line. Reads the real role rather than the mockups'
-// three-role vocabulary — see the ADR on the seven-role capability set.
-const ROLE_LABEL = {
-  super_admin: 'Super Admin',
-  head_pastor: 'Head Pastor',
-  pastor: 'Pastor',
-  church_leader: 'Church Leader',
-  finance: 'Finance',
-  secretariat: 'Secretariat',
-  welcome: 'Welcome Team'
-}
-
 const { displayName, load: loadUser } = useCurrentUser()
+
+// The gear replaces the standalone sign-out for anyone who has settings to reach,
+// because sign out lives inside the menu. Everyone else keeps the plain button: a gear
+// whose only entry is "Sign out" is a worse affordance than a sign-out button, and the
+// dashboard must always be signable-out-of on a shared church computer.
+const canOpenSettings = computed(() => caps.value.isSuperAdmin || caps.value.isHeadPastor)
 
 onMounted(loadUser)
 
 const userName = computed(() => displayName.value || 'Signed in')
-const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
+// Derived from the capability flags, not the account `role` string — a ministry
+// account (Welcome / Finance / Secretariat / Small Group Leader) keeps role
+// 'member' but is not roleless. See roleLabel() in utils/capabilities.
+const roleLabel = computed(() => roleLabelFor(caps.value) || 'No role assigned')
 </script>
 
 <template>
@@ -125,7 +122,6 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
           v-if="item.to"
           :to="item.to"
           class="side__item"
-          :class="{ 'is-locked': item.locked }"
           @click="emit('navigate')"
         >
           <Icon
@@ -135,15 +131,8 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
             class="side__icon"
           />
           <span class="side__label">{{ item.label }}</span>
-          <Icon
-            v-if="item.locked"
-            name="lock"
-            :size="13"
-            :width="2.2"
-            class="side__lock"
-          />
           <Badge
-            v-else-if="item.badge"
+            v-if="item.badge"
             tone="magenta"
             class="side__badge"
           >
@@ -194,14 +183,15 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
         />
       </button>
 
-      <!-- SIGN OUT LIVES HERE BECAUSE THE SCREEN IT BELONGS ON DOES NOT EXIST
-           YET. The handoff puts it on the profile page and in the mobile menu,
-           both of which are part of the administration set and are not built.
-           Leaving it out until they are would ship a dashboard holding member
-           PII that cannot be signed out of — on a shared church computer that
-           is the whole of the session control. It moves to the profile page
-           when that lands. -->
+      <!-- The gear from mockup 4c. Sign out now lives inside this menu, which is
+           where the handoff always put it. The standalone button below stays for
+           everyone the menu shows nothing else to, because a dashboard holding
+           member PII must always be signable-out-of — on a shared church computer
+           that is the whole of the session control. -->
+      <SettingsMenu v-if="canOpenSettings" />
+
       <button
+        v-else
         type="button"
         class="side__theme side__signout"
         aria-label="Sign out"
@@ -231,7 +221,6 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
   padding: var(--sp-18) var(--sp-14) var(--sp-14);
   background: var(--surface);
   border-right: 1px solid var(--border);
-  overflow-y: auto;
 }
 
 .side__brand { padding: 0 var(--sp-6) var(--sp-10); }
@@ -267,6 +256,19 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
 .side__church-chev { color: var(--ink-5); }
 
 /* --- Nav -------------------------------------------------------------- */
+/* THE SCROLLING LIVES HERE, NOT ON .side. It used to be `overflow-y: auto` on the
+   sidebar itself, which quietly clipped the gear menu: `overflow-y: auto` against
+   an `overflow-x: visible` is not a legal pair, so the browser promotes x to
+   `auto` too. The sidebar became a scroll container on both axes and every
+   popover wider than --nav-width was cut off mid-word — with no way to scroll to
+   the rest of it, since nothing overflows vertically at a normal height.
+   Scrolling the list alone puts the account card and its menu outside the
+   scroller, so the menu can overhang the sidebar as designed.
+
+   No flex-grow on purpose: .side__user is pinned by margin-top:auto, and growing
+   this list would fight that and unpin the card. Shrink-only plus min-height:0
+   (a flex child will not shrink below its content without it) means the list
+   scrolls exactly when the viewport is too short and is inert otherwise. */
 .side__nav {
   list-style: none;
   margin: 0;
@@ -274,6 +276,8 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .side__item {
@@ -309,11 +313,6 @@ const roleLabel = computed(() => ROLE_LABEL[role.value] || 'No role assigned')
   color: var(--ink-4);
 }
 .side__item.is-soon:hover { background: transparent; color: var(--ink-4); }
-
-/* Locked, not hidden. The item still navigates — the screen behind it explains
-   the refusal and offers "Request access". */
-.side__item.is-locked .side__label { color: var(--ink-4); }
-.side__lock { color: var(--ink-5); }
 
 .side__badge { font-size: var(--text-meta-sm); padding: 2px 7px; }
 

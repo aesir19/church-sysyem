@@ -12,10 +12,11 @@ import { useCurrentRole } from '../composables/useCurrentRole'
 // the theme toggle and sign-out. The bar is the frequent path; the drawer is
 // the complete one, so nothing becomes unreachable on a phone.
 //
-// LOCKED, NOT HIDDEN — the rule AppSidebar states at length. A Secretariat user
-// gets the Check in tab, marked with a lock, and the screen behind it explains
-// the refusal. A bar that silently shortens itself would teach four of the seven
-// roles that this app has no attendance.
+// HIDDEN, NOT LOCKED — the rule AppSidebar states at length, at the owner's
+// direction (docs/decisions/0016-hide-out-of-scope-nav.md). A tab the caller lacks
+// the capability for is dropped from the bar; the route still redirects for anyone
+// who deep-links. The drawer behind More is filtered by the same rule, so nothing
+// out of scope reaches the phone either.
 //
 // IN FLOW, NOT FIXED. The bar is the last child of a flex column, so the content
 // area simply ends above it. A fixed bar would need bottom padding added to
@@ -41,7 +42,7 @@ const TABS = [
 ]
 
 const tabs = computed(() =>
-  TABS.map((tab) => ({ ...tab, locked: !!tab.needs && !caps.value[tab.needs] }))
+  TABS.filter((tab) => !tab.needs || caps.value[tab.needs])
 )
 
 // Groups, Collections, Expenses and What's next have no tab. Rather than leave
@@ -65,20 +66,12 @@ const moreCurrent = computed(() => props.menuOpen || onUntabbedRoute.value)
       :key="tab.key"
       :to="tab.to"
       class="tabs__tab"
-      :class="{ 'is-locked': tab.locked }"
     >
       <span class="tabs__icon-box">
         <Icon
           :name="tab.icon"
           :size="21"
           :width="2"
-        />
-        <Icon
-          v-if="tab.locked"
-          name="lock"
-          :size="10"
-          :width="2.6"
-          class="tabs__lock"
         />
       </span>
       <span class="tabs__label">{{ tab.label }}</span>
@@ -136,17 +129,6 @@ const moreCurrent = computed(() => props.menuOpen || onUntabbedRoute.value)
 
 .tabs__icon-box { position: relative; display: flex; opacity: .7; transition: opacity var(--dur-state) ease; }
 
-.tabs__lock {
-  position: absolute;
-  right: -4px;
-  bottom: -2px;
-  color: var(--ink-5);
-  /* The bar is the only place the lock sits on top of another glyph, so it
-     needs the surface behind it to stay legible. */
-  background: var(--surface);
-  border-radius: var(--r-pill);
-}
-
 .tabs__label {
   font-size: 9.5px;
   font-weight: 600;
@@ -167,7 +149,4 @@ const moreCurrent = computed(() => props.menuOpen || onUntabbedRoute.value)
 .tabs__more.is-current .tabs__label { font-weight: 800; }
 
 .tabs__tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r-tag); }
-
-.tabs__tab.is-locked { color: var(--ink-6); }
-.tabs__tab.is-locked .tabs__icon-box { opacity: .5; }
 </style>

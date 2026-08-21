@@ -91,11 +91,18 @@ export function useCurrentRole() {
     isFinance: c('isFinance'),
     isSecretariat: c('isSecretariat'),
     isWelcome: c('isWelcome'),
+    // Derived by capabilities.js since 0022 but never surfaced here until the group
+    // page needed it: a Small Group Leader gets no click-through from a roster row to
+    // member detail, so the restriction on their account holds there too.
+    isSmallGroupLeader: c('isSmallGroupLeader'),
     // capabilities
     canSeeMemberDetail: c('canSeeMemberDetail'),
+    canBrowseDirectory: c('canBrowseDirectory'),
+    canRecordJourney: c('canRecordJourney'),
     canWriteMembers: c('canWriteMembers'),
     canViewFinance: c('canViewFinance'),
     canWriteFinance: c('canWriteFinance'),
+    canSeeContributorIdentity: c('canSeeContributorIdentity'),
     canViewAttendance: c('canViewAttendance'),
     canManageAttendance: c('canManageAttendance'),
     canManageSmallGroups: c('canManageSmallGroups'),

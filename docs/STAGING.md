@@ -250,3 +250,59 @@ Production migrations and deploys are never run by hand from a laptop as part of
 If you need to run one manually (recovering from a failed workflow run, applying a `rollback.sql`),
 the existing procedure in [OPERATIONS.md](OPERATIONS.md) §2 still applies, and `npm run deploy:prod`
 covers a manual Netlify publish.
+
+## 4. Database-level tests
+
+`npm test` proves what the application does with a mocked Supabase. It cannot prove anything about
+authorization, because RLS is enforced in Postgres and a mock answers whatever it was told to. The
+suite in [`tests/db`](../tests/db) closes that gap.
+
+```bash
+npm run test:db     # runs tests/db against .env.staging
+npm test            # never runs tests/db, whatever is in your environment
+```
+
+### It runs only when asked
+
+The gate is an explicit `RUN_DB_TESTS=1`, set by `npm run test:db` and by nothing else — not the
+mere presence of a connection string. That distinction is the whole safety property.
+`vitest.config.js` globs `tests/**/*.test.js`, so this directory is in the default suite, and
+[`with-env-file.js`](../scripts/prisma/with-env-file.js) exists because dotenv never overwrites a
+variable already in `process.env` — so an exported `DATABASE_URL` beats every env file, and
+"realistically, that is production". Keyed on a URL alone, a developer with one exported would have
+had a plain `npm test` writing to it.
+
+If `RUN_DB_TESTS=1` is set and no `DIRECT_URL` resolves, the suite **throws** rather than skipping.
+A permissions suite that exits 0 having asserted nothing is worse than one that fails.
+
+It connects on `DIRECT_URL`, not `DATABASE_URL`: the pooler runs in transaction mode and hands out a
+different backend per transaction, which breaks `SET LOCAL` quietly. It echoes the host it resolved,
+the same way the Prisma scripts do.
+
+### Two halves that answer different questions
+
+**`groups-rls.test.js` and `predicates.test.js` — direct SQL.** Each test opens a transaction,
+builds its own churches, members, groups and sign-ins inside it, becomes `authenticated` carrying
+that account's claims, asserts, and rolls back. Nothing is written, so it can be pointed at staging
+without seeding it and a failed run leaves nothing to clean up; and there are no standing test
+logins to keep in the repository, because `auth.users` needs only an id. These answer *does everyone
+still have exactly the permissions they had*.
+
+**`postgrest-contract.test.js` — real HTTP.** Read-only GETs, signed in as the standing staging
+account, running the embed shapes the browser actually asks for. This answers *can the application
+still ask its questions at all*, which no amount of SQL can tell you: PostgREST resolves embeds
+through foreign keys, so a `UNION ALL` view rejects every embed with `PGRST200` while direct SQL
+against it works perfectly. That is not hypothetical — it is what sank the first design for the
+`groups` split.
+
+Neither half can answer the other's question. Run both.
+
+### When to run it
+
+**Before and after any migration that touches a policy, a predicate, or a table shape**, and treat
+a changed line as a permission that moved. That is what it is for: it was written so the `groups`
+split could be a refactor with a safety net rather than a rewrite of every rule protecting member
+PII with nothing checking the result.
+
+It is deliberately not in CI — Rule 1 makes CI minutes a cost, and it needs credentials CI does not
+have.

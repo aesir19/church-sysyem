@@ -85,3 +85,31 @@ FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm')
 ORDER BY c.relname;
+
+-- 10. ⚠ CONTRIBUTOR IDENTITY (issue #57 / 0031). The one control the running app
+-- cannot show you: the Funds report renders identically whether contributor
+-- identity is locked or wide, so this is the only way to verify the lock is live.
+-- Two things must both hold, and either one silently reopens the leak:
+--
+--   (a) collections SELECT must gate on can_see_contributor_identity(), NOT
+--       can_view_finance(). If qual mentions can_view_finance, a Pastor / Church
+--       Leader / Head Pastor can read `from` again — the finding is back.
+--
+--   (b) collectives_service_totals is an OWNER-RIGHTS view (security_invoker off)
+--       whose body carries BOTH can_view_finance() AND can_read_church(). It reads
+--       the locked ledger under its own privileges, so if either predicate is
+--       missing it either leaks cross-church or hands aggregates to everyone.
+--
+-- EXPECT: the policy row's qual names can_see_contributor_identity; the view's
+-- reloptions shows security_invoker=false; the definition contains both predicates.
+SELECT 'collections SELECT policy' AS check, qual AS body
+FROM pg_policies
+WHERE schemaname = 'public' AND tablename = 'collections' AND cmd = 'SELECT'
+UNION ALL
+SELECT 'collectives_service_totals reloptions', array_to_string(c.reloptions, ', ')
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relname = 'collectives_service_totals'
+UNION ALL
+SELECT 'collectives_service_totals definition', pg_get_viewdef(c.oid, true)
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relname = 'collectives_service_totals';

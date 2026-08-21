@@ -5,7 +5,7 @@ import Button from '../ui/Button.vue'
 import Input from '../ui/Input.vue'
 import { supabase } from '../../lib/supabase'
 import { write } from '../../lib/data/write'
-import { GROUP_COLUMNS } from '../../lib/data/groups'
+import { SMALL_GROUP_COLUMNS } from '../../lib/data/groups'
 import { buildSmallGroupCreatePayload, buildSmallGroupUpdatePayload } from '../../utils/groupPayload'
 import { showToast } from '../../composables/useToast'
 
@@ -65,19 +65,22 @@ async function submit () {
   // Both writes re-state the scope in the WHERE clause as well as relying on
   // RLS. Belt and braces, deliberately: an edit that reached the wrong church
   // would rename a group nobody in this church can see.
+  // `small_groups` since 0026, and the `.eq('type', 'Small Group')` guard that used
+  // to sit here is gone with it — not dropped, but made structural. This form only
+  // ever creates and renames small groups, and that table holds nothing else, so a
+  // ministry can no longer be reached from here even by a malformed id.
   const result = isEdit.value
     ? await write(
       supabase
-        .from('groups')
+        .from('small_groups')
         .update(buildSmallGroupUpdatePayload({ name: name.value }))
         .eq('id', props.group.id)
-        .eq('church_id', props.churchId)
-        .eq('type', 'Small Group'),
-      { columns: GROUP_COLUMNS, messages: { blocked: 'That group could not be updated. It may belong to another church.' } }
+        .eq('church_id', props.churchId),
+      { columns: SMALL_GROUP_COLUMNS, messages: { blocked: 'That group could not be updated. It may belong to another church.' } }
     )
     : await write(
-      supabase.from('groups').insert(buildSmallGroupCreatePayload({ name: name.value }, props.churchId)),
-      { columns: GROUP_COLUMNS, messages: { blocked: 'That group could not be created. It may belong to another church.' } }
+      supabase.from('small_groups').insert(buildSmallGroupCreatePayload({ name: name.value }, props.churchId)),
+      { columns: SMALL_GROUP_COLUMNS, messages: { blocked: 'That group could not be created. It may belong to another church.' } }
     )
 
   saving.value = false

@@ -3,6 +3,7 @@ import {
   deriveCapabilities,
   canManageGroupMembers,
   routeAllowed,
+  roleLabel,
 } from '../../src/utils/capabilities'
 
 // Build a get_my_permissions() row. Pass the flags that are true.
@@ -16,6 +17,7 @@ function perm(role, flags = {}) {
     is_finance: false,
     is_secretariat: false,
     is_welcome: false,
+    is_small_group_leader: false,
     ...flags,
   }
 }
@@ -26,10 +28,85 @@ describe('deriveCapabilities', () => {
     expect(c.role).toBe(null)
     for (const key of [
       'canSeeMemberDetail', 'canWriteMembers', 'canViewFinance', 'canWriteFinance',
+      'canSeeContributorIdentity',
       'canViewAttendance', 'canManageAttendance', 'canManageSmallGroups', 'isCrossChurch',
+      'isSmallGroupLeader', 'canBrowseDirectory', 'canRecordJourney',
     ]) {
       expect(c[key]).toBe(false)
     }
+  })
+
+  // 0028. The safe directory (names + gender + group + journey) is open to every
+  // ASSIGNED role/ministry, but a scopeless account sees nothing — mirrors
+  // has_directory_access() in SQL, and gates the Members page for such accounts.
+  describe('canBrowseDirectory', () => {
+    it('is granted to every assigned role and ministry', () => {
+      expect(deriveCapabilities(perm('super_admin', { is_super_admin: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('head_pastor', { is_head_pastor: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('pastor', { is_pastor: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('church_leader', { is_church_leader: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('member', { is_finance: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('member', { is_secretariat: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('member', { is_welcome: true })).canBrowseDirectory).toBe(true)
+      expect(deriveCapabilities(perm('member', { is_small_group_leader: true })).canBrowseDirectory).toBe(true)
+    })
+
+    it('is withheld from a scopeless member/unassigned account (fail closed)', () => {
+      expect(deriveCapabilities(perm('member')).canBrowseDirectory).toBe(false)
+      expect(deriveCapabilities(perm('unassigned')).canBrowseDirectory).toBe(false)
+    })
+  })
+
+  // 0028. Small-group leaders may record the one-to-one and turning-point milestones
+  // (only) for members of groups they lead; the per-group scope is enforced in SQL by
+  // set_member_journey(). SuperAdmin also holds it. Nobody else gets it here —
+  // Secretariat records journey through the full member form (canWriteMembers).
+  describe('canRecordJourney', () => {
+    it('is held by SuperAdmin and small-group leaders', () => {
+      expect(deriveCapabilities(perm('super_admin', { is_super_admin: true })).canRecordJourney).toBe(true)
+      expect(deriveCapabilities(perm('member', { is_small_group_leader: true })).canRecordJourney).toBe(true)
+    })
+
+    it('is withheld from everyone else, including Secretariat and Church Leader', () => {
+      expect(deriveCapabilities(perm('member', { is_secretariat: true })).canRecordJourney).toBe(false)
+      expect(deriveCapabilities(perm('church_leader', { is_church_leader: true })).canRecordJourney).toBe(false)
+      expect(deriveCapabilities(perm('member', { is_welcome: true })).canRecordJourney).toBe(false)
+      expect(deriveCapabilities(perm('head_pastor', { is_head_pastor: true })).canRecordJourney).toBe(false)
+    })
+  })
+
+  // 0022. Leading a small group is not an account role — it comes from a row in
+  // small_group_leaders — so `role` stays 'member' throughout this block. Anything that
+  // keys on the role string alone will miss this user entirely.
+  describe('Small Group Leader', () => {
+    const leader = deriveCapabilities(perm('member', { is_small_group_leader: true }))
+
+    it('is derived from leading a group, not from the account role', () => {
+      expect(leader.role).toBe('member')
+      expect(leader.isSmallGroupLeader).toBe(true)
+    })
+
+    it('gains attendance, which is its only widening', () => {
+      expect(leader.canViewAttendance).toBe(true)
+    })
+
+    it('gets nothing to do with money — not the pages, not the totals', () => {
+      expect(leader.canViewFinance).toBe(false)
+      expect(leader.canWriteFinance).toBe(false)
+    })
+
+    it('cannot open a member record, manage attendance, or touch groups', () => {
+      expect(leader.canSeeMemberDetail).toBe(false)
+      expect(leader.canWriteMembers).toBe(false)
+      expect(leader.canManageAttendance).toBe(false)
+      expect(leader.canManageSmallGroups).toBe(false)
+      expect(leader.isCrossChurch).toBe(false)
+    })
+
+    it('does not let a plain member reach attendance', () => {
+      // The control for the test above: without the flag the same role gets nothing.
+      expect(deriveCapabilities(perm('member')).canViewAttendance).toBe(false)
+    })
   })
 
   it('SuperAdmin gets every capability and is cross-church', () => {
@@ -105,6 +182,37 @@ describe('deriveCapabilities', () => {
     expect(c.canWriteFinance).toBe(true) // via the ministry, not the account role
     expect(c.canSeeMemberDetail).toBe(true) // via pastor
   })
+
+  // 0031 / issue #57. Who may see WHO gave — as opposed to the aggregate figures —
+  // is visible only to finance WRITERS (Finance ministry + SuperAdmin), never to the
+  // finance VIEWERS (Pastor / Church Leader / Head Pastor). This must mirror the SQL
+  // predicate can_see_contributor_identity() exactly, or the UI gate and the RLS
+  // policy that now enforces it drift apart.
+  describe('canSeeContributorIdentity', () => {
+    it('is held only by SuperAdmin and the Finance ministry', () => {
+      expect(deriveCapabilities(perm('super_admin', { is_super_admin: true })).canSeeContributorIdentity).toBe(true)
+      expect(deriveCapabilities(perm('member', { is_finance: true })).canSeeContributorIdentity).toBe(true)
+    })
+
+    it('is withheld from every finance VIEWER that is not a finance writer', () => {
+      // These three can view the report but must not see who gave.
+      expect(deriveCapabilities(perm('pastor', { is_pastor: true })).canSeeContributorIdentity).toBe(false)
+      expect(deriveCapabilities(perm('church_leader', { is_church_leader: true })).canSeeContributorIdentity).toBe(false)
+      expect(deriveCapabilities(perm('head_pastor', { is_head_pastor: true })).canSeeContributorIdentity).toBe(false)
+      // Control: they can still view the report itself.
+      expect(deriveCapabilities(perm('pastor', { is_pastor: true })).canViewFinance).toBe(true)
+    })
+
+    it('tracks canWriteFinance today, but is a distinct key so the two can diverge (0031)', () => {
+      for (const flags of [
+        { is_super_admin: true }, { is_head_pastor: true }, { is_pastor: true },
+        { is_church_leader: true }, { is_finance: true }, { is_secretariat: true }, { is_welcome: true },
+      ]) {
+        const c = deriveCapabilities(perm('member', flags))
+        expect(c.canSeeContributorIdentity).toBe(c.canWriteFinance)
+      }
+    })
+  })
 })
 
 describe('canManageGroupMembers (Finance = Pastor-only)', () => {
@@ -135,6 +243,36 @@ describe('canManageGroupMembers (Finance = Pastor-only)', () => {
 
   it('null caps fail closed', () => {
     expect(canManageGroupMembers(null, { isFinanceGroup: false })).toBe(false)
+  })
+})
+
+describe('roleLabel', () => {
+  const label = (role, flags) => roleLabel(deriveCapabilities(perm(role, flags)))
+
+  it('labels ministry roles even though their account role stays member/unassigned', () => {
+    // The regression this fixes: a Welcome Team account has role 'member', so a
+    // label keyed on the role string alone showed "No role assigned".
+    expect(label('member', { is_welcome: true })).toBe('Welcome Team')
+    expect(label('member', { is_finance: true })).toBe('Finance')
+    expect(label('unassigned', { is_secretariat: true })).toBe('Secretariat')
+    expect(label('member', { is_small_group_leader: true })).toBe('Small Group Leader')
+  })
+
+  it('labels the senior account roles', () => {
+    expect(label('super_admin', { is_super_admin: true })).toBe('Super Admin')
+    expect(label('head_pastor', { is_head_pastor: true })).toBe('Head Pastor')
+    expect(label('pastor', { is_pastor: true })).toBe('Pastor')
+    expect(label('church_leader', { is_church_leader: true })).toBe('Church Leader')
+  })
+
+  it('prefers the senior role and joins multiple ministries', () => {
+    expect(label('church_leader', { is_church_leader: true, is_welcome: true })).toBe('Church Leader')
+    expect(label('member', { is_finance: true, is_welcome: true })).toBe('Finance · Welcome Team')
+  })
+
+  it('returns null for a genuinely scopeless account (caller supplies empty-state text)', () => {
+    expect(label('unassigned')).toBe(null)
+    expect(roleLabel(null)).toBe(null)
   })
 })
 

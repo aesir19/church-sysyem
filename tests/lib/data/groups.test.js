@@ -29,8 +29,10 @@ vi.mock('../../../src/lib/supabase', () => ({
   },
 }))
 
-const { listGroups, countMembersInNoGroup, GROUP_COLUMNS, GROUP_MESSAGES } =
-  await import('../../../src/lib/data/groups')
+const {
+  listGroups, countMembersInNoGroup, asGroup,
+  MINISTRY_COLUMNS, SMALL_GROUP_COLUMNS, GROUP_MESSAGES,
+} = await import('../../../src/lib/data/groups')
 
 const CHURCH = 'church-1'
 
@@ -38,21 +40,42 @@ function on(table, method) {
   return state.calls.filter((c) => c[0] === table && c[1] === method)
 }
 
-/** Two members in Worship, one in Youth — the shape the embed returns. */
-function assignmentRows() {
+// FOUR TABLES SINCE 0026, and the fixtures below say which is which rather than
+// carrying a `type` column — because there no longer is one. `type` is now
+// produced by asGroup() from the table a row arrived from, so a test that sets
+// `type: 'Ministry'` on a fixture would be asserting against its own input.
+
+/** Two members in Worship, one in Youth. Both are ministries. */
+function ministryAssignments() {
   return [
-    { group_id: 'g-worship', member_id: 'm1', members: { first_name: 'Juan', last_name: 'Cruz', member_of: CHURCH } },
-    { group_id: 'g-worship', member_id: 'm2', members: { first_name: 'Ana', last_name: 'Reyes', member_of: CHURCH } },
-    { group_id: 'g-youth', member_id: 'm3', members: { first_name: 'Ben', last_name: 'Lim', member_of: CHURCH } },
+    { ministry_id: 'g-worship', member_id: 'm1', members: { first_name: 'Juan', last_name: 'Cruz', member_of: CHURCH } },
+    { ministry_id: 'g-worship', member_id: 'm2', members: { first_name: 'Ana', last_name: 'Reyes', member_of: CHURCH } },
+    { ministry_id: 'g-youth', member_id: 'm3', members: { first_name: 'Ben', last_name: 'Lim', member_of: CHURCH } },
   ]
 }
 
-function groupRows() {
+function smallGroupAssignments() {
+  return []
+}
+
+function ministryRows() {
   return [
-    { id: 'g-worship', name: 'Worship Team', type: 'Ministry', church_id: null },
-    { id: 'g-youth', name: 'Youth', type: 'Ministry', church_id: null },
-    { id: 'g-thu', name: 'Thursday Group', type: 'Small Group', church_id: CHURCH },
+    { id: 'g-worship', name: 'Worship Team', ministry_key: null },
+    { id: 'g-youth', name: 'Youth', ministry_key: null },
   ]
+}
+
+function smallGroupRows() {
+  return [{ id: 'g-thu', name: 'Thursday Group', church_id: CHURCH }]
+}
+
+/** The four results a full listGroups() call consumes. */
+function seedAll({ ministries = ministryRows(), smallGroups = smallGroupRows(),
+  ministryMembers = [], smallGroupMembers = [] } = {}) {
+  state.results.ministries = { data: ministries, error: null }
+  state.results.small_groups = { data: smallGroups, error: null }
+  state.results.ministry_members = { data: ministryMembers, error: null }
+  state.results.small_group_members = { data: smallGroupMembers, error: null }
 }
 
 beforeEach(() => {
@@ -69,40 +92,86 @@ describe('listGroups — scope', () => {
     expect(state.calls).toHaveLength(0)
   })
 
-  // Rule 1. A Ministry is global (church_id IS NULL per the 0004 CHECK) and a
-  // Small Group is church-scoped, so "the groups for this church" is a union of
-  // two conditions. A plain .eq('church_id', churchId) would hide every
-  // ministry; .is('church_id', null) would hide every small group.
-  it('asks for global ministries AND this church’s small groups, in one filter', async () => {
-    state.results.groups = { data: [], error: null }
+  // Rule 1, restated for the split. A ministry is global — `ministries` has no
+  // church_id column to filter on — and a small group is church-scoped. The old
+  // hand-written `or(and(...),and(...))` union is gone; scoping one table and not
+  // the other is what replaces it. Filtering ministries by church would hide all
+  // of them, since there is nothing to match.
+  it('asks for every ministry, unscoped, because a ministry is global', async () => {
+    seedAll()
     await listGroups({ churchId: CHURCH, canSeeMembers: true })
 
-    const filter = on('groups', 'or')[0][2]
-    expect(filter).toContain('and(type.eq.Ministry,church_id.is.null)')
-    expect(filter).toContain(`and(type.eq.Small Group,church_id.eq.${CHURCH})`)
+    expect(on('ministries', 'eq')).toHaveLength(0)
+    expect(on('ministries', 'or')).toHaveLength(0)
   })
 
-  it('enumerates group columns rather than selecting *', async () => {
-    state.results.groups = { data: [], error: null }
+  it('scopes small groups to the active church', async () => {
+    seedAll()
     await listGroups({ churchId: CHURCH, canSeeMembers: true })
-    expect(on('groups', 'select')[0][2]).toBe(GROUP_COLUMNS)
-    expect(GROUP_COLUMNS).not.toContain('*')
+    expect(on('small_groups', 'eq')).toContainEqual(['small_groups', 'eq', 'church_id', CHURCH])
   })
 
-  it('orders by type then name, so the grid is stable between loads', async () => {
-    state.results.groups = { data: [], error: null }
+  it('enumerates the columns of each table rather than selecting *', async () => {
+    seedAll()
     await listGroups({ churchId: CHURCH, canSeeMembers: true })
-    const orders = on('groups', 'order')
-    expect(orders[0].slice(2)).toEqual(['type', { ascending: true }])
-    expect(orders[1].slice(2)).toEqual(['name', { ascending: true }])
+
+    expect(on('ministries', 'select')[0][2]).toBe(MINISTRY_COLUMNS)
+    expect(on('small_groups', 'select')[0][2]).toBe(SMALL_GROUP_COLUMNS)
+    expect(MINISTRY_COLUMNS).not.toContain('*')
+    expect(SMALL_GROUP_COLUMNS).not.toContain('*')
+    // Neither table has the other's column, which is the point of the split.
+    expect(MINISTRY_COLUMNS).not.toContain('church_id')
+    expect(SMALL_GROUP_COLUMNS).not.toContain('ministry_key')
   })
 
-  it('does not surface raw error text when the groups query fails', async () => {
-    state.results.groups = { data: null, error: { message: 'permission denied for table groups' } }
+  it('orders each table by name, and returns ministries before small groups', async () => {
+    seedAll()
+    const result = await listGroups({ churchId: CHURCH, canSeeMembers: true })
+
+    expect(on('ministries', 'order')[0].slice(2)).toEqual(['name', { ascending: true }])
+    expect(on('small_groups', 'order')[0].slice(2)).toEqual(['name', { ascending: true }])
+    // The old query said .order('type').order('name'), and 'Ministry' sorts
+    // before 'Small Group'. Concatenation has to reproduce that.
+    expect(result.rows.map((g) => g.type)).toEqual(['Ministry', 'Ministry', 'Small Group'])
+  })
+
+  it('gives every row back the type and the null column its table does not store', async () => {
+    seedAll()
+    const result = await listGroups({ churchId: CHURCH, canSeeMembers: true })
+
+    expect(result.rows[0]).toMatchObject({ type: 'Ministry', church_id: null })
+    expect(result.rows[2]).toMatchObject({ type: 'Small Group', church_id: CHURCH, ministry_key: null })
+  })
+
+  it('does not surface raw error text when either half fails', async () => {
+    seedAll()
+    state.results.ministries = { data: null, error: { message: 'permission denied for table ministries' } }
+
     const result = await listGroups({ churchId: CHURCH, canSeeMembers: true })
     expect(result.ok).toBe(false)
     expect(result.message).toBe(GROUP_MESSAGES.loadFailed)
-    expect(result.cause).toEqual({ message: 'permission denied for table groups' })
+    expect(result.cause).toEqual({ message: 'permission denied for table ministries' })
+  })
+
+  // Half a grid is worse than an error: it reads as "the small groups were
+  // deleted" rather than "this did not load".
+  it('fails the whole load when only the small-group half fails', async () => {
+    seedAll()
+    state.results.small_groups = { data: null, error: { message: 'permission denied' } }
+
+    const result = await listGroups({ churchId: CHURCH, canSeeMembers: true })
+    expect(result.ok).toBe(false)
+    expect(result.rows).toEqual([])
+  })
+})
+
+describe('asGroup', () => {
+  it('never invents a church for a ministry or a key for a small group', () => {
+    expect(asGroup({ id: 'a', name: 'Finance', ministry_key: 'finance' }, 'Ministry'))
+      .toEqual({ id: 'a', name: 'Finance', type: 'Ministry', church_id: null, ministry_key: 'finance' })
+
+    expect(asGroup({ id: 'b', name: 'Thursday', church_id: CHURCH }, 'Small Group'))
+      .toEqual({ id: 'b', name: 'Thursday', type: 'Small Group', church_id: CHURCH, ministry_key: null })
   })
 })
 
@@ -110,45 +179,68 @@ describe('listGroups — counts', () => {
   // Rule 2, and the reason this module exists. A Ministry's group_members rows
   // span every church, so an unscoped count reports the all-church total and
   // does not change when the church selector does.
-  it('scopes the assignment query to the active church through the embed', async () => {
-    state.results.groups = { data: [], error: null }
-    state.results.group_members = { data: [], error: null }
+  it('scopes both assignment queries to the active church through the embed', async () => {
+    seedAll()
     await listGroups({ churchId: CHURCH, canSeeMembers: true })
-    expect(on('group_members', 'eq')).toContainEqual(['group_members', 'eq', 'members.member_of', CHURCH])
+
+    expect(on('ministry_members', 'eq'))
+      .toContainEqual(['ministry_members', 'eq', 'members.member_of', CHURCH])
+    expect(on('small_group_members', 'eq'))
+      .toContainEqual(['small_group_members', 'eq', 'members.member_of', CHURCH])
   })
 
   it('counts per group from the returned assignments, not from an embedded count', async () => {
-    state.results.groups = { data: groupRows(), error: null }
-    state.results.group_members = { data: assignmentRows(), error: null }
+    seedAll({
+      ministryMembers: ministryAssignments(),
+      smallGroupMembers: smallGroupAssignments(),
+    })
 
     const result = await listGroups({ churchId: CHURCH, canSeeMembers: true })
     const counts = Object.fromEntries(result.rows.map((g) => [g.id, g.member_count]))
     expect(counts).toEqual({ 'g-worship': 2, 'g-youth': 1, 'g-thu': 0 })
   })
 
+  // The two membership tables are counted into one map keyed by group id. A
+  // small group's members must not be attributed to a ministry that happens to
+  // sort into the same slot.
+  it('keeps the two membership tables apart when counting', async () => {
+    seedAll({
+      ministryMembers: ministryAssignments(),
+      smallGroupMembers: [
+        { small_group_id: 'g-thu', member_id: 'm9', members: { first_name: 'Rosa', last_name: 'Diaz', member_of: CHURCH } },
+      ],
+    })
+
+    const result = await listGroups({ churchId: CHURCH, canSeeMembers: true })
+    const counts = Object.fromEntries(result.rows.map((g) => [g.id, g.member_count]))
+    expect(counts).toEqual({ 'g-worship': 2, 'g-youth': 1, 'g-thu': 1 })
+  })
+
   it('reports a group with no assignments as zero rather than dropping it', async () => {
-    state.results.groups = { data: groupRows(), error: null }
-    state.results.group_members = { data: [], error: null }
+    seedAll()
 
     const result = await listGroups({ churchId: CHURCH, canSeeMembers: true })
     expect(result.rows).toHaveLength(3)
     expect(result.rows.every((g) => g.member_count === 0)).toBe(true)
   })
 
-  it('returns the total assignment count for the header', async () => {
-    state.results.groups = { data: groupRows(), error: null }
-    state.results.group_members = { data: assignmentRows(), error: null }
-    expect((await listGroups({ churchId: CHURCH, canSeeMembers: true })).assignments).toBe(3)
+  it('returns the total assignment count, across both tables, for the header', async () => {
+    seedAll({
+      ministryMembers: ministryAssignments(),
+      smallGroupMembers: [
+        { small_group_id: 'g-thu', member_id: 'm9', members: { first_name: 'Rosa', last_name: 'Diaz', member_of: CHURCH } },
+      ],
+    })
+    expect((await listGroups({ churchId: CHURCH, canSeeMembers: true })).assignments).toBe(4)
   })
 
   it('caps the avatar stack at the four faces the card draws', async () => {
     const many = Array.from({ length: 9 }, (_, i) => ({
-      group_id: 'g-worship',
+      ministry_id: 'g-worship',
       member_id: `m${i}`,
       members: { first_name: 'Member', last_name: `${i}`, member_of: CHURCH },
     }))
-    state.results.groups = { data: groupRows(), error: null }
-    state.results.group_members = { data: many, error: null }
+    seedAll({ ministryMembers: many })
 
     const worship = (await listGroups({ churchId: CHURCH, canSeeMembers: true })).rows[0]
     expect(worship.member_count).toBe(9)
@@ -162,30 +254,31 @@ describe('listGroups — RLS-safe projection', () => {
   // `members`, so `members!inner` drops every assignment and reports every
   // group as empty. Asking only for group_id keeps the counts right.
   it('does not join members for a caller who cannot read them', async () => {
-    state.results.groups = { data: [], error: null }
-    state.results.group_members = { data: [], error: null }
+    seedAll()
     await listGroups({ churchId: CHURCH, canSeeMembers: false })
 
-    const projection = on('group_members', 'select')[0][2]
-    expect(projection).toBe('group_id')
-    expect(projection).not.toContain('members')
+    expect(on('ministry_members', 'select')[0][2]).toBe('ministry_id')
+    expect(on('small_group_members', 'select')[0][2]).toBe('small_group_id')
+    expect(on('ministry_members', 'select')[0][2]).not.toContain('members')
     // …and no filter on the embed either, since there is no embed to filter.
-    expect(on('group_members', 'eq')).toHaveLength(0)
+    expect(on('ministry_members', 'eq')).toHaveLength(0)
+    expect(on('small_group_members', 'eq')).toHaveLength(0)
   })
 
   it('joins members for a caller who can read them, so the cards get faces', async () => {
-    state.results.groups = { data: [], error: null }
-    state.results.group_members = { data: [], error: null }
+    seedAll()
     await listGroups({ churchId: CHURCH, canSeeMembers: true })
-    expect(on('group_members', 'select')[0][2]).toContain('members!inner')
+
+    expect(on('ministry_members', 'select')[0][2]).toContain('members!inner')
+    expect(on('small_group_members', 'select')[0][2]).toContain('members!inner')
   })
 
   it('still counts correctly without the join', async () => {
-    state.results.groups = { data: groupRows(), error: null }
-    state.results.group_members = {
-      data: [{ group_id: 'g-worship' }, { group_id: 'g-worship' }, { group_id: 'g-youth' }],
-      error: null,
-    }
+    seedAll({
+      ministryMembers: [
+        { ministry_id: 'g-worship' }, { ministry_id: 'g-worship' }, { ministry_id: 'g-youth' },
+      ],
+    })
 
     const result = await listGroups({ churchId: CHURCH, canSeeMembers: false })
     expect(result.rows.map((g) => g.member_count)).toEqual([2, 1, 0])
@@ -195,21 +288,20 @@ describe('listGroups — RLS-safe projection', () => {
   // "41 members in none" and "we could not tell" are different statements, and
   // the view renders the header only when it is the first one.
   it('returns a null id set — not an empty one — when it could not read members', async () => {
-    state.results.groups = { data: groupRows(), error: null }
-    state.results.group_members = { data: [{ group_id: 'g-worship' }], error: null }
+    seedAll({ ministryMembers: [{ ministry_id: 'g-worship' }] })
     const result = await listGroups({ churchId: CHURCH, canSeeMembers: false })
     expect(result.assignedMemberIds).toBeNull()
   })
 
+  // Now spanning two tables: the same person in a ministry and a small group is
+  // two rows from two queries, and must still be one member.
   it('returns distinct member ids, so somebody in two groups is counted once', async () => {
-    state.results.groups = { data: groupRows(), error: null }
-    state.results.group_members = {
-      data: [
-        ...assignmentRows(),
-        { group_id: 'g-thu', member_id: 'm1', members: { first_name: 'Juan', last_name: 'Cruz', member_of: CHURCH } },
+    seedAll({
+      ministryMembers: ministryAssignments(),
+      smallGroupMembers: [
+        { small_group_id: 'g-thu', member_id: 'm1', members: { first_name: 'Juan', last_name: 'Cruz', member_of: CHURCH } },
       ],
-      error: null,
-    }
+    })
 
     const result = await listGroups({ churchId: CHURCH, canSeeMembers: true })
     expect(result.assignments).toBe(4)
@@ -218,9 +310,10 @@ describe('listGroups — RLS-safe projection', () => {
 
   // A failed assignments query is not a failed load: the grid is still true,
   // it just has no numbers on it.
-  it('still lists the groups when the assignment query fails', async () => {
-    state.results.groups = { data: groupRows(), error: null }
-    state.results.group_members = { data: null, error: { message: 'permission denied' } }
+  it('still lists the groups when both assignment queries fail', async () => {
+    seedAll()
+    state.results.ministry_members = { data: null, error: { message: 'permission denied' } }
+    state.results.small_group_members = { data: null, error: { message: 'permission denied' } }
 
     const result = await listGroups({ churchId: CHURCH, canSeeMembers: true })
     expect(result.ok).toBe(true)

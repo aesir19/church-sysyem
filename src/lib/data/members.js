@@ -32,15 +32,16 @@ import { buildMemberNameOrFilter, sanitizeMemberSearchTerm } from '../../utils/s
 export const MEMBER_PAGE_SIZE = 50
 
 /**
- * What `directory_search`'s `p_limit` is sent as. The function's own default is
- * 200 and this module used to leave it unsent — so a church over 200 members
- * showed baseline users and Head Pastors a truncated list with no indication it
- * was truncated. Sending it explicitly is what lets a caller say so.
- * Paginating that path properly needs a `p_offset` parameter on a SECURITY
- * DEFINER function, which is a migration and a security review, and is
- * deferred.
+ * The Members directory shows the WHOLE church roll, not a slice. Passing
+ * `p_limit: null` to directory_search means "no limit" (0030) — the old 200-row
+ * cap hid members past the 200th and reported the capped page as the total, which
+ * disagreed with the Overview's true count. The read is per-church and
+ * safe-fields-only, so it is bounded by the church's own membership.
+ *
+ * `null` rather than a big number on purpose: a fixed ceiling would be the same
+ * bug one order of magnitude out.
  */
-export const DIRECTORY_LIMIT = 200
+export const DIRECTORY_LIMIT = null
 
 /**
  * The columns a caller may order by.
@@ -86,7 +87,44 @@ export const MEMBER_COLUMNS = `
 //
 // `type` comes along because a ministry and a small group are tagged
 // differently wherever they are listed.
-const MEMBER_GROUPS_EMBED = 'group_members(groups(id, name, type))'
+//
+// TWO EMBEDS SINCE 0026, WHERE THERE USED TO BE ONE NESTED ONE. This was
+// `group_members(groups(id, name, type))` — an embed through a join table into
+// another table. After the split there is no `groups` and no `group_members`, and
+// #74's plan to keep the names alive as union views is exactly what PostgREST
+// cannot embed through: it resolves embeds via foreign keys, and a union view has
+// none, so the nested form above returned PGRST200. Two ordinary embeds, each
+// following a real foreign key, resolve fine.
+//
+// `type` is no longer a column anywhere — it is which embed the row arrived in —
+// so normaliseGroups() below puts it back before anything downstream sees a row.
+const MEMBER_GROUPS_EMBED =
+  'ministry_members(ministries(id, name)), small_group_members(small_groups(id, name))'
+
+/**
+ * Fold the two embeds back into the single `group_members: [{ groups }]` shape
+ * the members table has always consumed, so MembersView and its tests do not
+ * have to know the storage changed. Ministries first, matching the Groups page.
+ */
+function normaliseGroups (row) {
+  const ministries = (row.ministry_members || [])
+    .map(m => m.ministries)
+    .filter(Boolean)
+    .map(g => ({ groups: { id: g.id, name: g.name, type: 'Ministry' } }))
+
+  const smallGroups = (row.small_group_members || [])
+    .map(m => m.small_groups)
+    .filter(Boolean)
+    .map(g => ({ groups: { id: g.id, name: g.name, type: 'Small Group' } }))
+
+  // The two embed keys are dropped rather than left alongside the folded result,
+  // so no caller can start depending on the storage shape by accident.
+  const rest = { ...row }
+  delete rest.ministry_members
+  delete rest.small_group_members
+
+  return { ...rest, group_members: [...ministries, ...smallGroups] }
+}
 
 const MESSAGES = {
   loadFailed: 'Failed to load members. Please try again.',
@@ -101,18 +139,18 @@ const ok = (rows, extra = {}) => ({ ok: true, message: '', rows, cause: null, ..
 const fail = (message, cause = null, extra = {}) => ({ ok: false, message, rows: [], cause, ...extra })
 
 /**
- * Names and group membership for everyone in a church. Safe for every role —
- * the directory_search RPC returns no PII, and the base members table returns
- * baseline callers nothing at all under RLS.
+ * The safe directory for everyone in a church: names, gender, group membership
+ * and the four journey flags (0028) — but no birthdate, address, contact or other
+ * PII, which stay on the base table behind can_see_member_detail(). Safe for every
+ * ASSIGNED role; directory_search() returns a scopeless account no rows at all.
  *
- * Not paginated: the RPC takes a limit but no offset, and adding one is a
- * migration against a SECURITY DEFINER function that is the only thing standing
- * between baseline users and the `members` table. That is deferred; this caps
- * honestly instead — `capped` is how the caller knows to say so.
+ * Returns the full roll: `limit` defaults to null (no cap). A caller may still
+ * pass a positive `limit` to bound the read; `capped` then reports whether the
+ * result hit that bound. With the default null limit `capped` is always false.
  *
  * @param {string} churchId
- * @param {{ query?: string, limit?: number }} [options]
- * @returns {Promise<{ ok: boolean, message: string, rows: object[], capped: boolean, limit: number, cause: unknown }>}
+ * @param {{ query?: string, limit?: number|null }} [options]
+ * @returns {Promise<{ ok: boolean, message: string, rows: object[], capped: boolean, limit: number|null, cause: unknown }>}
  */
 export async function listDirectory(churchId, { query = '', limit = DIRECTORY_LIMIT } = {}) {
   if (!churchId) return fail(MESSAGES.noChurch, null, { capped: false, limit })
@@ -130,15 +168,29 @@ export async function listDirectory(churchId, { query = '', limit = DIRECTORY_LI
   })
   if (error) return fail(MESSAGES.loadFailed, error, { capped: false, limit })
 
+  // directory_search returns the safe fields only (0028): names, gender, group
+  // membership and the four journey flags — never birthdate/address/contact PII.
+  // group_members is synthesised from the ministry/small-group name arrays so the
+  // members table's Groups column renders unchanged, without a second round-trip.
   const rows = (data || []).map((row) => ({
     id: row.member_id,
     first_name: row.first_name,
+    middle_name: row.middle_name ?? null,
     last_name: row.last_name,
+    gender: row.gender ?? null,
     ministries: row.ministries || [],
     small_groups: row.small_groups || [],
+    group_members: [
+      ...(row.ministries || []).map((name) => ({ groups: { name, type: 'Ministry' } })),
+      ...(row.small_groups || []).map((name) => ({ groups: { name, type: 'Small Group' } })),
+    ],
+    is_one_to_one_completed: !!row.is_one_to_one_completed,
+    is_turning_point_completed: !!row.is_turning_point_completed,
+    is_baptized: !!row.is_baptized,
+    has_submitted_membership_form: !!row.has_submitted_membership_form,
   }))
 
-  return ok(rows, { capped: rows.length >= limit, limit })
+  return ok(rows, { capped: limit != null && rows.length >= limit, limit })
 }
 
 /**
@@ -200,7 +252,7 @@ export async function listRecords({
     .range(from, to)
 
   if (error) return fail(MESSAGES.loadFailed, error, { total: 0 })
-  return ok(data || [], { total: count ?? 0 })
+  return ok((data || []).map(normaliseGroups), { total: count ?? 0 })
 }
 
 /**
