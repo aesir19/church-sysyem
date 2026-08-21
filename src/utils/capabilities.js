@@ -45,6 +45,13 @@ export function deriveCapabilities(perm) {
       isSuperAdmin || isHeadPastor || isPastor || isChurchLeader ||
       isFinance || isSecretariat || isWelcome || isSmallGroupLeader,
     canViewFinance: isSuperAdmin || isHeadPastor || isPastor || isChurchLeader || isFinance,
+    // May the caller see WHO gave, not just the aggregate figures? Mirrors the SQL
+    // predicate can_see_contributor_identity() (0031) exactly — same answer as
+    // canWriteFinance today, but a distinct key so a future role change moves the
+    // two independently. The Funds view gates the Contributors table on this, and
+    // only these roles ever fetch the identity-bearing giving rows. UI-gating only;
+    // the collections SELECT policy (0031) is the real enforcement.
+    canSeeContributorIdentity: isSuperAdmin || isFinance,
     // The Small Group Leader's one and only widening (0022). The database grants
     // attendance church-wide; the screen narrows it to the groups they lead. Keeping
     // the narrowing app-side means the day that rule tightens, it tightens in SQL and

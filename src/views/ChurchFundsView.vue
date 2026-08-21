@@ -6,7 +6,7 @@ import Button from '../components/ui/Button.vue'
 import { supabase } from '../lib/supabase'
 import { defaultMonthKey, getMonthRange, parseMonthKey } from '../utils/expensesMonth'
 import { mergeMonthSourceWithLiveExpenses } from '../utils/reportExpenseMerge'
-import { buildMonthSourceFromCollections, openingBalanceForMonth } from '../utils/collectivesSource'
+import { buildLedgerWeeks, buildMonthSourceFromCollections, openingBalanceForMonth } from '../utils/collectivesSource'
 import { formatPeso, formatPesoWhole, formatShare } from '../utils/money'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { useActiveChurch } from '../composables/useActiveChurch'
@@ -26,9 +26,13 @@ import { useActiveChurch } from '../composables/useActiveChurch'
 // a treasurer actually reconciles against. They are restyled, not redesigned.
 
 // Contributor identity is finance-staff detail: shown to the Finance ministry and
-// SuperAdmin (canWriteFinance). Pastor / Church Leader / Head Pastor see the report
-// but not individual contributor names.
-const { canWriteFinance } = useCurrentRole()
+// SuperAdmin. Pastor / Church Leader / Head Pastor see the report but not individual
+// contributor names. canSeeContributorIdentity mirrors the SQL predicate that gates
+// the collections SELECT policy (0031) — it is now a real authorization boundary, not
+// just a hidden section: the identity-bearing giving rows are only fetched, and only
+// returned by the database, for these roles. The report's aggregates come from the
+// names-free collectives_service_totals view, so everyone else still gets the totals.
+const { canSeeContributorIdentity } = useCurrentRole()
 
 // Church scoping (own church, or the selected church for SuperAdmin / Head Pastor).
 // RLS returns every church to those roles, so the report filters by from_church.
@@ -86,6 +90,16 @@ onMounted(async () => {
 
 watch(cursorMonthKey, loadMonth, { immediate: true })
 
+// Permissions resolve asynchronously, usually AFTER the immediate loadMonth above
+// has already run. The month's aggregates don't depend on them, but the raw giving
+// rows (for the Contributors table) are fetched only when the caller may see
+// identity — so once that right resolves for a finance user, re-run loadMonth to
+// pull the rows it skipped. Only fires on the false->true edge; a viewer never
+// triggers it, and it costs at most one extra fetch per session.
+watch(canSeeContributorIdentity, (now, was) => {
+  if (now && !was) loadMonth()
+})
+
 // Reload the ledger and the current month once the active church resolves or changes.
 watch(activeChurchId, () => {
   loadServiceTotals()
@@ -93,15 +107,45 @@ watch(activeChurchId, () => {
 })
 
 const report = computed(() => {
-  const source = buildMonthSourceFromCollections(monthCollections.value, {
+  // Aggregates (tithes/offering per service date) come from the names-free ledger
+  // view, NOT from raw giving rows. This is what lets the report keep working for
+  // the four viewer roles after 0031 locked the identity-bearing collections rows
+  // to finance staff. The view is the whole history; take this month's rows.
+  const range = getMonthRange(cursorMonthKey.value)
+  const monthTotals = range
+    ? serviceTotals.value.filter((r) => {
+        const d = String(r?.service_date).slice(0, 10)
+        return d >= range.start && d < range.endExclusive
+      })
+    : []
+
+  const source = {
     year: cursor.value.year,
     month: cursor.value.month,
     // Derived from the ledger rather than stored, so a correction to an older
     // entry re-derives every balance after it with no month-close step.
-    openingBalance: openingBalanceForMonth(serviceTotals.value, cursorMonthKey.value)
-  })
+    openingBalance: openingBalanceForMonth(serviceTotals.value, cursorMonthKey.value),
+    // Strip the view's per-date expense sums; mergeMonthSourceWithLiveExpenses
+    // re-adds expenses from liveExpenses (the by-description source of truth), and
+    // leaving both in would double-count.
+    weeks: buildLedgerWeeks(monthTotals).map((w) => ({ ...w, expenses: [] }))
+  }
 
-  return computeMonthlyReport(mergeMonthSourceWithLiveExpenses(source, liveExpenses.value))
+  const base = computeMonthlyReport(mergeMonthSourceWithLiveExpenses(source, liveExpenses.value))
+
+  // Contributor identity is layered on from the raw giving rows, which only a caller
+  // who may see identity ever fetches (loadMonth gates the query) and the database
+  // only returns to them (0031). For everyone else the list is empty — and the
+  // synthetic view-derived contributions above carry no name, so base.contributors
+  // would be meaningless; we replace it wholesale rather than read it.
+  const contributors = canSeeContributorIdentity.value
+    ? computeMonthlyReport(buildMonthSourceFromCollections(monthCollections.value, {
+        year: cursor.value.year,
+        month: cursor.value.month
+      })).contributors
+    : []
+
+  return { ...base, contributors }
 })
 
 async function loadServiceTotals () {
@@ -141,12 +185,22 @@ async function loadMonth () {
     return
   }
 
-  let collectionsQuery = supabase.from('collections').select(REPORT_COLLECTION_SELECT)
-  if (activeChurchId.value) collectionsQuery = collectionsQuery.eq('from_church', activeChurchId.value)
-  collectionsQuery = collectionsQuery
-    .gte('collectedOn', range.start)
-    .lt('collectedOn', range.endExclusive)
-    .order('collectedOn', { ascending: true })
+  // The identity-bearing giving rows (names attached) are fetched ONLY when the
+  // caller may see contributor identity. The database enforces this too (0031) —
+  // for anyone else the query would return nothing — but skipping it entirely
+  // saves a doomed round-trip. The month's aggregates come from serviceTotals (the
+  // names-free view), so the report is complete without this query.
+  const wantsContributors = canSeeContributorIdentity.value
+
+  let collectionsQuery = null
+  if (wantsContributors) {
+    collectionsQuery = supabase.from('collections').select(REPORT_COLLECTION_SELECT)
+    if (activeChurchId.value) collectionsQuery = collectionsQuery.eq('from_church', activeChurchId.value)
+    collectionsQuery = collectionsQuery
+      .gte('collectedOn', range.start)
+      .lt('collectedOn', range.endExclusive)
+      .order('collectedOn', { ascending: true })
+  }
 
   let expensesQuery = supabase.from('expenses').select('spent_on, description, amount')
   if (activeChurchId.value) expensesQuery = expensesQuery.eq('from_church', activeChurchId.value)
@@ -155,7 +209,10 @@ async function loadMonth () {
     .lt('spent_on', range.endExclusive)
     .order('spent_on', { ascending: true })
 
-  const [collectionsResult, expensesResult] = await Promise.all([collectionsQuery, expensesQuery])
+  const [collectionsResult, expensesResult] = await Promise.all([
+    collectionsQuery ?? Promise.resolve({ data: [], error: null }),
+    expensesQuery
+  ])
 
   if (requestId !== monthRequestId) return
 
@@ -757,7 +814,7 @@ function afterCollapse (el) {
 
       <!-- Contributors (finance staff / SuperAdmin only) -->
       <section
-        v-if="canWriteFinance"
+        v-if="canSeeContributorIdentity"
         class="fun__card anim-rise"
         style="--i: 10"
       >
