@@ -588,6 +588,49 @@ window longer than 24 hours.
 
 ---
 
+### 3.22 Contributor identity was gated in the UI only, not by RLS — Medium (fixed, 0031)
+
+**Finding.** The Church Funds report shows the Contributors table only to a caller holding
+`canWriteFinance`, so a Pastor / Church Leader / Head Pastor saw the month's totals with no names.
+The screen read as though contributor identity was finance-only. The database did not agree:
+`collections_select_own_church` (0016) granted SELECT to `can_view_finance()` — five roles — over
+the whole giving row, `from` included, and four of those five also hold `can_see_member_detail()`
+to resolve that id to a name. The anon key ships to every browser, so the request needed only a
+session and a URL. A UI-only control standing in for an authorization boundary is not a control
+([ADR-0001](decisions/0001-rls-is-the-only-authz.md)). Pre-existing since `0016`; found during the
+Funds redesign, not caused by it. Insider privacy gap, not an anonymous breach — no cross-church
+path (`can_read_church()` still scopes every read) — hence Medium.
+
+**Fix (0031, all $0).** Two moves:
+
+1. **`collections` SELECT narrows** from `can_view_finance()` to a new predicate
+   `can_see_contributor_identity()` (= `can_write_finance()` today, defined separately so "may
+   record money" and "may see who gave" can diverge without silently moving together). Finance and
+   SuperAdmin keep reading the row and its member embed exactly as before; everyone else can no
+   longer retrieve the identity-bearing row at all.
+2. **`collectives_service_totals` becomes owner-rights** (`security_invoker = off`) with the
+   aggregate gate re-imposed in its body — `can_view_finance() AND can_read_church(from_church)`.
+   Without this, locking the base table would blind the report for the four viewer roles, whose
+   whole month is derived from the view's per-date sums. The view exposes only per-date totals,
+   never `from` ([ADR-0004](decisions/0004-view-aggregates-but-does-not-allocate.md)), so the five viewer
+   roles still get exactly the figures the report always showed them, by a path that carries no
+   name. **This is the one deliberate exception to the "every view is invoker-rights" rule** — the
+   two in-body predicates are the compensating control and are load-bearing.
+
+**Why it stayed hidden, and the ⚠ check.** The report renders identically whether the policy is
+tight or wide, so nothing in the running app distinguishes the two states. Verification is by query,
+not by eye — see [VERIFICATION.md](security/VERIFICATION.md) §1 (the contributor-identity ⚠ check)
+and `scripts/sql/capture-security-state.sql` query 10.
+
+**Not mitigated in code.** The RLS policy and grant themselves are not unit-tested — there is no
+live-database harness (out of scope). `deriveCapabilities` and the Funds view's read-gating are
+covered (`tests/utils/capabilities.test.js`, `tests/views/churchFundsView.test.js`); the SQL is
+covered by the ⚠ query above.
+
+**Cost.** $0.
+
+---
+
 ## 4. Tier 2 findings
 
 ### 4.1 Unvalidated `facebook_link` URL scheme — Low (latent)

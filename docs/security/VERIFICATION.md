@@ -35,8 +35,19 @@ view and a missing trigger both look exactly like a working system. Those are ma
 - [ ] ⚠ **Triggers still present.** `scripts/sql/capture-security-state.sql` reports both
       out-of-schema triggers. Investigate immediately if either is missing after a Supabase
       platform upgrade — without `handle_new_user()` every user signs in to an empty dashboard.
-- [ ] ⚠ **Every view is invoker-rights.** Same script, query 9. Any `public` view without
-      `security_invoker=on` is a cross-church leak. **Check after any migration that adds a view.**
+- [ ] ⚠ **Every view is invoker-rights — with one documented exception.** Same script, query 9.
+      Any `public` view without `security_invoker=on` is a cross-church leak, **except**
+      `collectives_service_totals`, which is deliberately owner-rights since 0031 (§3.22) and carries
+      its own `can_view_finance() AND can_read_church()` guard in its body. That is the *only*
+      permitted owner-rights view; a second one, or that view losing either predicate, is a finding.
+      Verify its guard with the next check. **Check after any migration that adds a view.**
+- [ ] ⚠ **Contributor identity is locked (§3.22).** The one control invisible from the UI on the
+      finance side — the Funds report renders identically whether it is tight or wide. Run query 10
+      of `scripts/sql/capture-security-state.sql`. Expect: the `collections` SELECT policy names
+      **`can_see_contributor_identity`** (NOT `can_view_finance` — that spelling reopens the leak);
+      `collectives_service_totals` shows `security_invoker=false`; and its definition contains
+      **both** `can_view_finance()` and `can_read_church(`. Any deviation means a Pastor / Church
+      Leader / Head Pastor can read who gave, or the view leaks cross-church.
 - [ ] ⚠ **`anon` holds exactly two function grants and no table grant.** Since
       [ADR-0007](../decisions/0007-public-checkin-endpoint.md) the only privileges `anon` has
       anywhere are `EXECUTE` on `checkin_session_status(text)` and `submit_checkin(text,text,text)`.
@@ -84,6 +95,7 @@ view and a missing trigger both look exactly like a working system. Those are ma
 | §3.15 Identity state | Sign in as a finance user, sign out, sign in as a **non**-finance user in the same tab **without reloading** → `FundsTabs` must not render Collections/Expenses links. Separately, expire the JWT and confirm a redirect to `/login` rather than a raw `JWT expired` string. |
 | §3.16 Ledger audit | Record a collection, edit one in-window, delete another in-window → `collections_history` holds one `UPDATE` row with both old and new amounts and one `DELETE` row, each with the correct `changed_by`. Then confirm `authenticated` cannot `INSERT`, `UPDATE`, or `DELETE` that table directly. |
 | §3.17 CSP reports | Temporarily add an inline `<script>` to a built page → a `csp` row appears in the sink. Remove it. |
+| §3.22 Contributor identity | Sign in as a **Pastor** (or Church Leader / Head Pastor) and open Church funds → totals and allocations render, **no Contributors table**. In the browser network tab confirm **no request to `/rest/v1/collections`** was made. Then, as a superuser in a rolled-back transaction with a Pastor's JWT claims, `select "from" from collections limit 1` → **zero rows**. As a **Finance** user the same page shows names and the `collections` request fires. ⚠ Screen looks identical to a leaking build — the `collections` request and the raw SQL are the only tells. |
 | §3.18 Throttling | Script >100 `collections` inserts in a minute as one user → the trigger rejects the excess. Confirm a realistic Sunday entry rate stays well under the ceiling. |
 | §3.19 Recovery | Restore the latest dump into a throwaway Supabase project, run `bootstrap-triggers.sql`, sign in → the dashboard shows data (proves `handle_new_user()`), and `create table t(...)` lands with `relrowsecurity = true` (proves `rls_auto_enable()`). Record the drill date. |
 | §3.20 Release | Push a commit with a deliberately failing test → Netlify must **not** publish. Deploy a schema-dependent build without its migration → CI `prisma:migrate:status` must fail the job. |

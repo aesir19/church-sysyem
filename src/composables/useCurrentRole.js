@@ -102,6 +102,7 @@ export function useCurrentRole() {
     canWriteMembers: c('canWriteMembers'),
     canViewFinance: c('canViewFinance'),
     canWriteFinance: c('canWriteFinance'),
+    canSeeContributorIdentity: c('canSeeContributorIdentity'),
     canViewAttendance: c('canViewAttendance'),
     canManageAttendance: c('canManageAttendance'),
     canManageSmallGroups: c('canManageSmallGroups'),

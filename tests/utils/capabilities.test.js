@@ -28,6 +28,7 @@ describe('deriveCapabilities', () => {
     expect(c.role).toBe(null)
     for (const key of [
       'canSeeMemberDetail', 'canWriteMembers', 'canViewFinance', 'canWriteFinance',
+      'canSeeContributorIdentity',
       'canViewAttendance', 'canManageAttendance', 'canManageSmallGroups', 'isCrossChurch',
       'isSmallGroupLeader', 'canBrowseDirectory', 'canRecordJourney',
     ]) {
@@ -180,6 +181,37 @@ describe('deriveCapabilities', () => {
     const c = deriveCapabilities(perm('pastor', { is_pastor: true, is_finance: true }))
     expect(c.canWriteFinance).toBe(true) // via the ministry, not the account role
     expect(c.canSeeMemberDetail).toBe(true) // via pastor
+  })
+
+  // 0031 / issue #57. Who may see WHO gave — as opposed to the aggregate figures —
+  // is visible only to finance WRITERS (Finance ministry + SuperAdmin), never to the
+  // finance VIEWERS (Pastor / Church Leader / Head Pastor). This must mirror the SQL
+  // predicate can_see_contributor_identity() exactly, or the UI gate and the RLS
+  // policy that now enforces it drift apart.
+  describe('canSeeContributorIdentity', () => {
+    it('is held only by SuperAdmin and the Finance ministry', () => {
+      expect(deriveCapabilities(perm('super_admin', { is_super_admin: true })).canSeeContributorIdentity).toBe(true)
+      expect(deriveCapabilities(perm('member', { is_finance: true })).canSeeContributorIdentity).toBe(true)
+    })
+
+    it('is withheld from every finance VIEWER that is not a finance writer', () => {
+      // These three can view the report but must not see who gave.
+      expect(deriveCapabilities(perm('pastor', { is_pastor: true })).canSeeContributorIdentity).toBe(false)
+      expect(deriveCapabilities(perm('church_leader', { is_church_leader: true })).canSeeContributorIdentity).toBe(false)
+      expect(deriveCapabilities(perm('head_pastor', { is_head_pastor: true })).canSeeContributorIdentity).toBe(false)
+      // Control: they can still view the report itself.
+      expect(deriveCapabilities(perm('pastor', { is_pastor: true })).canViewFinance).toBe(true)
+    })
+
+    it('tracks canWriteFinance today, but is a distinct key so the two can diverge (0031)', () => {
+      for (const flags of [
+        { is_super_admin: true }, { is_head_pastor: true }, { is_pastor: true },
+        { is_church_leader: true }, { is_finance: true }, { is_secretariat: true }, { is_welcome: true },
+      ]) {
+        const c = deriveCapabilities(perm('member', flags))
+        expect(c.canSeeContributorIdentity).toBe(c.canWriteFinance)
+      }
+    })
   })
 })
 
