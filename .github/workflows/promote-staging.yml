@@ -1,0 +1,69 @@
+name: Promote staging to main
+
+# Weekly production promotion. Every Tuesday 00:00 Philippine Time this opens a
+# PR from staging into main and turns on auto-merge. The PR merges itself ONLY
+# after the required checks pass (see branch protection on main), and that merge
+# is what triggers ci.yml's migrate -> deploy -> release chain. So this workflow
+# never touches production directly; it just hands a green PR to the existing
+# pipeline. Fail-closed: if the checks are red, nothing ships.
+
+on:
+  schedule:
+    # 00:00 Tuesday, Philippine Time (UTC+8) == 16:00 Monday UTC.
+    - cron: '0 16 * * 1'
+  # Manual promotion for an off-cycle release or to re-run after a red gate.
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote-staging
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Open auto-merging PR from staging to main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check staging is ahead of main
+        id: diff
+        run: |
+          set -euo pipefail
+          git fetch origin main staging
+          ahead=$(git rev-list --count origin/main..origin/staging)
+          echo "ahead=$ahead" >> "$GITHUB_OUTPUT"
+          if [ "$ahead" -eq 0 ]; then
+            echo "Nothing to promote: staging has no commits beyond main. Skipping."
+          else
+            echo "$ahead commit(s) on staging to promote."
+          fi
+
+      # PROMOTE_TOKEN (a fine-grained PAT), NOT the default GITHUB_TOKEN. A PR
+      # created by GITHUB_TOKEN does not trigger other workflows, so ci.yml's
+      # pull_request checks would never run and the required-checks gate would
+      # block the PR forever. The PAT also makes the eventual auto-merge push to
+      # main a real user push, which is what re-triggers ci.yml to deploy.
+      - name: Open or reuse PR and enable auto-merge
+        if: steps.diff.outputs.ahead != '0'
+        env:
+          GH_TOKEN: ${{ secrets.PROMOTE_TOKEN }}
+        run: |
+          set -euo pipefail
+          num=$(gh pr list --base main --head staging --state open --json number --jq '.[0].number // empty')
+          if [ -z "$num" ]; then
+            num=$(gh pr create \
+              --base main --head staging \
+              --title "Release: promote staging to main ($(date -u +%Y-%m-%d))" \
+              --body $'Automated weekly promotion of `staging` into `main`.\n\nThis PR merges automatically once the required checks pass, then ci.yml runs migrations and deploys to production and publishes the release notes.' \
+              | grep -oE '[0-9]+$')
+            echo "Opened PR #$num"
+          else
+            echo "Reusing open PR #$num"
+          fi
+          gh pr merge "$num" --auto --merge
