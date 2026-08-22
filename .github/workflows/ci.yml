@@ -232,3 +232,40 @@ jobs:
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    # Cut a release only after production is actually live, and only for the
+    # push that deployed it. `needs: [deploy]` means a skipped deploy (any PR or
+    # non-main push) skips this too, so every GitHub Release maps 1:1 to a real
+    # production deploy.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [deploy]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Date-based tag (vYYYY.MM.DD). If a tag for today already exists — a
+      # same-day hotfix on top of the weekly promotion — suffix it (v...-2, -3)
+      # so the release never collides. --generate-notes fills the body from the
+      # PRs merged since the previous release automatically.
+      - name: Create dated release with generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --quiet
+          base="v$(date -u +%Y.%m.%d)"
+          tag="$base"; n=1
+          while git rev-parse -q --verify "refs/tags/$tag" >/dev/null || gh release view "$tag" >/dev/null 2>&1; do
+            n=$((n + 1)); tag="$base-$n"
+          done
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" \
+            --title "$tag" \
+            --generate-notes
