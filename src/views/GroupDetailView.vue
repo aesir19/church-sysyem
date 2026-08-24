@@ -3,6 +3,7 @@ import { computed, onMounted, onServerPrefetch, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Badge from '../components/ui/Badge.vue'
 import Button from '../components/ui/Button.vue'
+import OverflowMenu from '../components/ui/OverflowMenu.vue'
 import Avatar from '../components/ui/Avatar.vue'
 import Card from '../components/ui/Card.vue'
 import Spinner from '../components/ui/Spinner.vue'
@@ -293,6 +294,34 @@ const canEditGroup = computed(() =>
   canManageSmallGroups.value && !isMinistry.value && group.value?.church_id === activeChurchId.value
 )
 
+// The header's secondary actions, collapsed into one list (5 - Action Bar System).
+// Built from the same permission flags the buttons used to be gated on, so nothing
+// about who-can-do-what changes — only where it lives. Order is fixed so the menu's
+// shape is learnable: the safe actions, then a divider and Delete in magenta, last.
+// The template decides how to SHOW this list: nothing when empty, a plain button
+// when there is exactly one, the ⋯ menu when there are several. A lone action does
+// not earn a menu — hiding one thing behind ⋯ is worse than just showing it.
+const headerActions = computed(() => {
+  const list = []
+  if (canEditGroup.value) {
+    list.push({ key: 'edit', label: 'Edit group', onSelect: () => { renameOpen.value = true } })
+  }
+  if (canAssignLeader.value) {
+    list.push({
+      key: 'leader',
+      label: hasLeader.value ? 'Change leader' : 'Assign leader',
+      onSelect: openLeaderDialog
+    })
+  }
+  if (canAddMembers.value) {
+    list.push({ key: 'add', label: 'Add members', onSelect: () => { addOpen.value = true } })
+  }
+  if (canEditGroup.value) {
+    list.push({ key: 'delete', label: 'Delete', danger: true, dividerBefore: true, onSelect: () => { deleteOpen.value = true } })
+  }
+  return list
+})
+
 function onAdded () {
   // Re-read rather than splice the new rows in: the count, the journey panel and the
   // roster all derive from the same fetch, and correcting three things by hand is how
@@ -506,34 +535,26 @@ async function toggleJourney (row, key) {
           </p>
         </div>
 
-        <div class="gd__actions">
+        <!-- One verb, one place (5b). The four buttons that used to stack up here now
+             collapse by count: a lone action stays a plain button, several fold into
+             the ⋯ menu, and a caller with no rights sees nothing at all. -->
+        <div
+          v-if="headerActions.length"
+          class="gd__actions"
+        >
+          <!-- A lone action stays a plain (secondary) button — this screen has no
+               cyan page-verb; nothing here is a daily action worth the emphasis. -->
           <Button
-            v-if="canAssignLeader"
-            variant="secondary"
-            @click="openLeaderDialog"
+            v-if="headerActions.length === 1"
+            @click="headerActions[0].onSelect()"
           >
-            {{ hasLeader ? 'Change leader' : 'Assign leader' }}
+            {{ headerActions[0].label }}
           </Button>
-          <Button
-            v-if="canEditGroup"
-            variant="secondary"
-            @click="renameOpen = true"
-          >
-            Edit group
-          </Button>
-          <Button
-            v-if="canEditGroup"
-            variant="secondary"
-            @click="deleteOpen = true"
-          >
-            Delete
-          </Button>
-          <Button
-            v-if="canAddMembers"
-            @click="addOpen = true"
-          >
-            + Add members
-          </Button>
+          <OverflowMenu
+            v-else
+            :items="headerActions"
+            label="Group actions"
+          />
         </div>
       </header>
 
