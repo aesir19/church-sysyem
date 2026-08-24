@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '../lib/supabase'
 import Avatar from '../components/ui/Avatar.vue'
 import Button from '../components/ui/Button.vue'
+import OverflowMenu from '../components/ui/OverflowMenu.vue'
 import Icon from '../components/ui/icons/Icon.vue'
 import Modal from '../components/ui/Modal.vue'
 import RecordAttendeeModal from '../components/attendance/RecordAttendeeModal.vue'
@@ -75,6 +76,15 @@ const serviceCounts = ref(new Map())
 const recordOpen = ref(false)
 const qrOpen = ref(false)
 const windowsOpen = ref(false)
+
+// The corner keeps only the verb (Record attendee) and Show QR — the one action
+// ushers reach for repeatedly while a service is open. Configuring the check-in
+// windows is rare setup, so it moves into the ⋯ menu (5 - Action Bar System:
+// "everything rare — outputs, settings, destruction").
+const cornerMenu = computed(() => [
+  { key: 'windows', label: 'Check-in windows', onSelect: () => { windowsOpen.value = true } }
+])
+
 const linkRow = ref(null)
 const linkOpen = ref(false)
 const removeRow = ref(null)
@@ -419,12 +429,10 @@ function formatRecordedAt (value) {
       </div>
 
       <div class="att__actions">
-        <Button
-          variant="ghost"
-          @click="windowsOpen = true"
-        >
-          Check-in windows
-        </Button>
+        <OverflowMenu
+          label="More attendance actions"
+          :items="cornerMenu"
+        />
         <Button @click="qrOpen = true">
           Show QR
         </Button>
