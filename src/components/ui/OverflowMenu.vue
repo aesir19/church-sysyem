@@ -19,7 +19,7 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import Icon from './icons/Icon.vue'
 
-defineProps({
+const props = defineProps({
   // [{ key, label, onSelect, danger?, disabled?, dividerBefore? }]
   items: { type: Array, default: () => [] },
   // The trigger is icon-only, so it needs its own accessible name.
@@ -32,6 +32,33 @@ defineProps({
 const open = ref(false)
 const root = ref(null)
 const trigger = ref(null)
+const menuEl = ref(null)
+
+// Once mounted the popover teleports to <body> and positions with fixed
+// coordinates. A page header often carries a leftover transform from its
+// entrance animation, and a transform makes a stacking context that traps a
+// z-indexed child no matter how high its z-index — the menu would render behind
+// the content below it. Teleporting escapes that trap (and any `overflow:hidden`
+// ancestor). SSR and the very first client render keep it inline (`:disabled`)
+// so the gated action list stays present in the rendered HTML for tests.
+const mounted = ref(false)
+const menuStyle = ref(null)
+
+function place () {
+  const t = trigger.value
+  if (!t) return
+  const r = t.getBoundingClientRect()
+  const style = { position: 'fixed', top: `${Math.round(r.bottom + 8)}px` }
+  if (props.align === 'start') style.left = `${Math.round(r.left)}px`
+  else style.right = `${Math.round(window.innerWidth - r.right)}px`
+  menuStyle.value = style
+}
+
+function toggle () {
+  if (open.value) { close(); return }
+  place()
+  open.value = true
+}
 
 function close (returnFocus = true) {
   if (!open.value) return
@@ -46,21 +73,36 @@ function select (item) {
 }
 
 function onPointerDown (event) {
-  if (root.value && !root.value.contains(event.target)) close(false)
+  // The menu lives in <body> once teleported, so "outside" means outside BOTH
+  // the trigger's root and the menu itself.
+  if (!open.value) return
+  if (root.value?.contains(event.target) || menuEl.value?.contains(event.target)) return
+  close(false)
 }
 
 function onKeydown (event) {
   if (event.key === 'Escape') close()
 }
 
+// A fixed-positioned menu would drift away from its trigger on scroll or resize;
+// closing is simpler and less jarring than chasing the trigger across the page.
+function onReflow () {
+  if (open.value) close(false)
+}
+
 onMounted(() => {
+  mounted.value = true
   document.addEventListener('pointerdown', onPointerDown, true)
   document.addEventListener('keydown', onKeydown)
+  document.addEventListener('scroll', onReflow, true)
+  window.addEventListener('resize', onReflow)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onPointerDown, true)
   document.removeEventListener('keydown', onKeydown)
+  document.removeEventListener('scroll', onReflow, true)
+  window.removeEventListener('resize', onReflow)
 })
 </script>
 
@@ -78,7 +120,7 @@ onBeforeUnmount(() => {
       :aria-label="label"
       :aria-expanded="open"
       aria-haspopup="menu"
-      @click="open = !open"
+      @click="toggle"
     >
       <Icon
         name="dots"
@@ -93,34 +135,41 @@ onBeforeUnmount(() => {
          may not edit never has an Edit item rendered at all — which is the contract
          the page's tests assert. Transition gives back the entrance animation v-show
          alone would drop. -->
-    <Transition name="om">
-      <div
-        v-show="open"
-        class="om__menu"
-        :class="`om__menu--${align}`"
-        role="menu"
-      >
-        <template
-          v-for="item in items"
-          :key="item.key"
+    <Teleport
+      to="body"
+      :disabled="!mounted"
+    >
+      <Transition name="om">
+        <div
+          v-show="open"
+          ref="menuEl"
+          class="om__menu"
+          :class="[`om__menu--${align}`, { 'om__menu--fixed': mounted }]"
+          :style="menuStyle"
+          role="menu"
         >
-          <div
-            v-if="item.dividerBefore"
-            class="om__rule"
-          />
-          <button
-            type="button"
-            role="menuitem"
-            class="om__item"
-            :class="{ 'om__item--danger': item.danger }"
-            :disabled="item.disabled || undefined"
-            @click="select(item)"
+          <template
+            v-for="item in items"
+            :key="item.key"
           >
-            {{ item.label }}
-          </button>
-        </template>
-      </div>
-    </Transition>
+            <div
+              v-if="item.dividerBefore"
+              class="om__rule"
+            />
+            <button
+              type="button"
+              role="menuitem"
+              class="om__item"
+              :class="{ 'om__item--danger': item.danger }"
+              :disabled="item.disabled || undefined"
+              @click="select(item)"
+            >
+              {{ item.label }}
+            </button>
+          </template>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
