@@ -99,6 +99,23 @@ export const iconPaths = {
     ['circle', { cx: 4, cy: 21, r: 1 }]
   ],
 
+  // ADDED for Calendar & Events (Stage 1). A plain month grid for the all-roles
+  // Calendar nav item; the same frame with a star badge for the Events management
+  // item, so the two read as related but not identical in the rail.
+  calendar: [
+    ['rect', { x: 3, y: 4, width: 18, height: 18, rx: 2 }],
+    ['line', { x1: 16, y1: 2, x2: 16, y2: 6 }],
+    ['line', { x1: 8, y1: 2, x2: 8, y2: 6 }],
+    ['line', { x1: 3, y1: 10, x2: 21, y2: 10 }]
+  ],
+  events: [
+    ['path', { d: 'M21 12V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h7' }],
+    ['line', { x1: 16, y1: 2, x2: 16, y2: 6 }],
+    ['line', { x1: 8, y1: 2, x2: 8, y2: 6 }],
+    ['line', { x1: 3, y1: 10, x2: 21, y2: 10 }],
+    ['path', { d: 'M18 14.5l1.3 2.6 2.9.4-2.1 2 .5 2.9-2.6-1.4-2.6 1.4.5-2.9-2.1-2 2.9-.4z' }]
+  ],
+
   // --- Chevrons ---------------------------------------------------------
   // Down is verbatim; the other three are the same polyline reflected, which is
   // how the mockups' own month steppers read.

@@ -85,6 +85,25 @@ const routes = [
         name: 'GroupDetail',
         component: () => import('../views/GroupDetailView.vue')
       },
+      // CALENDAR & EVENTS (Stage 1, issue thread on #86/#87).
+      //
+      // Calendar carries NO capability gate — it is the members' read of the church
+      // year, open to everyone, and its SELECT policy (0032) already narrows a
+      // non-privileged member to published events only. Gating it would hide the one
+      // calendar screen every member is meant to have.
+      //
+      // Events is the management surface. requiresCapability: 'canViewEvents' bounces
+      // a deep-linker who lacks it to /members (the safe always-reachable fallback),
+      // and the nav hides the item for them — the hide-don't-lock rule (0016). The
+      // composer and edit paths need the stronger canManageEvents: an oversight role
+      // (Pastor / Church Leader / Head Pastor) may reach the list and a detail read,
+      // but not the create/edit forms.
+      { path: 'calendar', name: 'Calendar', component: () => import('../views/CalendarView.vue') },
+      { path: 'events', name: 'Events', component: () => import('../views/EventsView.vue'), meta: { requiresCapability: 'canViewEvents' } },
+      { path: 'events/new', name: 'EventNew', component: () => import('../views/EventComposerView.vue'), meta: { requiresCapability: 'canManageEvents' } },
+      { path: 'events/:id', name: 'EventDetail', component: () => import('../views/EventDetailView.vue'), meta: { requiresCapability: 'canViewEvents' } },
+      { path: 'events/:id/edit', name: 'EventEdit', component: () => import('../views/EventComposerView.vue'), meta: { requiresCapability: 'canManageEvents' } },
+
       { path: 'attendance', name: 'Attendance', component: () => import('../views/AttendanceView.vue'), meta: { requiresCapability: 'canViewAttendance' } },
       { path: 'collections', name: 'Collections', component: () => import('../views/CollectionsInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } },
       { path: 'expenses', name: 'Expenses', component: () => import('../views/ExpensesInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } },
