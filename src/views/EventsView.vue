@@ -14,6 +14,7 @@ import Alert from '../components/ui/Alert.vue'
 import { useActiveChurch } from '../composables/useActiveChurch'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { listManagedEvents, kindLabel } from '../lib/data/events'
+import { listSeries } from '../lib/data/eventSeries'
 
 const { activeChurchId, ensureLoaded } = useActiveChurch()
 const { canManageEvents } = useCurrentRole()
@@ -21,12 +22,14 @@ const { canManageEvents } = useCurrentRole()
 const TABS = [
   { key: 'upcoming', label: 'Upcoming' },
   { key: 'past', label: 'Past' },
+  { key: 'series', label: 'Repeating' },
   { key: 'drafts', label: 'Drafts' },
 ]
 const tab = ref('upcoming')
 const loading = ref(true)
 const errorMsg = ref('')
 const events = ref([])
+const series = ref([])
 
 const statusTone = { draft: 'warning', published: 'success', cancelled: 'magenta' }
 const statusLabel = { draft: 'Draft', published: 'Published', cancelled: 'Cancelled' }
@@ -36,18 +39,31 @@ async function load() {
   errorMsg.value = ''
   await ensureLoaded()
   if (!activeChurchId.value) { loading.value = false; return }
-  const res = await listManagedEvents({ churchId: activeChurchId.value, scope: tab.value })
-  if (!res.ok) { errorMsg.value = res.message; events.value = [] } else { events.value = res.events }
+  if (tab.value === 'series') {
+    const res = await listSeries({ churchId: activeChurchId.value })
+    if (!res.ok) { errorMsg.value = res.message; series.value = [] } else { series.value = res.series }
+  } else {
+    const res = await listManagedEvents({ churchId: activeChurchId.value, scope: tab.value })
+    if (!res.ok) { errorMsg.value = res.message; events.value = [] } else { events.value = res.events }
+  }
   loading.value = false
+}
+
+function fmtNext(d) {
+  return d ? new Date(d).toLocaleDateString('en-PH', { weekday: 'short', day: 'numeric', month: 'short' }) : 'No upcoming dates'
 }
 
 watch([tab, activeChurchId], load)
 onMounted(load)
 
-const empty = computed(() => !loading.value && !errorMsg.value && events.value.length === 0)
+const empty = computed(() => {
+  if (loading.value || errorMsg.value) return false
+  return tab.value === 'series' ? series.value.length === 0 : events.value.length === 0
+})
 const emptyText = computed(() => ({
   upcoming: 'No upcoming events. Create one to start filling the calendar.',
   past: 'No past events yet.',
+  series: 'No repeating events yet. Most of a church year repeats — set the Sunday service up once and the calendar fills itself.',
   drafts: 'No drafts waiting. Everything you have written is published.',
 }[tab.value]))
 
@@ -129,6 +145,34 @@ function fmtTime(iso) {
       </Button>
     </Card>
 
+    <!-- Repeating series (frame 6d): the rule in plain words and its next date. -->
+    <Card
+      v-else-if="tab === 'series'"
+      :padded="false"
+      class="ev__table-card"
+    >
+      <div class="ev__thead ev__thead--series">
+        <span>Repeating event</span><span>Repeats</span><span>Next date</span>
+      </div>
+      <component
+        :is="canManageEvents ? 'RouterLink' : 'div'"
+        v-for="s in series"
+        :key="s.id"
+        :to="canManageEvents ? { name: 'EventNew', query: { series: s.id } } : undefined"
+        class="ev__row ev__row--series"
+      >
+        <span class="ev__name">
+          <span class="ev__bar ev__tone--published" />
+          <span class="ev__name-text">
+            <span class="ev__name-title">{{ s.title }}</span>
+            <span class="ev__name-where">{{ kindLabel(s.kind) }}{{ s.location ? ' · ' + s.location : '' }}</span>
+          </span>
+        </span>
+        <span class="ev__rule">⟳ {{ s.ruleText }}</span>
+        <span class="ev__next">{{ fmtNext(s.next) }}</span>
+      </component>
+    </Card>
+
     <Card
       v-else
       :padded="false"
@@ -204,6 +248,11 @@ function fmtTime(iso) {
 .ev__name-title { font-weight: 700; font-size: var(--text-body-sm); }
 .ev__name-where { font-size: var(--text-meta); color: var(--ink-5); }
 .ev__kind { font-size: var(--text-body-sm); color: var(--ink-3); }
+
+.ev__thead--series, .ev__row--series { grid-template-columns: 1fr 1fr 150px; }
+.ev__row--series { text-decoration: none; color: inherit; }
+.ev__rule { font-size: var(--text-body-sm); color: var(--ink-3); font-weight: 600; }
+.ev__next { font-size: var(--text-body-sm); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
 @media (max-width: 640px) {
   .ev__thead { display: none; }

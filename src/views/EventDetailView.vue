@@ -21,6 +21,10 @@ import {
   getEvent, getEventLinks, kindLabel,
   publishEvent, cancelEvent, deleteEvent,
 } from '../lib/data/events'
+import {
+  getSeries, skipOccurrence, deleteSeries, countKeptPast,
+} from '../lib/data/eventSeries'
+import { describeRule } from '../lib/recurrence'
 
 const route = useRoute()
 const router = useRouter()
@@ -31,11 +35,20 @@ const loading = ref(true)
 const errorMsg = ref('')
 const event = ref(null)
 const links = ref({ expenses: [], collections: [] })
+// When this detail is an occurrence of a repeating series, the series it belongs to and the
+// specific date. A "virtual" occurrence has no saved row yet — it is worked out from the rule.
+const series = ref(null)
+const occurrenceDate = ref(null)
+const isVirtualOccurrence = ref(false)
 
 const publishOpen = ref(false)
 const cancelOpen = ref(false)
 const deleteOpen = ref(false)
+const skipOpen = ref(false)
+const deleteSeriesOpen = ref(false)
 const cancelReason = ref('')
+const skipReason = ref('')
+const deleteConfirmText = ref('')
 const busy = ref(false)
 
 const statusTone = { draft: 'warning', published: 'success', cancelled: 'magenta' }
@@ -43,29 +56,124 @@ const statusLabel = { draft: 'Draft', published: 'Published', cancelled: 'Cancel
 
 const isDraft = computed(() => event.value?.status === 'draft')
 const isPublished = computed(() => event.value?.status === 'published')
+const isSeriesOccurrence = computed(() => !!series.value)
+const seriesRuleText = computed(() => series.value ? describeRule(series.value) : '')
+// The past is frozen: an occurrence that has already happened offers no change/skip actions.
+const isPastOccurrence = computed(() => {
+  if (!occurrenceDate.value) return false
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  return new Date(`${occurrenceDate.value}T00:00:00`) < today
+})
 
-// The overflow menu items — Edit always (writers), Cancel only for a published event,
-// Delete only for a draft (a published event is cancelled, never deleted).
+// The overflow menu items depend on what this is:
+//   - a one-off event: Edit; Cancel (published) or Delete (draft).
+//   - an occurrence of a series: change this date, skip this date, edit the whole series, or
+//     delete the whole series — the Stage-2 actions (frames 7d, 7h, 7i).
 const menuItems = computed(() => {
   if (!canManageEvents.value || !event.value) return []
+  if (isSeriesOccurrence.value) {
+    const items = []
+    // A past date is frozen — no change/skip, only whole-series actions that reach forward.
+    if (!isPastOccurrence.value) {
+      items.push({ key: 'edit-date', label: 'Change this date', onSelect: goEditOccurrence })
+      items.push({ key: 'skip', label: 'Cancel this date', onSelect: () => (skipOpen.value = true), danger: true, dividerBefore: true })
+    }
+    items.push({ key: 'edit-series', label: 'Edit the whole series', onSelect: goEditSeries, dividerBefore: items.length > 0 })
+    items.push({ key: 'delete-series', label: 'Delete the whole series', onSelect: openDeleteSeries, danger: true })
+    return items
+  }
   const items = [{ key: 'edit', label: 'Edit', onSelect: goEdit }]
   if (isPublished.value) items.push({ key: 'cancel', label: 'Cancel this event', onSelect: () => (cancelOpen.value = true), danger: true, dividerBefore: true })
   if (isDraft.value) items.push({ key: 'delete', label: 'Delete draft', onSelect: () => (deleteOpen.value = true), danger: true, dividerBefore: true })
   return items
 })
 
+// A worked-out occurrence carries a synthetic id "series-<seriesId>-<YYYY-MM-DD>" (see
+// recurrence.js). The detail route matches it as :id; we detect it and build the occurrence
+// from its series rather than fetching a row that does not exist.
+function parseVirtualId(id) {
+  const m = /^series-(.+)-(\d{4}-\d{2}-\d{2})$/.exec(id || '')
+  return m ? { seriesId: m[1], date: m[2] } : null
+}
+
 async function load() {
   loading.value = true
   errorMsg.value = ''
+  series.value = null
+  occurrenceDate.value = null
+  isVirtualOccurrence.value = false
+
+  const virtual = parseVirtualId(route.params.id)
+  if (virtual) return loadVirtualOccurrence(virtual)
+
   const res = await getEvent(route.params.id)
   if (!res.event) { errorMsg.value = res.message || 'That event could not be found.'; loading.value = false; return }
   event.value = res.event
+  // A saved exception row still belongs to a series — load it so the series actions appear.
+  if (res.event.series_id) {
+    occurrenceDate.value = res.event.occurrence_date
+    const sres = await getSeries(res.event.series_id)
+    if (sres.series) series.value = sres.series
+  }
   links.value = await getEventLinks(event.value.id)
+  loading.value = false
+}
+
+async function loadVirtualOccurrence({ seriesId, date }) {
+  const sres = await getSeries(seriesId)
+  if (!sres.series) { errorMsg.value = 'That repeating event could not be found.'; loading.value = false; return }
+  const s = sres.series
+  series.value = s
+  occurrenceDate.value = date
+  isVirtualOccurrence.value = true
+  const startsAt = new Date(`${date}T${s.timeStart}:00`)
+  const endsAt = s.timeEnd ? new Date(`${date}T${s.timeEnd}:00`) : null
+  event.value = {
+    id: `series-${seriesId}-${date}`,
+    church_id: s.church_id, title: s.title, kind: s.kind, status: 'published',
+    starts_at: startsAt.toISOString(), ends_at: endsAt ? endsAt.toISOString() : null,
+    location: s.location, description: s.description, run_by: s.run_by,
+    projected_budget: s.projected_budget, series_id: s.id, occurrence_date: date,
+  }
+  links.value = { expenses: [], collections: [] }
   loading.value = false
 }
 onMounted(load)
 
 function goEdit() { router.push({ name: 'EventEdit', params: { id: event.value.id } }) }
+function goEditOccurrence() { router.push({ name: 'EventNew', query: { series: series.value.id, date: occurrenceDate.value } }) }
+function goEditSeries() { router.push({ name: 'EventNew', query: { series: series.value.id } }) }
+
+async function doSkip() {
+  busy.value = true
+  const res = await skipOccurrence({ series: series.value, occurrenceDate: occurrenceDate.value, reason: skipReason.value.trim() || null })
+  busy.value = false
+  skipOpen.value = false
+  if (!res.ok) { errorMsg.value = res.message; return }
+  showToast('That date was cancelled')
+  router.push({ name: 'Calendar' })
+}
+
+// The honest "kept" figure is how many PAST dates actually have a saved record — unmaterialised
+// past dates are purely worked-out and leave nothing behind. Fetched when the dialog opens.
+const keptPastCount = ref(0)
+async function openDeleteSeries() {
+  keptPastCount.value = await countKeptPast({ seriesId: series.value.id })
+  deleteConfirmText.value = ''
+  deleteSeriesOpen.value = true
+}
+const deleteConfirmed = computed(() => deleteConfirmText.value.trim() === (series.value?.title || '').trim())
+
+async function doDeleteSeries() {
+  if (!deleteConfirmed.value) return
+  busy.value = true
+  const res = await deleteSeries({ seriesId: series.value.id })
+  busy.value = false
+  deleteSeriesOpen.value = false
+  if (!res.ok) { errorMsg.value = res.message; return }
+  showToast('Repeating event deleted')
+  router.push({ name: 'Events' })
+}
 
 async function doPublish() {
   busy.value = true
@@ -112,7 +220,7 @@ function fmtDate(iso) { return iso ? new Date(iso).toLocaleDateString('en-PH', {
 function peso(n) { return `₱${Number(n).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` }
 
 const history = computed(() => {
-  if (!event.value) return []
+  if (!event.value || !event.value.created_at) return []
   const h = [{ what: 'Event created', when: fmtDate(event.value.created_at) }]
   if (event.value.published_at) h.push({ what: 'Published to members', when: fmtDate(event.value.published_at) })
   if (event.value.status === 'cancelled') h.push({ what: 'Cancelled', when: fmtDate(event.value.updated_at) })
@@ -159,6 +267,12 @@ const history = computed(() => {
             <Badge tone="neutral">
               {{ kindLabel(event.kind) }}
             </Badge>
+            <Badge
+              v-if="isSeriesOccurrence"
+              tone="accent"
+            >
+              ⟳ Series
+            </Badge>
           </div>
           <p class="det__when">
             {{ fmtWhen(event) }}
@@ -189,6 +303,12 @@ const history = computed(() => {
         {{ errorMsg }}
       </Alert>
 
+      <Alert
+        v-if="isSeriesOccurrence"
+        tone="accent"
+      >
+        This is one date of a repeating event — <strong>{{ seriesRuleText }}</strong>. Changing it lets you choose whether the change is for this date only or the ones after it.
+      </Alert>
       <Alert
         v-if="isDraft"
         tone="warning"
@@ -402,6 +522,90 @@ const history = computed(() => {
         </Button>
       </template>
     </Modal>
+
+    <!-- Cancel ONE date of a series (a typhoon week). Greys the date out; the rest carry on. -->
+    <Modal
+      v-model:open="skipOpen"
+      title="Cancel this date?"
+      description="Only this one date is cancelled. Every other date in the series carries on."
+      icon="alert"
+      icon-tone="magenta"
+      layout="stack"
+      :close-on-outside-click="false"
+    >
+      <label class="det__field">
+        <span class="det__label">Reason — members will see this</span>
+        <textarea
+          v-model="skipReason"
+          class="det__textarea"
+          rows="2"
+          placeholder="e.g. Cancelled this week — typhoon."
+        />
+      </label>
+      <template #footer>
+        <Button
+          variant="secondary"
+          @click="skipOpen = false"
+        >
+          Keep the date
+        </Button>
+        <Button
+          variant="danger"
+          :loading="busy"
+          @click="doSkip"
+        >
+          Cancel this date
+        </Button>
+      </template>
+    </Modal>
+
+    <!-- Delete the WHOLE series (frame 7i): future dates go, past dates and their attendance are
+         kept, and the name must be typed to confirm. -->
+    <Modal
+      v-model:open="deleteSeriesOpen"
+      title="Delete this repeating event?"
+      description="Upcoming dates are removed. Past dates and any attendance already taken are kept."
+      icon="alert"
+      icon-tone="magenta"
+      layout="stack"
+      :close-on-outside-click="false"
+    >
+      <p class="det__dialog-text">
+        This stops <strong>{{ series?.title }}</strong> repeating — all its upcoming dates will no longer appear on the calendar.
+        <template v-if="keptPastCount">
+          Its <strong>{{ keptPastCount }}</strong> past date{{ keptPastCount === 1 ? '' : 's' }} with records (attendance) {{ keptPastCount === 1 ? 'is' : 'are' }} kept.
+        </template>
+        <template v-else>
+          No past dates have records, so nothing is left behind.
+        </template>
+        This cannot be undone.
+      </p>
+      <label class="det__field">
+        <span class="det__label">Type <strong>{{ series?.title }}</strong> to confirm</span>
+        <input
+          v-model="deleteConfirmText"
+          class="det__input"
+          type="text"
+          :placeholder="series?.title"
+        >
+      </label>
+      <template #footer>
+        <Button
+          variant="secondary"
+          @click="deleteSeriesOpen = false"
+        >
+          Keep it
+        </Button>
+        <Button
+          variant="danger"
+          :disabled="!deleteConfirmed"
+          :loading="busy"
+          @click="doDeleteSeries"
+        >
+          Delete the series
+        </Button>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -449,6 +653,7 @@ const history = computed(() => {
 .det__field { display: flex; flex-direction: column; gap: var(--sp-6); }
 .det__label { font-size: var(--text-meta); font-weight: 700; color: var(--ink-3); }
 .det__textarea { padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--r-control); background: var(--surface); font-family: inherit; font-size: var(--text-body-sm); color: var(--ink); resize: vertical; }
+.det__input { padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--r-control); background: var(--surface); font-family: inherit; font-size: var(--text-body-sm); font-weight: 600; color: var(--ink); }
 
 @media (max-width: 860px) {
   .det__cols { grid-template-columns: 1fr; }

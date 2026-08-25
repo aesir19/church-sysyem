@@ -1,12 +1,16 @@
 <script setup>
-// The members' Calendar (frame 6a). Open to everyone: a month grid of the church year,
-// showing published events and — for callers who may read them — the recurring services
-// overlaid. A non-privileged member sees published events only; that narrowing is the
-// SELECT policy's (0032), not this view's. Clicking an event opens its detail.
+// The members' Calendar (frames 6a, 7b, 7c). Open to everyone: the church year in one place,
+// showing published events, each series' worked-out occurrences, and — for callers who may
+// read them — recurring services and member birthdays overlaid. A non-privileged member sees
+// only published rows; that narrowing is the SELECT policies' (0032/0034), not this view's.
 //
-// Month is the only view in Stage 1. Week and Agenda are Stage 2 (#86); their pill is
-// rendered but inert, marked the same way the nav marks a Soon item, so the shape is
-// visible without pretending to work.
+// THREE MODES behind the Month / Week / Agenda pill (Stage 2, #86):
+//   Month   — the 6-week grid (Stage 1).
+//   Week    — a time-of-day grid, Sunday-first, events placed at their real time and height,
+//             overlaps split into side-by-side columns; all-day items (birthdays) in a top strip.
+//   Agenda  — the next ~30 days as a grouped, printable list.
+// All three read the SAME occurrence pool (listCalendarOccurrences) for the visible window;
+// switching mode re-queries and re-renders, it does not add a data path.
 
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
@@ -18,30 +22,29 @@ import Alert from '../components/ui/Alert.vue'
 import Icon from '../components/ui/icons/Icon.vue'
 import { useActiveChurch } from '../composables/useActiveChurch'
 import { useCurrentRole } from '../composables/useCurrentRole'
-import { listEvents, listServiceOccurrences, listBirthdays, EVENT_KINDS, kindLabel } from '../lib/data/events'
+import { listServiceOccurrences, listBirthdays, EVENT_KINDS, kindLabel } from '../lib/data/events'
+import { listCalendarOccurrences } from '../lib/data/eventSeries'
+import { addDays, ymd } from '../lib/recurrence'
 
 const router = useRouter()
 const { activeChurchId, ensureLoaded } = useActiveChurch()
 const { canManageEvents } = useCurrentRole()
 
-// The month being viewed, as a first-of-month Date. Defaults to today's month.
+const MODES = ['month', 'week', 'agenda']
+const mode = ref('month')
+// The anchor date. Month uses its month; Week uses its week; Agenda counts forward from today.
 const cursor = ref(startOfMonth(new Date()))
 const loading = ref(true)
 const errorMsg = ref('')
 const events = ref([])
 const services = ref([])
-// Member birthdays overlaid on the month, via list_calendar_birthdays (0033) — visible to
-// every member of the church. Name and day only; the birth year never leaves the database.
 const birthdays = ref([])
-// One pool the grid and the "next seven days" both bucket from.
 const allItems = computed(() => [...events.value, ...services.value, ...birthdays.value])
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December']
 const DOWS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-// The legend groups events by kind → a colour family. Services (and the overlay) are the
-// accent; group meetings neutral; special/outreach magenta; admin warning.
 const LEGEND = [
   { key: 'services', label: 'Services' },
   { key: 'groups',   label: 'Groups' },
@@ -56,28 +59,49 @@ function legendOf(item) {
   return KIND_LEGEND[item.kind] ?? 'groups'
 }
 
-const monthLabel = computed(() => `${MONTHS[cursor.value.getMonth()]} ${cursor.value.getFullYear()}`)
+// --- the visible window per mode -------------------------------------------
+// [from, to) as Date objects. Month spans the 6-week grid; Week the Sun–Sat week; Agenda a
+// 30-day look-ahead from the start of today.
+const windowRange = computed(() => {
+  if (mode.value === 'week') {
+    const start = startOfWeek(cursor.value)
+    return [start, addDays(start, 7)]
+  }
+  if (mode.value === 'agenda') {
+    const start = startOfDay(new Date())
+    return [start, addDays(start, 30)]
+  }
+  const gridStart = startOfWeek(startOfMonth(cursor.value))
+  return [gridStart, addDays(gridStart, 42)]
+})
 
-// The 42-cell (6-week) grid, Monday-first, covering the visible month plus its
-// leading/trailing days. Each cell carries its date, whether it is in-month/today, and the
-// items that fall on it (events + service occurrences), capped for display.
+const headingLabel = computed(() => {
+  if (mode.value === 'week') {
+    const [start] = windowRange.value
+    const end = addDays(start, 6)
+    const sameMonth = start.getMonth() === end.getMonth()
+    const left = `${MONTHS[start.getMonth()].slice(0, 3)} ${start.getDate()}`
+    const right = sameMonth ? `${end.getDate()}` : `${MONTHS[end.getMonth()].slice(0, 3)} ${end.getDate()}`
+    return `${left} – ${right}, ${end.getFullYear()}`
+  }
+  if (mode.value === 'agenda') return 'Next 30 days'
+  return `${MONTHS[cursor.value.getMonth()]} ${cursor.value.getFullYear()}`
+})
+const crumbNow = computed(() => mode.value.charAt(0).toUpperCase() + mode.value.slice(1))
+
+// --- month grid (unchanged shape) ------------------------------------------
 const cells = computed(() => {
-  const first = cursor.value
-  const start = new Date(first)
-  const lead = start.getDay() // Sunday=0 — the week starts on Sunday
-  start.setDate(start.getDate() - lead)
-
+  const [start] = windowRange.value
   const byDay = bucketByDay(allItems.value)
   const today = ymd(new Date())
+  const first = startOfMonth(cursor.value)
   const out = []
   for (let i = 0; i < 42; i++) {
-    const d = new Date(start)
-    d.setDate(start.getDate() + i)
+    const d = addDays(start, i)
     const key = ymd(d)
     const items = (byDay.get(key) || []).sort((a, b) => a.starts_at.localeCompare(b.starts_at))
     out.push({
-      key,
-      day: d.getDate(),
+      key, day: d.getDate(),
       inMonth: d.getMonth() === first.getMonth(),
       isToday: key === today,
       isSunday: d.getDay() === 0,
@@ -88,10 +112,125 @@ const cells = computed(() => {
   return out
 })
 
-// The next seven days as a flat, time-ordered list — frame 6a's right-hand summary.
+// --- week grid -------------------------------------------------------------
+const HOUR_PX = 46
+const DEFAULT_START_HOUR = 6
+const DEFAULT_END_HOUR = 22
+
+// The axis spans a sensible 6 am–10 pm by default, but STRETCHES to fit anything outside it —
+// a dawn service or a watchnight would otherwise be clamped to the edge or overflow the grid.
+const weekBounds = computed(() => {
+  const [from, to] = windowRange.value
+  let start = DEFAULT_START_HOUR
+  let end = DEFAULT_END_HOUR
+  for (const it of allItems.value) {
+    if (it.isBirthday) continue
+    const s = new Date(it.starts_at)
+    if (s < from || s >= to) continue
+    const e = it.ends_at ? new Date(it.ends_at) : new Date(s.getTime() + 60 * 60 * 1000)
+    start = Math.min(start, s.getHours())
+    end = Math.max(end, e.getHours() + (e.getMinutes() > 0 ? 1 : 0), s.getHours() + 1)
+  }
+  start = Math.max(0, Math.min(start, 23))
+  end = Math.min(24, Math.max(end, start + 1))
+  return { start, end }
+})
+const hours = computed(() => {
+  const { start, end } = weekBounds.value
+  const out = []
+  for (let h = start; h < end; h++) out.push(h)
+  return out
+})
+
+// The seven day columns: each with its all-day items (birthdays) and its timed items laid out
+// into non-overlapping columns so two events at the same hour sit side by side (story 25).
+const weekDays = computed(() => {
+  const [start] = windowRange.value
+  const byDay = bucketByDay(allItems.value)
+  const today = ymd(new Date())
+  const out = []
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(start, i)
+    const key = ymd(d)
+    const items = byDay.get(key) || []
+    const allDay = items.filter((it) => it.isBirthday)
+    const timed = layoutDay(items.filter((it) => !it.isBirthday), weekBounds.value.start)
+    out.push({
+      key, date: d, dow: DOWS[d.getDay()], dayNum: d.getDate(),
+      isToday: key === today, allDay, timed,
+    })
+  }
+  return out
+})
+
+// Place a day's timed items: top/height from their time, and a column so overlapping events sit
+// side by side. Columns are counted PER OVERLAP CLUSTER, not per day — a lone morning service
+// stays full width even when two afternoon events overlap each other (story 25 is about the
+// actual overlap, not the whole day). `startHour` is the axis's first hour.
+function layoutDay(items, startHour) {
+  const evs = items
+    .map((it) => {
+      const start = new Date(it.starts_at)
+      const end = it.ends_at ? new Date(it.ends_at) : new Date(start.getTime() + 60 * 60 * 1000)
+      return { it, start, end, startT: start.getTime(), endT: end.getTime() }
+    })
+    .sort((a, b) => a.startT - b.startT)
+
+  // Break into clusters: a run of events where each overlaps the running span of the cluster.
+  const clusters = []
+  let cluster = []
+  let clusterEnd = -Infinity
+  for (const ev of evs) {
+    if (cluster.length && ev.startT >= clusterEnd) { clusters.push(cluster); cluster = [] }
+    cluster.push(ev)
+    clusterEnd = cluster.length === 1 ? ev.endT : Math.max(clusterEnd, ev.endT)
+  }
+  if (cluster.length) clusters.push(cluster)
+
+  const placed = []
+  for (const group of clusters) {
+    const columnsEnd = [] // end time per active column, within this cluster only
+    for (const ev of group) {
+      let col = columnsEnd.findIndex((e) => e <= ev.startT)
+      if (col === -1) { col = columnsEnd.length; columnsEnd.push(ev.endT) } else { columnsEnd[col] = ev.endT }
+      ev.col = col
+    }
+    const cols = columnsEnd.length
+    for (const ev of group) {
+      const startMins = (ev.start.getHours() - startHour) * 60 + ev.start.getMinutes()
+      const endMins = (ev.end.getHours() - startHour) * 60 + ev.end.getMinutes()
+      placed.push({
+        ...ev.it, col: ev.col, cols,
+        top: Math.max(0, (startMins / 60) * HOUR_PX),
+        height: Math.max(22, ((endMins - startMins) / 60) * HOUR_PX),
+      })
+    }
+  }
+  return placed
+}
+
+// --- agenda ----------------------------------------------------------------
+// Grouped by day, upcoming only, each heading noting its count. Cancelled items are shown
+// (greyed) but do not count toward the "N events" tally.
+const agendaDays = computed(() => {
+  const [from, to] = windowRange.value
+  const byDay = bucketByDay(allItems.value.filter((it) => {
+    const t = new Date(it.starts_at)
+    return t >= from && t < to
+  }))
+  const out = []
+  for (const [key, items] of [...byDay.entries()].sort()) {
+    const sorted = items.sort((a, b) => a.starts_at.localeCompare(b.starts_at))
+    const live = sorted.filter((it) => it.status !== 'cancelled')
+    out.push({ key, date: new Date(`${key}T00:00:00`), items: sorted, count: live.length })
+  }
+  return out
+})
+
+// --- the next seven days (month mode's side panel) -------------------------
 const upcoming = computed(() => {
   const now = new Date()
-  const horizon = new Date(now); horizon.setDate(horizon.getDate() + 7)
+  const horizon = addDays(now, 7)
   return allItems.value
     .filter((e) => {
       const t = new Date(e.starts_at)
@@ -108,45 +247,52 @@ async function load() {
   const churchId = activeChurchId.value
   if (!churchId) { loading.value = false; return }
 
-  // Load the visible grid's window (6 weeks), so leading/trailing cells are populated too.
-  const gridStart = new Date(cursor.value)
-  gridStart.setDate(gridStart.getDate() - gridStart.getDay())
-  const gridEnd = new Date(gridStart)
-  gridEnd.setDate(gridEnd.getDate() + 42)
-  const from = gridStart.toISOString()
-  const to = gridEnd.toISOString()
+  const [fromD, toD] = windowRange.value
+  const from = fromD.toISOString()
+  const to = toD.toISOString()
 
   const [ev, sv, bd] = await Promise.all([
-    listEvents({ churchId, from, to }),
+    listCalendarOccurrences({ churchId, from, to }),
     listServiceOccurrences({ churchId, from, to }),
     listBirthdays({ churchId, from, to }),
   ])
-  if (!ev.ok) { errorMsg.value = ev.message; events.value = [] } else { events.value = ev.events }
+  if (!ev.ok) { errorMsg.value = ev.message; events.value = [] } else { events.value = ev.items }
   services.value = sv
   birthdays.value = bd
   loading.value = false
 }
 
+function setMode(m) {
+  if (m === mode.value) return
+  // Keep the eye near "now" when switching into a mode with a different anchor.
+  if (m === 'week' && mode.value === 'month') cursor.value = startOfWeek(new Date())
+  if (m === 'month') cursor.value = startOfMonth(cursor.value)
+  mode.value = m
+}
+
 function step(delta) {
   const d = new Date(cursor.value)
-  d.setMonth(d.getMonth() + delta)
-  cursor.value = startOfMonth(d)
+  if (mode.value === 'week') d.setDate(d.getDate() + 7 * delta)
+  else d.setMonth(d.getMonth() + delta)
+  cursor.value = mode.value === 'week' ? startOfWeek(d) : startOfMonth(d)
 }
-function goToday() { cursor.value = startOfMonth(new Date()) }
+function goToday() {
+  cursor.value = mode.value === 'week' ? startOfWeek(new Date()) : startOfMonth(new Date())
+}
 
 function openItem(item) {
-  // Services and birthdays are read-only overlays — they have no event detail to open.
-  if (item.isService || item.isBirthday) return
+  if (item.isService || item.isBirthday) return // read-only overlays
   router.push({ name: 'EventDetail', params: { id: item.id } })
 }
+function printAgenda() { window.print() }
 
-watch([cursor, activeChurchId], load)
+watch([cursor, activeChurchId, mode], load)
 onMounted(load)
 
 // --- date helpers (pure) ---------------------------------------------------
 function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1) }
 function startOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()) }
-function ymd(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+function startOfWeek(d) { const s = startOfDay(d); s.setDate(s.getDate() - s.getDay()); return s } // Sunday-first
 function bucketByDay(items) {
   const m = new Map()
   for (const it of items) {
@@ -159,7 +305,20 @@ function bucketByDay(items) {
 function timeLabel(iso) {
   return new Date(iso).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit', hour12: true }).replace(':00', '')
 }
-function dowLabel(iso) { return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(iso).getDay()] }
+function hourLabel(h) {
+  const period = h < 12 ? 'am' : 'pm'
+  const h12 = h % 12 === 0 ? 12 : h % 12
+  return `${h12} ${period}`
+}
+function dowLabel(iso) { return DOWS[new Date(iso).getDay()] }
+function dayHeading(date) {
+  return date.toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric' })
+}
+function metaOf(it) {
+  if (it.isBirthday) return 'Birthday'
+  if (it.isService) return 'Service'
+  return kindLabel(it.kind)
+}
 </script>
 
 <template>
@@ -167,7 +326,7 @@ function dowLabel(iso) { return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
     <header class="cal__head">
       <div>
         <div class="cal__crumb">
-          <span>Calendar</span><span>/</span><span class="cal__crumb-now">Month</span>
+          <span>Calendar</span><span>/</span><span class="cal__crumb-now">{{ crumbNow }}</span>
         </div>
         <h1 class="cal__title">
           Calendar
@@ -186,11 +345,14 @@ function dowLabel(iso) { return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
     </header>
 
     <div class="cal__controls">
-      <div class="cal__stepper">
+      <div
+        v-if="mode !== 'agenda'"
+        class="cal__stepper"
+      >
         <button
           type="button"
           class="cal__step"
-          aria-label="Previous month"
+          :aria-label="mode === 'week' ? 'Previous week' : 'Previous month'"
           @click="step(-1)"
         >
           <Icon
@@ -198,11 +360,11 @@ function dowLabel(iso) { return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
             :size="15"
           />
         </button>
-        <span class="cal__month">{{ monthLabel }}</span>
+        <span class="cal__month">{{ headingLabel }}</span>
         <button
           type="button"
           class="cal__step"
-          aria-label="Next month"
+          :aria-label="mode === 'week' ? 'Next week' : 'Next month'"
           @click="step(1)"
         >
           <Icon
@@ -211,12 +373,25 @@ function dowLabel(iso) { return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
           />
         </button>
       </div>
+      <span
+        v-else
+        class="cal__month cal__month--static"
+      >{{ headingLabel }}</span>
       <Button
+        v-if="mode !== 'agenda'"
         variant="secondary"
         size="sm"
         @click="goToday"
       >
         Today
+      </Button>
+      <Button
+        v-else
+        variant="secondary"
+        size="sm"
+        @click="printAgenda"
+      >
+        Print
       </Button>
 
       <div
@@ -224,15 +399,18 @@ function dowLabel(iso) { return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
         role="tablist"
         aria-label="Calendar view"
       >
-        <span class="cal__view is-on">Month</span>
-        <span
-          class="cal__view is-soon"
-          aria-disabled="true"
-        >Week <Badge tone="magenta">Soon</Badge></span>
-        <span
-          class="cal__view is-soon"
-          aria-disabled="true"
-        >Agenda <Badge tone="magenta">Soon</Badge></span>
+        <button
+          v-for="m in MODES"
+          :key="m"
+          type="button"
+          role="tab"
+          :aria-selected="mode === m"
+          class="cal__view"
+          :class="{ 'is-on': mode === m }"
+          @click="setMode(m)"
+        >
+          {{ m.charAt(0).toUpperCase() + m.slice(1) }}
+        </button>
       </div>
 
       <ul class="cal__legend">
@@ -257,10 +435,11 @@ function dowLabel(iso) { return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
       v-if="loading"
       class="cal__loading"
     >
-      <Spinner label="Loading the month" />
+      <Spinner label="Loading the calendar" />
     </div>
 
-    <template v-else>
+    <!-- MONTH -->
+    <template v-else-if="mode === 'month'">
       <Card
         class="cal__grid-card"
         :padded="false"
@@ -303,6 +482,11 @@ function dowLabel(iso) { return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
                 class="cal__ev-time"
               >{{ timeLabel(it.starts_at) }}</span>
               <span class="cal__ev-title">{{ it.isBirthday ? it.title + '’s birthday' : it.title }}</span>
+              <span
+                v-if="it.isSeries"
+                class="cal__chip"
+                title="Part of a repeating series"
+              >⟳</span>
             </button>
             <span
               v-if="c.more"
@@ -340,13 +524,138 @@ function dowLabel(iso) { return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
             </span>
             <span class="cal__next-body">
               <span class="cal__next-title">{{ u.isBirthday ? u.title + '’s birthday' : u.title }}</span>
-              <span class="cal__next-meta">{{ u.isBirthday ? 'Birthday' : (u.isService ? 'Service' : kindLabel(u.kind)) }}{{ u.location ? ' · ' + u.location : '' }}</span>
+              <span class="cal__next-meta">{{ metaOf(u) }}{{ u.location ? ' · ' + u.location : '' }}</span>
             </span>
             <span class="cal__next-time">{{ u.isBirthday ? '🎂' : timeLabel(u.starts_at) }}</span>
           </li>
         </ul>
       </Card>
     </template>
+
+    <!-- WEEK -->
+    <Card
+      v-else-if="mode === 'week'"
+      class="cal__grid-card"
+      :padded="false"
+    >
+      <div class="week">
+        <div class="week__corner" />
+        <div
+          v-for="d in weekDays"
+          :key="d.key"
+          class="week__dayhead"
+          :class="{ 'is-today': d.isToday }"
+        >
+          <span class="week__dow">{{ d.dow }}</span>
+          <span class="week__daynum">{{ d.dayNum }}</span>
+        </div>
+
+        <div class="week__corner week__corner--allday">
+          All day
+        </div>
+        <div
+          v-for="d in weekDays"
+          :key="`ad-${d.key}`"
+          class="week__allday"
+          :class="{ 'is-today': d.isToday }"
+        >
+          <span
+            v-for="it in d.allDay"
+            :key="it.id"
+            class="week__badge cal__tone--birthday"
+          >🎂 {{ it.title }}</span>
+        </div>
+
+        <div class="week__axis">
+          <span
+            v-for="h in hours"
+            :key="h"
+            class="week__hour"
+            :style="{ height: HOUR_PX + 'px' }"
+          >{{ hourLabel(h) }}</span>
+        </div>
+        <div
+          v-for="d in weekDays"
+          :key="`col-${d.key}`"
+          class="week__col"
+          :class="{ 'is-today': d.isToday }"
+          :style="{ height: hours.length * HOUR_PX + 'px' }"
+        >
+          <span
+            v-for="h in hours"
+            :key="h"
+            class="week__line"
+            :style="{ height: HOUR_PX + 'px' }"
+          />
+          <button
+            v-for="it in d.timed"
+            :key="it.id"
+            type="button"
+            class="week__ev"
+            :class="[`cal__tone--${legendOf(it)}`, { 'is-cancelled': it.status === 'cancelled', 'is-service': it.isService }]"
+            :style="{ top: it.top + 'px', height: it.height + 'px', left: `calc(${(it.col / it.cols) * 100}% + 2px)`, width: `calc(${100 / it.cols}% - 4px)` }"
+            @click="openItem(it)"
+          >
+            <span class="week__ev-time">{{ timeLabel(it.starts_at) }}</span>
+            <span class="week__ev-title">{{ it.title }}<span
+              v-if="it.isSeries"
+              class="cal__chip"
+            >⟳</span></span>
+          </button>
+        </div>
+      </div>
+    </Card>
+
+    <!-- AGENDA -->
+    <Card
+      v-else
+      class="agenda"
+    >
+      <p
+        v-if="!agendaDays.length"
+        class="cal__empty"
+      >
+        Nothing on the calendar in the next 30 days.
+      </p>
+      <template v-else>
+        <section
+          v-for="day in agendaDays"
+          :key="day.key"
+          class="agenda__day"
+        >
+          <header class="agenda__dayhead">
+            <h2>{{ dayHeading(day.date) }}</h2>
+            <span class="agenda__count">{{ day.count }} event{{ day.count === 1 ? '' : 's' }}</span>
+          </header>
+          <ul class="agenda__list">
+            <li
+              v-for="it in day.items"
+              :key="it.id"
+              class="agenda__row"
+              :class="{ 'is-clickable': !it.isService && !it.isBirthday, 'is-cancelled': it.status === 'cancelled' }"
+              @click="openItem(it)"
+            >
+              <span class="agenda__time">{{ it.isBirthday ? '🎂' : timeLabel(it.starts_at) }}</span>
+              <span class="agenda__body">
+                <span class="agenda__title">
+                  {{ it.isBirthday ? it.title + '’s birthday' : it.title }}
+                  <span
+                    v-if="it.isSeries"
+                    class="cal__chip"
+                    title="Repeating series"
+                  >⟳</span>
+                  <Badge
+                    v-if="it.status === 'cancelled'"
+                    tone="neutral"
+                  >Cancelled</Badge>
+                </span>
+                <span class="agenda__meta">{{ metaOf(it) }}{{ it.location ? ' · ' + it.location : '' }}</span>
+              </span>
+            </li>
+          </ul>
+        </section>
+      </template>
+    </Card>
   </div>
 </template>
 
@@ -364,17 +673,16 @@ function dowLabel(iso) { return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
 .cal__step { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; background: none; border-radius: var(--r-inset); color: var(--ink-5); cursor: pointer; }
 .cal__step:hover { background: var(--surface-subtle-2); }
 .cal__month { padding: 0 var(--sp-10); font-weight: 800; font-size: var(--text-body-sm); white-space: nowrap; }
+.cal__month--static { padding-left: 0; }
 
 .cal__views { display: flex; gap: 3px; padding: 3px; border-radius: var(--r-control); background: var(--surface-subtle-2); }
-.cal__view { display: inline-flex; align-items: center; gap: var(--sp-6); padding: 7px 13px; border-radius: var(--r-inset); font-weight: 700; font-size: var(--text-meta); color: var(--ink-5); }
+.cal__view { display: inline-flex; align-items: center; gap: var(--sp-6); padding: 7px 13px; border: none; background: none; border-radius: var(--r-inset); font-weight: 700; font-size: var(--text-meta); color: var(--ink-5); cursor: pointer; }
 .cal__view.is-on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(16,24,40,.1); }
-.cal__view.is-soon { cursor: default; }
 
 .cal__legend { display: flex; gap: var(--sp-10); margin: 0 0 0 auto; padding: 0; list-style: none; flex-wrap: wrap; }
 .cal__legend-item { display: inline-flex; align-items: center; gap: var(--sp-6); font-size: var(--text-meta); font-weight: 700; color: var(--ink-4); }
 .cal__dot { width: 8px; height: 8px; border-radius: var(--r-pill); background: currentColor; }
 
-/* Tone families — services/overlay accent, groups neutral, special magenta, admin warning */
 .cal__tone--services { color: var(--accent); }
 .cal__tone--groups { color: var(--ink-5); }
 .cal__tone--special { color: var(--magenta); }
@@ -404,12 +712,14 @@ function dowLabel(iso) { return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
 .cal__ev.is-cancelled { opacity: .5; text-decoration: line-through; }
 .cal__ev-time { font-size: var(--text-meta-sm); font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; color: currentColor; }
 .cal__ev-title { font-size: var(--text-meta); font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal__chip { margin-left: 3px; font-size: 0.85em; color: var(--accent); font-weight: 800; }
 .cal__more { font-size: var(--text-meta-sm); font-weight: 700; color: var(--ink-6); padding-left: 7px; }
 
+/* --- next seven days (month side panel) + empty states --- */
+.cal__empty { margin: 0; font-size: var(--text-body-sm); color: var(--ink-5); }
 .cal__next-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-12); margin-bottom: var(--sp-10); }
 .cal__next-head h2 { margin: 0; font-size: var(--text-h3); font-weight: 800; letter-spacing: -0.02em; }
 .cal__next-count { font-size: var(--text-meta); color: var(--ink-5); }
-.cal__empty { margin: 0; font-size: var(--text-body-sm); color: var(--ink-5); }
 .cal__next-list { list-style: none; margin: 0; padding: 0; }
 .cal__next-row { display: grid; grid-template-columns: 54px 1fr auto; gap: var(--sp-12); padding: 11px 0; border-bottom: 1px solid var(--border-subtle, var(--border)); align-items: center; }
 .cal__next-row.is-clickable { cursor: pointer; }
@@ -423,9 +733,53 @@ function dowLabel(iso) { return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
 .cal__next-meta { font-size: var(--text-meta); color: var(--ink-5); }
 .cal__next-time { font-size: var(--text-body-sm); color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
+/* --- week grid --- */
+.week { display: grid; grid-template-columns: 54px repeat(7, 1fr); }
+.week__corner { border-bottom: 1px solid var(--border); border-right: 1px solid var(--border-subtle, var(--border)); }
+.week__corner--allday { display: flex; align-items: center; justify-content: flex-end; padding: 4px 8px; font-size: var(--text-meta-sm); font-weight: 700; color: var(--ink-6); }
+.week__dayhead { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 8px 4px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border-subtle, var(--border)); }
+.week__dayhead.is-today { background: var(--accent-tint); }
+.week__dow { font-size: var(--text-meta-sm); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-5); }
+.week__daynum { font-size: var(--text-h3); font-weight: 800; font-variant-numeric: tabular-nums; }
+.week__allday { min-height: 26px; display: flex; flex-direction: column; gap: 2px; padding: 3px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border-subtle, var(--border)); }
+.week__allday.is-today { background: var(--accent-tint); }
+.week__badge { font-size: var(--text-meta-sm); font-weight: 700; padding: 1px 5px; border-radius: var(--r-inset); background: color-mix(in srgb, currentColor 14%, var(--surface)); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.week__axis { display: flex; flex-direction: column; }
+.week__hour { display: flex; align-items: flex-start; justify-content: flex-end; padding: 2px 8px 0 0; font-size: var(--text-meta-sm); font-weight: 700; color: var(--ink-6); box-sizing: border-box; }
+.week__col { position: relative; border-right: 1px solid var(--border-subtle, var(--border)); }
+.week__col.is-today { background: color-mix(in srgb, var(--accent-tint) 60%, transparent); }
+.week__line { display: block; border-bottom: 1px solid var(--border-subtle, var(--border)); box-sizing: border-box; }
+.week__ev { position: absolute; display: flex; flex-direction: column; gap: 1px; padding: 3px 5px; border-radius: var(--r-inset); border: none; border-left: 3px solid currentColor; background: color-mix(in srgb, currentColor 16%, var(--surface)); cursor: pointer; text-align: left; overflow: hidden; }
+.week__ev.is-service { cursor: default; }
+.week__ev.is-cancelled { opacity: .5; text-decoration: line-through; }
+.week__ev-time { font-size: var(--text-meta-sm); font-weight: 800; color: currentColor; font-variant-numeric: tabular-nums; }
+.week__ev-title { font-size: var(--text-meta); font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+
+/* --- agenda --- */
+.agenda__day { margin-bottom: var(--sp-16); }
+.agenda__day:last-child { margin-bottom: 0; }
+.agenda__dayhead { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-12); padding-bottom: var(--sp-6); border-bottom: 2px solid var(--border); margin-bottom: var(--sp-6); }
+.agenda__dayhead h2 { margin: 0; font-size: var(--text-h3); font-weight: 800; letter-spacing: -0.02em; }
+.agenda__count { font-size: var(--text-meta); color: var(--ink-5); font-weight: 700; }
+.agenda__list { list-style: none; margin: 0; padding: 0; }
+.agenda__row { display: grid; grid-template-columns: 74px 1fr; gap: var(--sp-12); padding: 9px 4px; border-bottom: 1px solid var(--border-subtle, var(--border)); align-items: baseline; }
+.agenda__row:last-child { border-bottom: none; }
+.agenda__row.is-clickable { cursor: pointer; }
+.agenda__row.is-clickable:hover { background: var(--surface-subtle); }
+.agenda__row.is-cancelled .agenda__title { text-decoration: line-through; opacity: .6; }
+.agenda__time { font-size: var(--text-body-sm); font-weight: 800; color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.agenda__body { display: flex; flex-direction: column; min-width: 0; }
+.agenda__title { font-weight: 700; font-size: var(--text-body-sm); display: flex; align-items: center; gap: var(--sp-6); flex-wrap: wrap; }
+.agenda__meta { font-size: var(--text-meta); color: var(--ink-5); }
+
 @media (max-width: 640px) {
   .cal__legend { margin-left: 0; width: 100%; }
   .cal__cell { min-height: 76px; }
   .cal__ev-title { display: none; }
+}
+
+@media print {
+  .cal__head, .cal__controls, .cal__legend { display: none; }
+  .agenda { box-shadow: none; border: none; }
 }
 </style>

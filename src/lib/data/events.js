@@ -39,10 +39,12 @@ const MESSAGES = {
 
 // The columns the calendar and list render. Never `*` — the same discipline the rest of
 // the data layer keeps, so a new column is a deliberate addition here, not an automatic
-// egress.
-const EVENT_COLUMNS =
+// egress. series_id / occurrence_date (0034) mark a row that is an OCCURRENCE of a series
+// (an exception: a moved/cancelled/edited date); both are NULL on a one-off event.
+export const EVENT_COLUMNS =
   'id, church_id, title, kind, status, starts_at, ends_at, location, description, ' +
-  'run_by, projected_budget, cancel_reason, created_at, created_by, updated_at, published_at'
+  'run_by, projected_budget, cancel_reason, series_id, occurrence_date, ' +
+  'created_at, created_by, updated_at, published_at'
 
 // The five fixed kinds and their calendar legend grouping (0032 CHECK constraint). Kept
 // here so the view, the composer, and the legend all read one list. Colours are semantic
