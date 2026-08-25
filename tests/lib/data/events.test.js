@@ -19,7 +19,7 @@ vi.mock('../../../src/lib/supabase', () => ({
   supabase: { from: vi.fn(() => builder()), rpc: vi.fn(() => Promise.resolve({ data: [], error: null })) },
 }))
 
-const { expandWeeklySchedules, expandBirthdays, createEvent } = await import('../../../src/lib/data/events')
+const { expandWeeklySchedules, expandBirthdays, createEvent, slugify, eventSlug, parseEventSlug } = await import('../../../src/lib/data/events')
 
 beforeEach(() => { state.inserted = null; state.selectResult = { data: [{ id: 'e1' }], error: null } })
 
@@ -105,5 +105,34 @@ describe('expandBirthdays', () => {
       .filter((o) => o.title === 'Maria Santos')
       .map((o) => { const d = new Date(o.starts_at); return [d.getFullYear(), d.getMonth() + 1, d.getDate()] })
     expect(marias).toEqual([[2025, 12, 1], [2026, 12, 1]])
+  })
+})
+
+describe('readable event slugs (no UUIDs — the group.js naming rule)', () => {
+  it('slugify matches the group rule: lower, accent-stripped, punctuation to dashes', () => {
+    expect(slugify('Youth Outreach — San Roque')).toBe('youth-outreach-san-roque')
+    expect(slugify("Ptr. O’Brien’s Send-off")).toBe('ptr-obriens-send-off')
+    expect(slugify('  Café  Ñoño  ')).toBe('cafe-nono')
+  })
+
+  it('eventSlug leads with the LOCAL calendar day, then the title', () => {
+    // Build the instant from local Y/M/D so the assertion is timezone-independent.
+    const startsAt = new Date(2026, 7, 30, 15, 0, 0).toISOString() // 30 Aug 2026, local
+    expect(eventSlug({ title: 'Youth Outreach', starts_at: startsAt })).toBe('2026-08-30-youth-outreach')
+  })
+
+  it('a dateless draft has no date prefix', () => {
+    expect(eventSlug({ title: 'Youth Outreach', starts_at: null })).toBe('youth-outreach')
+  })
+
+  it('parseEventSlug splits the date from the title, and round-trips eventSlug', () => {
+    expect(parseEventSlug('2026-08-30-youth-outreach')).toEqual({ date: '2026-08-30', titleSlug: 'youth-outreach' })
+    expect(parseEventSlug('youth-outreach')).toEqual({ date: null, titleSlug: 'youth-outreach' })
+    // A title that itself begins with digits is not mistaken for a date (needs full YYYY-MM-DD).
+    expect(parseEventSlug('2026-vision-night')).toEqual({ date: null, titleSlug: '2026-vision-night' })
+
+    const startsAt = new Date(2026, 7, 30, 15, 0, 0).toISOString()
+    const slug = eventSlug({ title: 'Youth Outreach', starts_at: startsAt })
+    expect(parseEventSlug(slug)).toEqual({ date: '2026-08-30', titleSlug: 'youth-outreach' })
   })
 })

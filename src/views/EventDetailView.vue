@@ -6,7 +6,7 @@
 // and Delete (drafts only) are dialogs. "What this touches" shows the finance cross-links
 // Stage 1 can already read; the write flows are Stage 3.
 
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
@@ -18,23 +18,33 @@ import OverflowMenu from '../components/ui/OverflowMenu.vue'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { useToast } from '../composables/useToast'
 import {
-  getEvent, getEventLinks, kindLabel,
+  getEventLinks, kindLabel, findEventByDateTitle, parseEventSlug, slugify,
   publishEvent, cancelEvent, deleteEvent,
 } from '../lib/data/events'
 import {
-  getSeries, skipOccurrence, deleteSeries, countKeptPast,
+  getSeries, listSeries, skipOccurrence, deleteSeries, countKeptPast,
 } from '../lib/data/eventSeries'
-import { describeRule } from '../lib/recurrence'
+import { describeRule, expandSeries, ymd } from '../lib/recurrence'
+import { useActiveChurch } from '../composables/useActiveChurch'
+import EventRosterPanel from '../components/events/EventRosterPanel.vue'
+import EventProgrammePanel from '../components/events/EventProgrammePanel.vue'
+import EventCloseoutPanel from '../components/events/EventCloseoutPanel.vue'
+import { buildIcs, icsFilename } from '../lib/ics'
 
 const route = useRoute()
 const router = useRouter()
 const { canManageEvents } = useCurrentRole()
+const { churches, activeChurchId, ensureLoaded, setActiveChurch } = useActiveChurch()
 const { showToast } = useToast()
 
 const loading = ref(true)
 const errorMsg = ref('')
 const event = ref(null)
 const links = ref({ expenses: [], collections: [] })
+// The roster panel reports its filled/needed totals up, so the draft banner can say how many
+// roles still need filling before publish (6b's "N of M volunteer roles are unfilled").
+const rosterTotals = ref({ filled: 0, needed: 0 })
+const unfilledRoles = computed(() => Math.max(0, rosterTotals.value.needed - rosterTotals.value.filled))
 // When this detail is an occurrence of a repeating series, the series it belongs to and the
 // specific date. A "virtual" occurrence has no saved row yet — it is worked out from the rule.
 const series = ref(null)
@@ -57,6 +67,29 @@ const statusLabel = { draft: 'Draft', published: 'Published', cancelled: 'Cancel
 const isDraft = computed(() => event.value?.status === 'draft')
 const isPublished = computed(() => event.value?.status === 'published')
 const isSeriesOccurrence = computed(() => !!series.value)
+// A real, saved events row — the Stage-3 panels (roster/programme/closeout) attach to one,
+// so a worked-out series occurrence (synthetic id, no DB row) does not show them.
+const isRealEvent = computed(() =>
+  !!event.value && !isVirtualOccurrence.value && !String(event.value.id).startsWith('series-'))
+// Happened = a non-draft event whose start is in the past → the closeout panel appears (7o).
+const hasHappened = computed(() => {
+  if (!event.value?.starts_at || event.value.status === 'draft') return false
+  return new Date(event.value.starts_at).getTime() < Date.now()
+})
+
+/** The single-event ICS download (stories 38/39) — built in the browser, no server. */
+function downloadIcs() {
+  const ics = buildIcs(event.value)
+  const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = icsFilename(event.value.title)
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
 const seriesRuleText = computed(() => series.value ? describeRule(series.value) : '')
 // The past is frozen: an occurrence that has already happened offers no change/skip actions.
 const isPastOccurrence = computed(() => {
@@ -88,48 +121,65 @@ const menuItems = computed(() => {
   return items
 })
 
-// A worked-out occurrence carries a synthetic id "series-<seriesId>-<YYYY-MM-DD>" (see
-// recurrence.js). The detail route matches it as :id; we detect it and build the occurrence
-// from its series rather than fetching a row that does not exist.
-function parseVirtualId(id) {
-  const m = /^series-(.+)-(\d{4}-\d{2}-\d{2})$/.exec(id || '')
-  return m ? { seriesId: m[1], date: m[2] } : null
-}
-
+// The URL is authoritative (as in GroupDetailView): /events/<church>/<date>-<title>. The church
+// segment resolves to a church the caller can see and switches the active church so a shared link
+// lands even when the selector points elsewhere; a church slug they cannot see matches nothing and
+// falls through to the same not-found as any invisible event.
 async function load() {
   loading.value = true
   errorMsg.value = ''
+  event.value = null
   series.value = null
   occurrenceDate.value = null
   isVirtualOccurrence.value = false
 
-  const virtual = parseVirtualId(route.params.id)
-  if (virtual) return loadVirtualOccurrence(virtual)
+  await ensureLoaded()
+  const wantedChurch = churches.value.find((c) => slugify(c.name) === slugify(route.params.church))
+  if (!wantedChurch) { errorMsg.value = 'That event could not be found.'; loading.value = false; return }
+  if (wantedChurch.id !== activeChurchId.value) setActiveChurch(wantedChurch.id)
 
-  const res = await getEvent(route.params.id)
-  if (!res.event) { errorMsg.value = res.message || 'That event could not be found.'; loading.value = false; return }
-  event.value = res.event
-  // A saved exception row still belongs to a series — load it so the series actions appear.
-  if (res.event.series_id) {
-    occurrenceDate.value = res.event.occurrence_date
-    const sres = await getSeries(res.event.series_id)
-    if (sres.series) series.value = sres.series
+  const { date, titleSlug } = parseEventSlug(route.params.slug)
+
+  // 1) A real row: a one-off event, a dateless draft, or a materialised series exception.
+  const real = await findEventByDateTitle({ churchId: wantedChurch.id, date, titleSlug })
+  if (real.event) {
+    event.value = real.event
+    if (real.event.series_id) {
+      occurrenceDate.value = real.event.occurrence_date
+      const sres = await getSeries(real.event.series_id)
+      if (sres.series) series.value = sres.series
+    }
+    links.value = await getEventLinks(real.event.id)
+    loading.value = false
+    return
   }
-  links.value = await getEventLinks(event.value.id)
+
+  // 2) A worked-out (virtual) occurrence — no row, so it is found by matching a series title in
+  // the church and confirming the rule actually lands on this date.
+  if (date) {
+    const sres = await listSeries({ churchId: wantedChurch.id })
+    const s = (sres.series ?? []).find((x) => slugify(x.title) === titleSlug)
+    if (s) {
+      const dayFrom = new Date(`${date}T00:00:00`)
+      const dayTo = new Date(dayFrom); dayTo.setDate(dayTo.getDate() + 1)
+      if (expandSeries(s, dayFrom, dayTo).some((d) => ymd(d) === date)) {
+        return loadVirtualOccurrence({ series: s, date })
+      }
+    }
+  }
+
+  errorMsg.value = 'That event could not be found.'
   loading.value = false
 }
 
-async function loadVirtualOccurrence({ seriesId, date }) {
-  const sres = await getSeries(seriesId)
-  if (!sres.series) { errorMsg.value = 'That repeating event could not be found.'; loading.value = false; return }
-  const s = sres.series
+function loadVirtualOccurrence({ series: s, date }) {
   series.value = s
   occurrenceDate.value = date
   isVirtualOccurrence.value = true
   const startsAt = new Date(`${date}T${s.timeStart}:00`)
   const endsAt = s.timeEnd ? new Date(`${date}T${s.timeEnd}:00`) : null
   event.value = {
-    id: `series-${seriesId}-${date}`,
+    id: `series-${s.id}-${date}`,
     church_id: s.church_id, title: s.title, kind: s.kind, status: 'published',
     starts_at: startsAt.toISOString(), ends_at: endsAt ? endsAt.toISOString() : null,
     location: s.location, description: s.description, run_by: s.run_by,
@@ -139,6 +189,8 @@ async function loadVirtualOccurrence({ seriesId, date }) {
   loading.value = false
 }
 onMounted(load)
+// A link from one event straight to another keeps this component mounted, so reload on the path.
+watch(() => [route.params.church, route.params.slug], load)
 
 function goEdit() { router.push({ name: 'EventEdit', params: { id: event.value.id } }) }
 function goEditOccurrence() { router.push({ name: 'EventNew', query: { series: series.value.id, date: occurrenceDate.value } }) }
@@ -278,16 +330,20 @@ const history = computed(() => {
             {{ fmtWhen(event) }}
           </p>
         </div>
-        <div
-          v-if="canManageEvents"
-          class="det__actions"
-        >
+        <div class="det__actions">
+          <Button
+            v-if="isRealEvent && event.starts_at"
+            variant="secondary"
+            @click="downloadIcs"
+          >
+            Add to calendar
+          </Button>
           <OverflowMenu
-            v-if="menuItems.length"
+            v-if="canManageEvents && menuItems.length"
             :items="menuItems"
           />
           <Button
-            v-if="isDraft"
+            v-if="canManageEvents && isDraft"
             variant="primary"
             @click="publishOpen = true"
           >
@@ -313,7 +369,13 @@ const history = computed(() => {
         v-if="isDraft"
         tone="warning"
       >
-        Not visible to members yet. Publishing shows it on the members' calendar immediately.
+        <strong>Not visible to members yet.</strong>
+        <template v-if="unfilledRoles">
+          {{ unfilledRoles }} of {{ rosterTotals.needed }} volunteer role{{ rosterTotals.needed === 1 ? '' : 's' }} still {{ unfilledRoles === 1 ? 'needs' : 'need' }} filling. Publishing shows it on the members' calendar immediately.
+        </template>
+        <template v-else>
+          Publishing shows it on the members' calendar immediately.
+        </template>
       </Alert>
       <Alert
         v-if="event.status === 'cancelled' && event.cancel_reason"
@@ -322,15 +384,80 @@ const history = computed(() => {
         Cancelled — members are told: “{{ event.cancel_reason }}”
       </Alert>
 
+      <EventCloseoutPanel
+        v-if="isRealEvent && hasHappened"
+        :event="event"
+        :can-manage="canManageEvents"
+        @updated="load"
+      />
+
       <div class="det__cols">
+        <!-- Left column follows 6b: Programme first, then the volunteer roster. -->
         <div class="det__col">
-          <Card v-if="event.description">
+          <template v-if="isRealEvent">
+            <EventProgrammePanel
+              :event="event"
+              :can-manage="canManageEvents"
+            />
+            <EventRosterPanel
+              :event="event"
+              :can-manage="canManageEvents"
+              @totals="rosterTotals = $event"
+            />
+          </template>
+          <!-- A worked-out series occurrence has no panels; show its description here so the
+               left column is not empty. -->
+          <Card v-else-if="event.description">
             <h2 class="det__card-title">
               Details
             </h2>
             <p class="det__desc">
               {{ event.description }}
             </p>
+          </Card>
+        </div>
+
+        <!-- Right column follows 6b: About, Details, What this event touches, History. -->
+        <div class="det__col">
+          <Card v-if="event.description && isRealEvent">
+            <h2 class="det__card-title">
+              About
+            </h2>
+            <p class="det__desc">
+              {{ event.description }}
+            </p>
+          </Card>
+
+          <Card>
+            <h2 class="det__card-title">
+              Details
+            </h2>
+            <dl class="det__facts">
+              <div class="det__fact">
+                <dt>Kind</dt><dd>{{ kindLabel(event.kind) }}</dd>
+              </div>
+              <div
+                v-if="event.run_by"
+                class="det__fact"
+              >
+                <dt>Run by</dt><dd>{{ event.run_by }}</dd>
+              </div>
+              <div
+                v-if="event.location"
+                class="det__fact"
+              >
+                <dt>Where</dt><dd>{{ event.location }}</dd>
+              </div>
+              <div
+                v-if="event.projected_budget != null"
+                class="det__fact"
+              >
+                <dt>Projected budget</dt><dd>{{ peso(event.projected_budget) }}</dd>
+              </div>
+              <div class="det__fact">
+                <dt>Visible to</dt><dd>{{ isPublished ? 'All members' : 'Not published' }}</dd>
+              </div>
+            </dl>
           </Card>
 
           <Card>
@@ -373,40 +500,6 @@ const history = computed(() => {
             >
               Nothing linked yet.
             </p>
-          </Card>
-        </div>
-
-        <div class="det__col">
-          <Card>
-            <h2 class="det__card-title">
-              Details
-            </h2>
-            <dl class="det__facts">
-              <div class="det__fact">
-                <dt>Kind</dt><dd>{{ kindLabel(event.kind) }}</dd>
-              </div>
-              <div
-                v-if="event.run_by"
-                class="det__fact"
-              >
-                <dt>Run by</dt><dd>{{ event.run_by }}</dd>
-              </div>
-              <div
-                v-if="event.location"
-                class="det__fact"
-              >
-                <dt>Where</dt><dd>{{ event.location }}</dd>
-              </div>
-              <div
-                v-if="event.projected_budget != null"
-                class="det__fact"
-              >
-                <dt>Projected budget</dt><dd>{{ peso(event.projected_budget) }}</dd>
-              </div>
-              <div class="det__fact">
-                <dt>Visible to</dt><dd>{{ isPublished ? 'All members' : 'Not published' }}</dd>
-              </div>
-            </dl>
           </Card>
 
           <Card>
@@ -623,7 +716,7 @@ const history = computed(() => {
 .det__when { margin: var(--sp-6) 0 0; font-size: var(--text-body); color: var(--ink-5); }
 .det__actions { display: flex; align-items: center; gap: var(--sp-9); }
 
-.det__cols { display: grid; grid-template-columns: 1fr 380px; gap: var(--sp-16); align-items: start; }
+.det__cols { display: grid; grid-template-columns: 1fr 400px; gap: var(--sp-16); align-items: start; }
 .det__col { display: flex; flex-direction: column; gap: var(--sp-16); }
 .det__card-title { margin: 0 0 var(--sp-8); font-size: var(--text-h3); font-weight: 800; letter-spacing: -0.02em; }
 .det__desc { margin: 0; font-size: var(--text-body-sm); color: var(--ink-2); line-height: 1.55; }

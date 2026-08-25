@@ -26,6 +26,7 @@
 
 import { supabase } from '../supabase'
 import { write } from './write'
+import { ymd } from '../recurrence'
 
 const MESSAGES = {
   loadFailed: 'Could not load the calendar. Please try again.',
@@ -44,6 +45,8 @@ const MESSAGES = {
 export const EVENT_COLUMNS =
   'id, church_id, title, kind, status, starts_at, ends_at, location, description, ' +
   'run_by, projected_budget, cancel_reason, series_id, occurrence_date, ' +
+  // Stage 3 (0035): the room link, the attendance switch, the closeout stamp, and the review.
+  'room_id, attendance_tracked, closed_at, review_went_well, review_went_wrong, review_followups, ' +
   'created_at, created_by, updated_at, published_at'
 
 // The five fixed kinds and their calendar legend grouping (0032 CHECK constraint). Kept
@@ -104,6 +107,67 @@ export async function listManagedEvents({ churchId, scope = 'upcoming' }) {
   const { data, error } = await q
   if (error) return { ok: false, events: [], message: MESSAGES.loadFailed }
   return { ok: true, events: data ?? [], message: '' }
+}
+
+// READABLE URLS (no UUIDs — the same "named, not numbered" rule as group.js). An event's path
+// is /dashboard/events/<church>/<date>-<title>, e.g. cogon/2026-08-30-youth-outreach. The date
+// is REQUIRED where a group's is not: the calendar is mostly recurring, and a repeat occurrence
+// has no row of its own — only its date tells one Sunday's service from the next. A dateless
+// draft (no starts_at yet) drops the date and is just <church>/<title>. Renaming or moving an
+// event changes its link, which lands on the not-found state — the same accepted cost as groups.
+
+// Slugify a name to a URL segment. Identical rules to group.js's slugify so a church segment
+// slugs the same on both features (kept local to avoid an events→groups data-layer dependency).
+export function slugify(name) {
+  return String(name || '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+// The path slug for an event or a worked-out occurrence. Uses the LOCAL calendar day (ymd),
+// so it matches the day the calendar shows — not the UTC date, which can differ in Asia/Manila.
+export function eventSlug(event) {
+  const title = slugify(event.title)
+  return event.starts_at ? `${ymd(new Date(event.starts_at))}-${title}` : title
+}
+
+// Split a slug back into its date (or null) and the title portion.
+export function parseEventSlug(slug) {
+  const m = /^(\d{4}-\d{2}-\d{2})-(.+)$/.exec(slug || '')
+  return m ? { date: m[1], titleSlug: m[2] } : { date: null, titleSlug: slug || '' }
+}
+
+// A vue-router location for an event's detail (or public) page. `churchName` names the church
+// segment; every listed event belongs to the active church, so the caller passes that name.
+export function eventLocation(event, churchName, { name = 'EventDetail' } = {}) {
+  return { name, params: { church: slugify(churchName), slug: eventSlug(event) } }
+}
+
+/**
+ * Find the one REAL event row in a church for a calendar date + title slug (or a dateless draft
+ * when `date` is null). The title is not a column, so we fetch the day's candidates and match on
+ * the slug in JS — the day window keeps that set tiny. A materialised series exception is a real
+ * row and resolves here; a purely worked-out occurrence does not and is handled by the caller.
+ * Returns { ok, event } with event null when nothing matches.
+ */
+export async function findEventByDateTitle({ churchId, date, titleSlug }) {
+  if (!churchId || !titleSlug) return { ok: false, event: null, message: MESSAGES.eventFailed }
+  let q = supabase.from('events').select(EVENT_COLUMNS).eq('church_id', churchId)
+  if (date) {
+    const from = new Date(`${date}T00:00:00`)
+    const to = new Date(from); to.setDate(to.getDate() + 1)
+    q = q.gte('starts_at', from.toISOString()).lt('starts_at', to.toISOString())
+  } else {
+    q = q.is('starts_at', null)
+  }
+  const { data, error } = await q
+  if (error) return { ok: false, event: null, message: MESSAGES.eventFailed }
+  const match = (data ?? []).find((r) => slugify(r.title) === titleSlug) ?? null
+  return { ok: true, event: match }
 }
 
 /** One event by id, for the detail view. `event` is null when not found or not readable. */

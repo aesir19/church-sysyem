@@ -13,26 +13,33 @@
 //                            one), prompting first if a later date was specially adjusted.
 // Past dates are never rewritten — the scope choices only ever touch this date forward.
 
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import Card from '../components/ui/Card.vue'
 import Button from '../components/ui/Button.vue'
 import Alert from '../components/ui/Alert.vue'
 import Modal from '../components/ui/Modal.vue'
 import Spinner from '../components/ui/Spinner.vue'
 import { useActiveChurch } from '../composables/useActiveChurch'
 import { useToast } from '../composables/useToast'
-import { EVENT_KINDS, createEvent, updateEvent, getEvent } from '../lib/data/events'
+import Toggle from '../components/ui/Toggle.vue'
+import { EVENT_KINDS, createEvent, updateEvent, getEvent, eventLocation } from '../lib/data/events'
 import {
   createSeries, updateSeries, getSeries, editOccurrence, splitSeries,
   ruleColumns, countFutureExceptions,
 } from '../lib/data/eventSeries'
 import { describeRule } from '../lib/recurrence'
+import { listRooms, findRoomClashes } from '../lib/data/eventRooms'
+import { ensureEventService } from '../lib/data/eventCloseout'
 
 const route = useRoute()
 const router = useRouter()
-const { activeChurchId, ensureLoaded } = useActiveChurch()
+const { activeChurchId, churches, ensureLoaded } = useActiveChurch()
 const { showToast } = useToast()
+// The church segment for the detail links this form redirects to on save/cancel.
+const activeChurchName = computed(() => churches.value.find((c) => c.id === activeChurchId.value)?.name || '')
+// The event as originally loaded for a one-off edit — Cancel returns to its detail even if the
+// form's title/date were changed and then discarded.
+const loadedEvent = ref(null)
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 const NTHS = [{ v: 1, l: 'first' }, { v: 2, l: 'second' }, { v: 3, l: 'third' }, { v: 4, l: 'fourth' }, { v: -1, l: 'last' }]
@@ -55,6 +62,8 @@ const loadedSeries = ref(null)
 const form = ref({
   title: '', kind: 'service', date: '', starts: '', ends: '',
   location: '', run_by: '', description: '', projected_budget: '',
+  // Stage 3: a structured room (separate from the free-text "Where") and the attendance switch.
+  room_id: '', attendance_tracked: false,
   // repeat
   repeats: false,
   cadence: 'weekly', intervalN: 1, anchor: 'weekday',
@@ -69,8 +78,29 @@ const form = ref({
 const splitConfirmOpen = ref(false)
 const futureExceptionCount = ref(0)
 
+// Rooms and the soft double-booking check (Q2). Rooms attach to a one-off event (the
+// series table has no room column), so the picker shows only when the event does not repeat.
+const rooms = ref([])
+const roomClashes = ref([])
+const showRoomFields = computed(() => !form.value.repeats)
+
+async function checkRoomClash() {
+  roomClashes.value = []
+  if (!form.value.room_id || !form.value.date || !form.value.starts) return
+  const startsAt = new Date(`${form.value.date}T${form.value.starts}`).toISOString()
+  const endsAt = form.value.ends ? new Date(`${form.value.date}T${form.value.ends}`).toISOString() : null
+  roomClashes.value = await findRoomClashes({
+    churchId: activeChurchId.value, roomId: form.value.room_id,
+    startsAt, endsAt, excludeEventId: editId.value,
+  })
+}
+// Re-check whenever the room or the time changes — the warning is shown before saving.
+watch(() => [form.value.room_id, form.value.date, form.value.starts, form.value.ends], checkRoomClash)
+
 onMounted(async () => {
   await ensureLoaded()
+  const roomRes = await listRooms({ churchId: activeChurchId.value })
+  rooms.value = roomRes.ok ? roomRes.rooms : []
   if (isOneOffEdit.value) return loadOneOff()
   if (seriesId.value) return loadSeries()
 })
@@ -80,6 +110,7 @@ async function loadOneOff() {
   const res = await getEvent(editId.value)
   if (res.event) {
     const e = res.event
+    loadedEvent.value = e
     wasPublished.value = e.status === 'published'
     form.value = { ...form.value,
       title: e.title, kind: e.kind,
@@ -88,6 +119,7 @@ async function loadOneOff() {
       ends: e.ends_at ? toTimeInput(e.ends_at) : '',
       location: e.location || '', run_by: e.run_by || '',
       description: e.description || '', projected_budget: e.projected_budget ?? '',
+      room_id: e.room_id || '', attendance_tracked: !!e.attendance_tracked,
     }
   } else { errorMsg.value = res.message }
   loading.value = false
@@ -118,7 +150,12 @@ async function loadSeries() {
   loading.value = false
 }
 
-const canSubmit = computed(() => form.value.title.trim() && form.value.date && form.value.starts)
+// A DRAFT needs only a name (Q14): everything else is optional until publish. A dateless
+// draft simply never appears on the calendar; a draft WITH a date is "tentative" (shown
+// grayed to privileged roles). PUBLISH re-tightens: a published event must have a date and
+// time — the DB publish-gate (0035) enforces the same, this is the affordance.
+const canSaveDraft = computed(() => !!form.value.title.trim())
+const canPublish = computed(() => form.value.title.trim() && form.value.date && form.value.starts)
 
 // The past is frozen (owner's rule; #86 story 12): a date that has already happened cannot be
 // edited or split, because splitting from it would rewrite history. Blocks the occurrence editor.
@@ -183,10 +220,19 @@ function sharedFields() {
 }
 
 function eventPayload() {
-  const startsAt = new Date(`${form.value.date}T${form.value.starts}`).toISOString()
-  const endsAt = form.value.ends ? new Date(`${form.value.date}T${form.value.ends}`).toISOString() : null
+  // A dateless draft carries no start (Q14). starts_at stays null until a date is set; the
+  // publish-gate refuses to publish without one.
+  const startsAt = form.value.date && form.value.starts
+    ? new Date(`${form.value.date}T${form.value.starts}`).toISOString() : null
+  const endsAt = form.value.date && form.value.ends
+    ? new Date(`${form.value.date}T${form.value.ends}`).toISOString() : null
   const { church_id, title, kind, location, run_by, description, projected_budget } = sharedFields()
-  return { church_id, title, kind, starts_at: startsAt, ends_at: endsAt, location, run_by, description, projected_budget }
+  return {
+    church_id, title, kind, starts_at: startsAt, ends_at: endsAt,
+    location, run_by, description, projected_budget,
+    room_id: form.value.room_id || null,
+    attendance_tracked: form.value.attendance_tracked,
+  }
 }
 
 function seriesPayload() {
@@ -195,7 +241,8 @@ function seriesPayload() {
 
 // --- submit ---------------------------------------------------------------
 async function submit(publish) {
-  if (!canSubmit.value || saving.value) return
+  if (saving.value) return
+  if (publish ? !canPublish.value : !canSaveDraft.value) return
   errorMsg.value = ''
 
   if (isOccurrenceEdit.value) return submitOccurrence()
@@ -221,8 +268,14 @@ async function submit(publish) {
 
   showToast(publish ? 'Saved and published' : 'Saved as draft')
   const saved = res.rows[0]
+  // Q17: publishing a "track attendance" one-off provisions its ad-hoc service so live
+  // check-in is ready (window: start−2h .. end+1h). Best-effort — a failure here does not
+  // undo the save; the closeout panel will ensure it again if needed.
+  if (publish && !form.value.repeats && form.value.attendance_tracked && saved?.id && saved?.starts_at) {
+    await ensureEventService({ event: saved })
+  }
   if (form.value.repeats || isSeriesEdit.value) router.push({ name: 'Events' })
-  else router.push(saved?.id ? { name: 'EventDetail', params: { id: saved.id } } : { name: 'Events' })
+  else router.push(saved?.id ? eventLocation(saved, activeChurchName.value) : { name: 'Events' })
 }
 
 async function submitOccurrence() {
@@ -261,7 +314,7 @@ async function doSplit(overwriteExceptions) {
 }
 
 function cancel() {
-  if (isOneOffEdit.value) return router.push({ name: 'EventDetail', params: { id: editId.value } })
+  if (isOneOffEdit.value && loadedEvent.value) return router.push(eventLocation(loadedEvent.value, activeChurchName.value))
   router.push({ name: 'Events' })
 }
 
@@ -281,9 +334,6 @@ function toTimeInput(iso) {
 
 <template>
   <div class="cmp">
-    <div class="cmp__crumb">
-      <span>Calendar</span><span>/</span><span class="cmp__crumb-now">{{ heading }}</span>
-    </div>
     <h1 class="cmp__title">
       {{ heading }}
     </h1>
@@ -298,10 +348,9 @@ function toTimeInput(iso) {
       <Spinner label="Loading" />
     </div>
 
-    <Card
+    <div
       v-else
-      class="cmp__card"
-      :padded="false"
+      class="cmp__form"
     >
       <div class="cmp__body">
         <Alert
@@ -312,6 +361,14 @@ function toTimeInput(iso) {
           {{ errorMsg }}
         </Alert>
 
+        <div class="cmp__sec">
+          <h2 class="cmp__sec-title">
+            What it is
+          </h2>
+          <p class="cmp__sec-help">
+            The name is what members see in their calendar.
+          </p>
+        </div>
         <div class="cmp__grid cmp__grid--2">
           <label class="cmp__field cmp__field--wide">
             <span class="cmp__label">Name of the event</span>
@@ -337,6 +394,14 @@ function toTimeInput(iso) {
           </label>
         </div>
 
+        <div class="cmp__sec">
+          <h2 class="cmp__sec-title">
+            When
+          </h2>
+          <p class="cmp__sec-help">
+            A one-off unless you set it to repeat.
+          </p>
+        </div>
         <div class="cmp__grid cmp__grid--3">
           <label class="cmp__field">
             <span class="cmp__label">{{ form.repeats ? 'Starts on' : 'Date' }}</span>
@@ -577,6 +642,14 @@ function toTimeInput(iso) {
           </label>
         </div>
 
+        <div class="cmp__sec">
+          <h2 class="cmp__sec-title">
+            Where, and who runs it
+          </h2>
+          <p class="cmp__sec-help">
+            The ministry named here is where the event’s roles are drawn from.
+          </p>
+        </div>
         <div class="cmp__grid cmp__grid--2">
           <label class="cmp__field">
             <span class="cmp__label">Where</span>
@@ -598,41 +671,108 @@ function toTimeInput(iso) {
           </label>
         </div>
 
+        <!-- Room (structured) + soft double-booking check (frames 7j, 7b). One-off events
+             only — a series' occurrences pick a room once materialised. -->
+        <div
+          v-if="showRoomFields && rooms.length"
+          class="cmp__field"
+        >
+          <span class="cmp__label">Room</span>
+          <select
+            v-model="form.room_id"
+            class="cmp__input"
+          >
+            <option value="">
+              No room needed
+            </option>
+            <option
+              v-for="r in rooms"
+              :key="r.id"
+              :value="r.id"
+              :disabled="!r.is_bookable"
+            >
+              {{ r.label }}{{ r.capacity ? ` · seats ${r.capacity}` : '' }}{{ r.is_bookable ? '' : ' · not bookable' }}
+            </option>
+          </select>
+        </div>
+        <Alert
+          v-if="showRoomFields && roomClashes.length"
+          tone="warning"
+        >
+          That room is already booked at this time:
+          <span
+            v-for="c in roomClashes"
+            :key="c.eventId"
+          >“{{ c.title }}”</span>. You can save anyway.
+        </Alert>
+
+        <!-- Track attendance switch (Q17): provisions live check-in at publish. -->
+        <div
+          v-if="showRoomFields"
+          class="cmp__track"
+        >
+          <Toggle v-model="form.attendance_tracked">
+            Track attendance for this event
+          </Toggle>
+          <p class="cmp__track-note">
+            Opens a check-in sheet 2 hours before and closes it 1 hour after the event.
+          </p>
+        </div>
+
+        <div class="cmp__sec">
+          <h2 class="cmp__sec-title">
+            What members will read
+          </h2>
+          <p class="cmp__sec-help">
+            Shown under the event in the calendar and in the reminder.
+          </p>
+        </div>
         <label class="cmp__field">
-          <span class="cmp__label">What members will read</span>
           <textarea
             v-model="form.description"
             class="cmp__input cmp__textarea"
             rows="3"
+            aria-label="What members will read"
             placeholder="A short description members will see once it is published."
           />
         </label>
 
+        <div class="cmp__sec">
+          <h2 class="cmp__sec-title">
+            Budget
+          </h2>
+          <p class="cmp__sec-help">
+            Shown for planning only — there is no approval step.
+          </p>
+        </div>
         <label class="cmp__field cmp__field--budget">
-          <span class="cmp__label">Projected budget <span class="cmp__hint">(shown for planning only — no approval)</span></span>
           <input
             v-model="form.projected_budget"
             class="cmp__input"
             type="number"
             min="0"
             step="0.01"
+            aria-label="Projected budget"
             placeholder="0.00"
           >
         </label>
       </div>
 
       <div class="cmp__foot">
-        <Button
-          variant="secondary"
-          @click="cancel"
-        >
-          Cancel
-        </Button>
+        <span class="cmp__foot-status">
+          {{ isNew ? 'A draft stays private — nothing is visible to members yet.' : (wasPublished ? 'Members can see this event.' : 'Not visible to members until you publish.') }}
+        </span>
         <div class="cmp__foot-commit">
+          <Button
+            variant="secondary"
+            @click="cancel"
+          >
+            Cancel
+          </Button>
           <Button
             v-if="!isOccurrenceEdit"
             variant="secondary"
-            :disabled="!canSubmit"
+            :disabled="!canSaveDraft"
             :loading="saving"
             @click="submit(false)"
           >
@@ -640,7 +780,7 @@ function toTimeInput(iso) {
           </Button>
           <Button
             variant="primary"
-            :disabled="!canSubmit || isPastOccurrence"
+            :disabled="!canPublish || isPastOccurrence"
             :loading="saving"
             @click="submit(true)"
           >
@@ -648,7 +788,7 @@ function toTimeInput(iso) {
           </Button>
         </div>
       </div>
-    </Card>
+    </div>
 
     <!-- "Specially adjusted date" confirm (the owner's follow-up alert). -->
     <Modal
@@ -685,16 +825,25 @@ function toTimeInput(iso) {
 </template>
 
 <style scoped>
-.cmp { display: flex; flex-direction: column; gap: var(--sp-4); max-width: 900px; }
-.cmp__crumb { display: flex; align-items: center; gap: var(--sp-6); font-size: var(--text-meta); color: var(--ink-5); font-weight: 600; }
-.cmp__crumb-now { color: var(--ink-3); }
-.cmp__title { margin: var(--sp-8) 0 0; font-size: var(--text-h1); font-weight: 800; letter-spacing: -0.03em; }
-.cmp__sub { margin: var(--sp-4) 0 var(--sp-16); font-size: var(--text-body); color: var(--ink-5); }
+/* Centered on the page so the form reads as one contained card (6c stays a page, not an overlay
+   modal — its commit is pinned to the form foot, per 5b — but it sits in the middle, not hugging
+   the left with dead space beside it). */
+.cmp { display: flex; flex-direction: column; gap: var(--sp-5); width: 100%; max-width: 760px; margin: 0 auto; }
+.cmp__title { margin: 0; font-size: var(--text-h1); font-weight: 800; letter-spacing: -0.03em; }
+.cmp__sub { margin: var(--sp-5) 0 var(--sp-16); font-size: var(--text-body); color: var(--ink-5); }
 .cmp__loading { display: grid; place-items: center; min-height: 200px; }
 
-.cmp__card { overflow: hidden; }
-.cmp__body { padding: var(--sp-20) var(--sp-20); display: flex; flex-direction: column; gap: var(--sp-16); }
-.cmp__alert { margin-bottom: var(--sp-4); }
+/* Borderless: the form IS the page, not a card or a modal — no border, no shadow, no surface.
+   Structure comes from the section headers and the underline fields below. */
+.cmp__form { display: flex; flex-direction: column; }
+.cmp__body { padding: 0; display: flex; flex-direction: column; gap: var(--sp-18); }
+.cmp__alert { margin-bottom: var(--sp-5); }
+
+/* Section header (What it is / When / …) with a divider above every section but the first. */
+.cmp__sec { display: flex; flex-direction: column; gap: 2px; padding-top: var(--sp-20); border-top: 1px solid var(--border-subtle, var(--border)); }
+.cmp__sec:first-child { padding-top: 0; border-top: none; }
+.cmp__sec-title { margin: 0; font-size: var(--text-h3); font-weight: 800; letter-spacing: -0.02em; }
+.cmp__sec-help { margin: 0; font-size: var(--text-body-sm); color: var(--ink-5); }
 .cmp__grid { display: grid; gap: var(--sp-14); }
 .cmp__grid--2 { grid-template-columns: 1fr 220px; }
 .cmp__grid--3 { grid-template-columns: 1fr 1fr 1fr; }
@@ -703,8 +852,10 @@ function toTimeInput(iso) {
 .cmp__field--budget { max-width: 240px; }
 .cmp__label { font-size: var(--text-meta); font-weight: 700; color: var(--ink-3); }
 .cmp__hint { font-weight: 500; color: var(--ink-5); }
-.cmp__input { padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--r-control); background: var(--surface); font-family: inherit; font-size: var(--text-body-sm); font-weight: 600; color: var(--ink); }
-.cmp__input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+/* Underline fields (the sample's feel): a bottom rule, no box, transparent ground. */
+.cmp__input { padding: 8px 2px; border: none; border-bottom: 1.5px solid var(--border-strong); border-radius: 0; background: transparent; font-family: inherit; font-size: var(--text-body); font-weight: 600; color: var(--ink); transition: border-color var(--dur-state) ease, box-shadow var(--dur-state) ease; }
+.cmp__input::placeholder { color: var(--ink-6, var(--ink-5)); font-weight: 500; }
+.cmp__input:focus-visible { outline: none; border-bottom-color: var(--accent); box-shadow: 0 1px 0 0 var(--accent); }
 .cmp__input--num { max-width: 90px; }
 .cmp__textarea { font-weight: 500; resize: vertical; }
 .cmp__inline { display: flex; align-items: center; gap: var(--sp-8); }
@@ -721,7 +872,12 @@ function toTimeInput(iso) {
 
 .cmp__dialog-text { margin: 0; font-size: var(--text-body-sm); color: var(--ink-2); line-height: 1.55; }
 
-.cmp__foot { display: flex; align-items: center; gap: var(--sp-12); padding: var(--sp-14) var(--sp-20); border-top: 1px solid var(--border); background: var(--surface-subtle); }
+.cmp__track { display: flex; flex-direction: column; gap: var(--sp-5); }
+.cmp__track-note { margin: 0; font-size: var(--text-meta); color: var(--ink-5); }
+
+/* On the page, not a tinted card foot: a divider, the draft status left, the commit right. */
+.cmp__foot { display: flex; align-items: center; gap: var(--sp-12); margin-top: var(--sp-22); padding: var(--sp-16) 0 0; border-top: 1px solid var(--border); background: transparent; }
+.cmp__foot-status { font-size: var(--text-meta); color: var(--ink-5); }
 .cmp__foot-commit { margin-left: auto; display: flex; gap: var(--sp-9); }
 
 @media (max-width: 640px) {

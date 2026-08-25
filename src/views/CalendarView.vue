@@ -22,13 +22,24 @@ import Alert from '../components/ui/Alert.vue'
 import Icon from '../components/ui/icons/Icon.vue'
 import { useActiveChurch } from '../composables/useActiveChurch'
 import { useCurrentRole } from '../composables/useCurrentRole'
-import { listServiceOccurrences, listBirthdays, EVENT_KINDS, kindLabel } from '../lib/data/events'
+import { listServiceOccurrences, listBirthdays, EVENT_KINDS, kindLabel, eventLocation } from '../lib/data/events'
 import { listCalendarOccurrences } from '../lib/data/eventSeries'
+import { listUnderstaffedEvents } from '../lib/data/eventRoles'
+import { expandHolidays, definedThrough } from '../lib/holidays'
+import { buildIcs, icsFilename } from '../lib/ics'
 import { addDays, ymd } from '../lib/recurrence'
+import EventPeekCard from '../components/events/EventPeekCard.vue'
 
 const router = useRouter()
-const { activeChurchId, ensureLoaded } = useActiveChurch()
-const { canManageEvents } = useCurrentRole()
+const { activeChurchId, churches, ensureLoaded } = useActiveChurch()
+const { canManageEvents, canViewEvents } = useCurrentRole()
+// The church segment in every event link — all listed items belong to the active church.
+const activeChurchName = computed(() => churches.value.find((c) => c.id === activeChurchId.value)?.name || '')
+// The event peek card (7a): which item is being peeked, the anchor rect of the clicked element
+// it floats from, and whether it is open.
+const peekItem = ref(null)
+const peekAnchor = ref(null)
+const peekOpen = ref(false)
 
 const MODES = ['month', 'week', 'agenda']
 const mode = ref('month')
@@ -39,7 +50,15 @@ const errorMsg = ref('')
 const events = ref([])
 const services = ref([])
 const birthdays = ref([])
-const allItems = computed(() => [...events.value, ...services.value, ...birthdays.value])
+const understaffed = ref([])
+// PH holidays are a static, vendored overlay (Q13) — no fetch. Expanded for the visible
+// window from the bundled list; every viewer sees them, they are purely visual.
+const holidays = computed(() => {
+  const [from, to] = windowRange.value
+  return expandHolidays(from, to)
+})
+const holidaysThrough = definedThrough()
+const allItems = computed(() => [...events.value, ...services.value, ...birthdays.value, ...holidays.value])
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December']
@@ -51,9 +70,11 @@ const LEGEND = [
   { key: 'special',  label: 'Special' },
   { key: 'admin',    label: 'Admin' },
   { key: 'birthday', label: 'Birthdays' },
+  { key: 'holiday',  label: 'Holidays' },
 ]
 const KIND_LEGEND = Object.fromEntries(EVENT_KINDS.map((k) => [k.value, k.legend]))
 function legendOf(item) {
+  if (item.isHoliday) return 'holiday'
   if (item.isBirthday) return 'birthday'
   if (item.isService) return 'services'
   return KIND_LEGEND[item.kind] ?? 'groups'
@@ -88,6 +109,25 @@ const headingLabel = computed(() => {
   return `${MONTHS[cursor.value.getMonth()]} ${cursor.value.getFullYear()}`
 })
 const crumbNow = computed(() => mode.value.charAt(0).toUpperCase() + mode.value.slice(1))
+
+// The month header's live summary (6a): "N events in <month> · N still need volunteers ·
+// N draft not yet published". Counts only real events of the shown month (drafts are in
+// `events` only for callers RLS lets see them, so the line adapts to the role). Falls back to
+// the tagline when there is nothing to summarise, and in Week/Agenda.
+const subtitle = computed(() => {
+  if (mode.value !== 'month') return 'The church year in one place'
+  const m = cursor.value.getMonth()
+  const monthEvents = events.value.filter((e) => e.starts_at && new Date(e.starts_at).getMonth() === m && e.status !== 'cancelled')
+  if (!monthEvents.length && !understaffed.value.length) return 'The church year in one place'
+  const parts = [`${monthEvents.length} event${monthEvents.length === 1 ? '' : 's'} in ${MONTHS[m]}`]
+  if (understaffed.value.length) parts.push(`${understaffed.value.length} still need${understaffed.value.length === 1 ? 's' : ''} volunteers`)
+  const drafts = monthEvents.filter((e) => e.status === 'draft').length
+  if (drafts) parts.push(`${drafts} draft${drafts === 1 ? '' : 's'} not yet published`)
+  return parts.join(' · ')
+})
+function shortDate(iso) {
+  return iso ? new Date(iso).toLocaleDateString('en-PH', { day: 'numeric', month: 'short' }) : ''
+}
 
 // --- month grid (unchanged shape) ------------------------------------------
 const cells = computed(() => {
@@ -124,7 +164,7 @@ const weekBounds = computed(() => {
   let start = DEFAULT_START_HOUR
   let end = DEFAULT_END_HOUR
   for (const it of allItems.value) {
-    if (it.isBirthday) continue
+    if (it.isBirthday || it.isHoliday) continue
     const s = new Date(it.starts_at)
     if (s < from || s >= to) continue
     const e = it.ends_at ? new Date(it.ends_at) : new Date(s.getTime() + 60 * 60 * 1000)
@@ -153,8 +193,8 @@ const weekDays = computed(() => {
     const d = addDays(start, i)
     const key = ymd(d)
     const items = byDay.get(key) || []
-    const allDay = items.filter((it) => it.isBirthday)
-    const timed = layoutDay(items.filter((it) => !it.isBirthday), weekBounds.value.start)
+    const allDay = items.filter((it) => it.isBirthday || it.isHoliday)
+    const timed = layoutDay(items.filter((it) => !it.isBirthday && !it.isHoliday), weekBounds.value.start)
     out.push({
       key, date: d, dow: DOWS[d.getDay()], dayNum: d.getDate(),
       isToday: key === today, allDay, timed,
@@ -259,6 +299,10 @@ async function load() {
   if (!ev.ok) { errorMsg.value = ev.message; events.value = [] } else { events.value = ev.items }
   services.value = sv
   birthdays.value = bd
+  // The "needs a decision" gaps card (6a) — only the roles that manage events see it.
+  understaffed.value = canManageEvents.value
+    ? await listUnderstaffedEvents({ churchId })
+    : []
   loading.value = false
 }
 
@@ -280,11 +324,44 @@ function goToday() {
   cursor.value = mode.value === 'week' ? startOfWeek(new Date()) : startOfMonth(new Date())
 }
 
-function openItem(item) {
-  if (item.isService || item.isBirthday) return // read-only overlays
-  router.push({ name: 'EventDetail', params: { id: item.id } })
+function openItem(item, ev) {
+  if (item.isService || item.isBirthday || item.isHoliday) return // read-only overlays
+  // Clicking an event opens the peek card (7a) — what/where/when — floating at the event's spot
+  // for EVERY user, rather than jumping straight to a page. The card carries the role-gated way
+  // onward: "Go to event" for canViewEvents, "I can serve" for a plain member on a real event.
+  const r = ev?.currentTarget?.getBoundingClientRect()
+  peekAnchor.value = r ? { top: r.top, left: r.left, right: r.right, bottom: r.bottom, width: r.width, height: r.height } : null
+  peekItem.value = item
+  peekOpen.value = true
+}
+// "Go to event" — the privileged detail (works for a real event and a worked-out occurrence).
+function goToEvent(item) {
+  peekOpen.value = false
+  router.push(eventLocation(item, activeChurchName.value, { name: 'EventDetail' }))
+}
+// "I can serve" — the member's read-and-serve view (7s); only a real published event reaches here.
+function serveEvent(item) {
+  peekOpen.value = false
+  router.push(eventLocation(item, activeChurchName.value, { name: 'EventPublic' }))
 }
 function printAgenda() { window.print() }
+
+/** Download the visible window's events as one .ics (story 39) — built in the browser, no
+ *  server. Only real, dated, non-cancelled events; the overlays are not exported. */
+function downloadMonthIcs() {
+  const exportable = events.value.filter((e) => e.starts_at && e.status !== 'cancelled' && !String(e.id).startsWith('sched-'))
+  if (!exportable.length) return
+  const ics = buildIcs(exportable)
+  const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = icsFilename(headingLabel.value)
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
 
 watch([cursor, activeChurchId, mode], load)
 onMounted(load)
@@ -315,6 +392,7 @@ function dayHeading(date) {
   return date.toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric' })
 }
 function metaOf(it) {
+  if (it.isHoliday) return 'Holiday'
   if (it.isBirthday) return 'Birthday'
   if (it.isService) return 'Service'
   return kindLabel(it.kind)
@@ -332,16 +410,24 @@ function metaOf(it) {
           Calendar
         </h1>
         <p class="cal__sub">
-          The church year in one place
+          {{ subtitle }}
         </p>
       </div>
-      <Button
-        v-if="canManageEvents"
-        variant="primary"
-        :to="{ name: 'EventNew' }"
-      >
-        New event
-      </Button>
+      <div class="cal__head-actions">
+        <Button
+          variant="secondary"
+          @click="downloadMonthIcs"
+        >
+          Download .ics
+        </Button>
+        <Button
+          v-if="canManageEvents"
+          variant="primary"
+          :to="{ name: 'EventNew' }"
+        >
+          New event
+        </Button>
+      </div>
     </header>
 
     <div class="cal__controls">
@@ -418,6 +504,7 @@ function metaOf(it) {
           v-for="l in LEGEND"
           :key="l.key"
           :class="`cal__legend-item cal__tone--${l.key}`"
+          :title="l.key === 'holiday' && holidaysThrough ? `Philippine holidays, defined through ${holidaysThrough}` : null"
         >
           <span class="cal__dot" />{{ l.label }}
         </li>
@@ -469,14 +556,19 @@ function metaOf(it) {
               :key="it.id"
               type="button"
               class="cal__ev"
-              :class="[`cal__tone--${legendOf(it)}`, { 'is-cancelled': it.status === 'cancelled', 'is-service': it.isService, 'is-birthday': it.isBirthday }]"
-              @click="openItem(it)"
+              :class="[`cal__tone--${legendOf(it)}`, { 'is-cancelled': it.status === 'cancelled', 'is-service': it.isService, 'is-birthday': it.isBirthday, 'is-holiday': it.isHoliday, 'is-tentative': it.status === 'draft' }]"
+              @click="openItem(it, $event)"
             >
               <span
                 v-if="it.isBirthday"
                 class="cal__ev-time"
                 aria-hidden="true"
               >🎂</span>
+              <span
+                v-else-if="it.isHoliday"
+                class="cal__ev-time"
+                aria-hidden="true"
+              >★</span>
               <span
                 v-else
                 class="cal__ev-time"
@@ -496,40 +588,82 @@ function metaOf(it) {
         </div>
       </Card>
 
-      <Card class="cal__next">
-        <div class="cal__next-head">
-          <h2>The next seven days</h2>
-          <span class="cal__next-count">{{ upcoming.length }} events</span>
-        </div>
-        <p
-          v-if="!upcoming.length"
-          class="cal__empty"
-        >
-          Nothing scheduled in the next seven days.
-        </p>
-        <ul
-          v-else
-          class="cal__next-list"
-        >
-          <li
-            v-for="u in upcoming"
-            :key="u.id"
-            class="cal__next-row"
-            :class="{ 'is-clickable': !u.isService && !u.isBirthday }"
-            @click="openItem(u)"
+      <div
+        class="cal__bottom"
+        :class="{ 'cal__bottom--split': understaffed.length }"
+      >
+        <Card class="cal__next">
+          <div class="cal__next-head">
+            <h2>The next seven days</h2>
+            <span class="cal__next-count">{{ upcoming.length }} events</span>
+          </div>
+          <p
+            v-if="!upcoming.length"
+            class="cal__empty"
           >
-            <span class="cal__next-date">
-              <span class="cal__next-dow">{{ dowLabel(u.starts_at) }}</span>
-              <span class="cal__next-day">{{ new Date(u.starts_at).getDate() }}</span>
-            </span>
-            <span class="cal__next-body">
-              <span class="cal__next-title">{{ u.isBirthday ? u.title + '’s birthday' : u.title }}</span>
-              <span class="cal__next-meta">{{ metaOf(u) }}{{ u.location ? ' · ' + u.location : '' }}</span>
-            </span>
-            <span class="cal__next-time">{{ u.isBirthday ? '🎂' : timeLabel(u.starts_at) }}</span>
-          </li>
-        </ul>
-      </Card>
+            Nothing scheduled in the next seven days.
+          </p>
+          <ul
+            v-else
+            class="cal__next-list"
+          >
+            <li
+              v-for="u in upcoming"
+              :key="u.id"
+              class="cal__next-row"
+              :class="{ 'is-clickable': !u.isService && !u.isBirthday && !u.isHoliday }"
+              @click="openItem(u, $event)"
+            >
+              <span class="cal__next-date">
+                <span class="cal__next-dow">{{ dowLabel(u.starts_at) }}</span>
+                <span class="cal__next-day">{{ new Date(u.starts_at).getDate() }}</span>
+              </span>
+              <span class="cal__next-body">
+                <span class="cal__next-title">{{ u.isBirthday ? u.title + '’s birthday' : u.title }}</span>
+                <span class="cal__next-meta">{{ metaOf(u) }}{{ u.location ? ' · ' + u.location : '' }}</span>
+              </span>
+              <span class="cal__next-time">{{ u.isBirthday ? '🎂' : (u.isHoliday ? '★' : timeLabel(u.starts_at)) }}</span>
+            </li>
+          </ul>
+        </Card>
+
+        <!-- Needs a decision (6a): published events within the next week short of volunteers,
+             each with the way to fix it. Shown to canManageEvents; understaffed is empty for
+             anyone who cannot see the roster. -->
+        <Card
+          v-if="understaffed.length"
+          class="cal__decide"
+        >
+          <p class="cal__decide-eyebrow">
+            Needs a decision
+          </p>
+          <h2 class="cal__decide-title">
+            {{ understaffed.length }} event{{ understaffed.length === 1 ? '' : 's' }} short of volunteers
+          </h2>
+          <p class="cal__decide-sub">
+            Roles left open a week before the date. Assign from the event, or ask the group leader.
+          </p>
+          <ul class="cal__decide-list">
+            <li
+              v-for="u in understaffed"
+              :key="u.id"
+              class="cal__decide-row"
+            >
+              <span class="cal__decide-gap">{{ u.needed - u.filled }}</span>
+              <span class="cal__decide-body">
+                <span class="cal__decide-name">{{ u.title }}</span>
+                <span class="cal__decide-meta">{{ shortDate(u.starts_at) }} · {{ u.filled }} of {{ u.needed }} filled</span>
+              </span>
+              <RouterLink
+                :to="eventLocation(u, activeChurchName)"
+                class="cal__decide-assign"
+              >
+                Assign
+              </RouterLink>
+            </li>
+          </ul>
+        </Card>
+      </div>
     </template>
 
     <!-- WEEK -->
@@ -594,7 +728,7 @@ function metaOf(it) {
             class="week__ev"
             :class="[`cal__tone--${legendOf(it)}`, { 'is-cancelled': it.status === 'cancelled', 'is-service': it.isService }]"
             :style="{ top: it.top + 'px', height: it.height + 'px', left: `calc(${(it.col / it.cols) * 100}% + 2px)`, width: `calc(${100 / it.cols}% - 4px)` }"
-            @click="openItem(it)"
+            @click="openItem(it, $event)"
           >
             <span class="week__ev-time">{{ timeLabel(it.starts_at) }}</span>
             <span class="week__ev-title">{{ it.title }}<span
@@ -632,10 +766,10 @@ function metaOf(it) {
               v-for="it in day.items"
               :key="it.id"
               class="agenda__row"
-              :class="{ 'is-clickable': !it.isService && !it.isBirthday, 'is-cancelled': it.status === 'cancelled' }"
-              @click="openItem(it)"
+              :class="{ 'is-clickable': !it.isService && !it.isBirthday && !it.isHoliday, 'is-cancelled': it.status === 'cancelled' }"
+              @click="openItem(it, $event)"
             >
-              <span class="agenda__time">{{ it.isBirthday ? '🎂' : timeLabel(it.starts_at) }}</span>
+              <span class="agenda__time">{{ it.isBirthday ? '🎂' : (it.isHoliday ? '★' : timeLabel(it.starts_at)) }}</span>
               <span class="agenda__body">
                 <span class="agenda__title">
                   {{ it.isBirthday ? it.title + '’s birthday' : it.title }}
@@ -656,6 +790,15 @@ function metaOf(it) {
         </section>
       </template>
     </Card>
+
+    <EventPeekCard
+      v-model:open="peekOpen"
+      :item="peekItem"
+      :anchor="peekAnchor"
+      :can-view-events="canViewEvents"
+      @go="goToEvent"
+      @serve="serveEvent"
+    />
   </div>
 </template>
 
@@ -666,7 +809,8 @@ function metaOf(it) {
 .cal__crumb { display: flex; align-items: center; gap: var(--sp-6); font-size: var(--text-meta); color: var(--ink-5); font-weight: 600; }
 .cal__crumb-now { color: var(--ink-3); }
 .cal__title { margin: var(--sp-6) 0 0; font-size: var(--text-h1); font-weight: 800; letter-spacing: -0.03em; }
-.cal__sub { margin: var(--sp-4) 0 0; font-size: var(--text-body); color: var(--ink-5); }
+.cal__sub { margin: var(--sp-5) 0 0; font-size: var(--text-body); color: var(--ink-5); }
+.cal__head-actions { display: flex; align-items: center; gap: var(--sp-9); }
 
 .cal__controls { display: flex; align-items: center; gap: var(--sp-10); flex-wrap: wrap; }
 .cal__stepper { display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: var(--r-control); background: var(--surface); }
@@ -679,15 +823,35 @@ function metaOf(it) {
 .cal__view { display: inline-flex; align-items: center; gap: var(--sp-6); padding: 7px 13px; border: none; background: none; border-radius: var(--r-inset); font-weight: 700; font-size: var(--text-meta); color: var(--ink-5); cursor: pointer; }
 .cal__view.is-on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(16,24,40,.1); }
 
-.cal__legend { display: flex; gap: var(--sp-10); margin: 0 0 0 auto; padding: 0; list-style: none; flex-wrap: wrap; }
-.cal__legend-item { display: inline-flex; align-items: center; gap: var(--sp-6); font-size: var(--text-meta); font-weight: 700; color: var(--ink-4); }
+.cal__legend { display: flex; gap: var(--sp-8); margin: 0 0 0 auto; padding: 0; list-style: none; flex-wrap: wrap; }
+/* Pills, not bare text (6a): a tone-tinted chip with a dot; currentColor is the tone. */
+.cal__legend-item { display: inline-flex; align-items: center; gap: var(--sp-6); padding: 4px 10px; border-radius: var(--r-pill); border: 1px solid color-mix(in srgb, currentColor 30%, transparent); background: color-mix(in srgb, currentColor 9%, var(--surface)); font-size: var(--text-meta); font-weight: 700; }
 .cal__dot { width: 8px; height: 8px; border-radius: var(--r-pill); background: currentColor; }
+
+/* The month's bottom section (6a): the next-seven list, and — when there is one — the
+   "needs a decision" card beside it. Collapses to one column on a narrow screen. */
+.cal__bottom { display: grid; grid-template-columns: 1fr; gap: var(--sp-16); align-items: start; }
+.cal__bottom--split { grid-template-columns: minmax(0, 1fr) 360px; }
+@media (max-width: 900px) { .cal__bottom--split { grid-template-columns: 1fr; } }
+.cal__decide-eyebrow { margin: 0; font-size: 10.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--magenta); }
+.cal__decide-title { margin: var(--sp-6) 0 0; font-size: var(--text-h3); font-weight: 800; letter-spacing: -0.02em; }
+.cal__decide-sub { margin: var(--sp-6) 0 0; font-size: var(--text-body-sm); color: var(--ink-5); line-height: 1.5; }
+.cal__decide-list { list-style: none; margin: var(--sp-14) 0 0; padding: 0; }
+.cal__decide-row { display: grid; grid-template-columns: 30px 1fr auto; gap: var(--sp-12); align-items: center; padding: var(--sp-12) 0; border-bottom: 1px solid var(--border-subtle, var(--border)); }
+.cal__decide-row:last-child { border-bottom: none; }
+.cal__decide-gap { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; background: var(--magenta-tint, #fff1f4); color: var(--magenta); font-size: var(--text-body-sm); font-weight: 800; font-variant-numeric: tabular-nums; }
+.cal__decide-body { display: flex; flex-direction: column; min-width: 0; }
+.cal__decide-name { font-size: var(--text-body-sm); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal__decide-meta { font-size: var(--text-meta); color: var(--ink-5); }
+.cal__decide-assign { padding: 7px 14px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface); font-size: var(--text-meta); font-weight: 700; color: var(--accent); text-decoration: none; white-space: nowrap; transition: background .15s, border-color .15s; }
+.cal__decide-assign:hover { background: var(--accent-tint, #e9f8ff); border-color: var(--accent); }
 
 .cal__tone--services { color: var(--accent); }
 .cal__tone--groups { color: var(--ink-5); }
 .cal__tone--special { color: var(--magenta); }
 .cal__tone--admin { color: var(--warning, #e08b2c); }
 .cal__tone--birthday { color: #9333ea; }
+.cal__tone--holiday { color: #d92d20; }
 
 .cal__loading { display: grid; place-items: center; min-height: 200px; }
 
@@ -708,8 +872,10 @@ function metaOf(it) {
 
 .cal__ev { display: flex; align-items: center; gap: var(--sp-6); padding: 4px 7px; border-radius: var(--r-inset); border: none; border-left: 2.5px solid currentColor; background: color-mix(in srgb, currentColor 12%, var(--surface)); cursor: pointer; text-align: left; width: 100%; transition: filter var(--dur-state) ease; }
 .cal__ev:hover { filter: brightness(.97); }
-.cal__ev.is-service, .cal__ev.is-birthday { cursor: default; }
+.cal__ev.is-service, .cal__ev.is-birthday, .cal__ev.is-holiday { cursor: default; }
 .cal__ev.is-cancelled { opacity: .5; text-decoration: line-through; }
+/* Tentative = a draft with a date, shown grayed to privileged roles (Q14). */
+.cal__ev.is-tentative { opacity: .55; border-left-style: dashed; }
 .cal__ev-time { font-size: var(--text-meta-sm); font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; color: currentColor; }
 .cal__ev-title { font-size: var(--text-meta); font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cal__chip { margin-left: 3px; font-size: 0.85em; color: var(--accent); font-weight: 800; }

@@ -83,6 +83,10 @@ export function deriveCapabilities(perm) {
     // is the enforcement, and the two must not drift.
     canViewEvents: isSuperAdmin || isHeadPastor || isPastor || isChurchLeader || isEventsTeam,
     canManageEvents: isSuperAdmin || isEventsTeam,
+    // Rooms are a per-church operational list owned by the Church Leader (+ SuperAdmin) —
+    // Q4/#87. Events Team USES rooms (picks one) but does not manage the list. Mirrors
+    // can_manage_rooms() (0035); RLS is the enforcement.
+    canManageRooms: isSuperAdmin || isChurchLeader,
 
     // SuperAdmin / Head Pastor act across all churches (church selector UI).
     isCrossChurch: isSuperAdmin || isHeadPastor,

@@ -13,11 +13,15 @@ import Spinner from '../components/ui/Spinner.vue'
 import Alert from '../components/ui/Alert.vue'
 import { useActiveChurch } from '../composables/useActiveChurch'
 import { useCurrentRole } from '../composables/useCurrentRole'
-import { listManagedEvents, kindLabel } from '../lib/data/events'
+import { listManagedEvents, kindLabel, eventLocation } from '../lib/data/events'
 import { listSeries } from '../lib/data/eventSeries'
+import EventRoomsManager from '../components/events/EventRoomsManager.vue'
 
-const { activeChurchId, ensureLoaded } = useActiveChurch()
-const { canManageEvents } = useCurrentRole()
+const { activeChurchId, churches, ensureLoaded } = useActiveChurch()
+const { canManageEvents, canManageRooms } = useCurrentRole()
+const roomsOpen = ref(false)
+// The church segment for every event link — the list is scoped to the active church.
+const activeChurchName = computed(() => churches.value.find((c) => c.id === activeChurchId.value)?.name || '')
 
 const TABS = [
   { key: 'upcoming', label: 'Upcoming' },
@@ -89,14 +93,28 @@ function fmtTime(iso) {
           Everything on the calendar as a list — plan it here, members see it once published
         </p>
       </div>
-      <Button
-        v-if="canManageEvents"
-        variant="primary"
-        :to="{ name: 'EventNew' }"
-      >
-        New event
-      </Button>
+      <div class="ev__head-actions">
+        <Button
+          v-if="canManageRooms"
+          variant="secondary"
+          @click="roomsOpen = true"
+        >
+          Rooms
+        </Button>
+        <Button
+          v-if="canManageEvents"
+          variant="primary"
+          :to="{ name: 'EventNew' }"
+        >
+          New event
+        </Button>
+      </div>
     </header>
+
+    <EventRoomsManager
+      v-model:open="roomsOpen"
+      :church-id="activeChurchId"
+    />
 
     <div
       class="ev__tabs"
@@ -184,7 +202,7 @@ function fmtTime(iso) {
       <RouterLink
         v-for="e in events"
         :key="e.id"
-        :to="{ name: 'EventDetail', params: { id: e.id } }"
+        :to="eventLocation(e, activeChurchName)"
         class="ev__row"
       >
         <span class="ev__when">
@@ -216,10 +234,11 @@ function fmtTime(iso) {
 <style scoped>
 .ev { display: flex; flex-direction: column; gap: var(--sp-16); }
 .ev__head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-16); flex-wrap: wrap; }
+.ev__head-actions { display: flex; align-items: center; gap: var(--sp-9); }
 .ev__crumb { display: flex; align-items: center; gap: var(--sp-6); font-size: var(--text-meta); color: var(--ink-5); font-weight: 600; }
 .ev__crumb-now { color: var(--ink-3); }
 .ev__title { margin: var(--sp-6) 0 0; font-size: var(--text-h1); font-weight: 800; letter-spacing: -0.03em; }
-.ev__sub { margin: var(--sp-4) 0 0; font-size: var(--text-body); color: var(--ink-5); }
+.ev__sub { margin: var(--sp-5) 0 0; font-size: var(--text-body); color: var(--ink-5); }
 
 .ev__tabs { display: flex; gap: 3px; padding: 3px; border-radius: var(--r-control); background: var(--surface-subtle-2); width: max-content; }
 .ev__tab { padding: 7px 13px; border: none; border-radius: var(--r-inset); font-family: inherit; font-weight: 700; font-size: var(--text-meta); color: var(--ink-5); cursor: pointer; background: transparent; }

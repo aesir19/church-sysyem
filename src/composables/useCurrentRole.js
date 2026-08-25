@@ -109,6 +109,7 @@ export function useCurrentRole() {
     canManageSmallGroups: c('canManageSmallGroups'),
     canViewEvents: c('canViewEvents'),
     canManageEvents: c('canManageEvents'),
+    canManageRooms: c('canManageRooms'),
     isCrossChurch: c('isCrossChurch'),
     // group membership is group-specific (Finance = Pastor-only)
     canManageGroupMembers: (opts) => canManageGroupMembersPure(caps.value, opts),

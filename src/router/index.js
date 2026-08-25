@@ -101,8 +101,18 @@ const routes = [
       { path: 'calendar', name: 'Calendar', component: () => import('../views/CalendarView.vue') },
       { path: 'events', name: 'Events', component: () => import('../views/EventsView.vue'), meta: { requiresCapability: 'canViewEvents' } },
       { path: 'events/new', name: 'EventNew', component: () => import('../views/EventComposerView.vue'), meta: { requiresCapability: 'canManageEvents' } },
-      { path: 'events/:id', name: 'EventDetail', component: () => import('../views/EventDetailView.vue'), meta: { requiresCapability: 'canViewEvents' } },
+      // Named, not numbered — /dashboard/events/cogon/2026-08-30-youth-outreach (see events.js
+      // slugify/eventSlug). The date leads the slug because the calendar is mostly recurring and a
+      // worked-out occurrence has no row of its own; the church segment scopes the name, exactly
+      // as the group routes do. `events/:id/edit` keeps a plain id: its static `edit` tail scores
+      // above `:slug`, so /events/<id>/edit never collides with the two-segment detail path, and
+      // Edit is a menu action, not a link anyone shares.
+      { path: 'events/:church/:slug', name: 'EventDetail', component: () => import('../views/EventDetailView.vue'), meta: { requiresCapability: 'canViewEvents' } },
       { path: 'events/:id/edit', name: 'EventEdit', component: () => import('../views/EventComposerView.vue'), meta: { requiresCapability: 'canManageEvents' } },
+      // The member's own read of one event (frame 7s, #87). NO capability gate — any signed-in
+      // member; RLS shows only a published event in their church. This is where a plain member
+      // reads an event and taps "I can serve"; the Calendar routes them here, not to EventDetail.
+      { path: 'e/:church/:slug', name: 'EventPublic', component: () => import('../views/EventPublicView.vue') },
 
       { path: 'attendance', name: 'Attendance', component: () => import('../views/AttendanceView.vue'), meta: { requiresCapability: 'canViewAttendance' } },
       { path: 'collections', name: 'Collections', component: () => import('../views/CollectionsInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } },
