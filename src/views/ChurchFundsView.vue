@@ -2,7 +2,6 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { SHARE_OF_TOTAL_FUNDS, computeMonthlyReport } from '../utils/collectivesReport'
 import Icon from '../components/ui/icons/Icon.vue'
-import Button from '../components/ui/Button.vue'
 import { supabase } from '../lib/supabase'
 import { defaultMonthKey, getMonthRange, parseMonthKey } from '../utils/expensesMonth'
 import { mergeMonthSourceWithLiveExpenses } from '../utils/reportExpenseMerge'
@@ -11,14 +10,17 @@ import { formatPeso, formatPesoWhole, formatShare } from '../utils/money'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { useActiveChurch } from '../composables/useActiveChurch'
 
-// Church funds — the monthly collectives report.
+// Church funds — the monthly collectives report. The "Funds Report" tab of the
+// Finance workspace (9 - Finance.dc.html).
 //
 // This is the one screen that computes rather than records, and the arithmetic
 // is not this file's: collectivesReport.js holds the allocation rules and is
 // tested against the paper workbook. Everything here is presentation.
 //
-// FundsTabs is gone — the last of the three screens that carried it. Delete the
-// component.
+// The page title, the month stepper and the Print button live in FinanceView's shared
+// header now; the active month arrives as a `month` prop. Print stays a shell concern
+// because this is the one finance tab that is a document — window.print() there prints
+// this report, and the `@media print` rules below still strip this view's own chrome.
 //
 // The mockup's Contributors table and balance rollup are not drawn in the
 // handoff, but both exist today and both are kept: the rollup is the one place
@@ -43,7 +45,14 @@ const { activeChurchId, ensureLoaded } = useActiveChurch()
 const REPORT_COLLECTION_SELECT =
   'id, from, amount, is_tithes, collectedOn, members!collections_from_fkey(first_name, last_name)'
 
-const cursor = ref(parseMonthKey(defaultMonthKey()))
+const props = defineProps({
+  // "YYYY-MM". Owned by FinanceView so the whole workspace shares one month.
+  month: { type: String, default: () => defaultMonthKey() },
+})
+
+// Derived from the shared month, replacing the old local cursor ref. parseMonthKey
+// never returns null for a well-formed key; the fallback covers a malformed prop.
+const cursor = computed(() => parseMonthKey(props.month) || parseMonthKey(defaultMonthKey()))
 const weeklyExpanded = ref(true)
 const contributorsExpanded = ref(true)
 
@@ -307,29 +316,12 @@ function shareOfTotal (part) {
   return share ? `${share} of total` : ''
 }
 
-function prevMonth () {
-  const { year, month } = cursor.value
-  cursor.value = month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 }
-}
-
-function nextMonth () {
-  const { year, month } = cursor.value
-  cursor.value = month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 }
-}
-
 function formatShortDate (iso) {
   // Explicit local midnight: the bare string parses as UTC and names the day
   // before for the first eight hours of every Manila day (D8).
   const d = new Date(`${iso}T00:00:00`)
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })
-}
-
-// window.print(), not a generated file. The browser's print dialog saves a PDF
-// on every platform this church uses, and a hand-rolled export would be a new
-// dependency and a new thing to keep in step with the report.
-function handlePrint () {
-  window.print()
 }
 
 // Height transitions on a table, done from JS because `height: auto` is not an
@@ -378,52 +370,6 @@ function afterCollapse (el) {
 
 <template>
   <div class="fun">
-    <header
-      class="fun__head anim-rise"
-      style="--i: 0"
-    >
-      <div class="fun__title-block">
-        <h1 class="fun__title">
-          Church funds
-        </h1>
-        <p class="fun__sub">
-          Collectives report · {{ report.weeks.length }}
-          {{ report.weeks.length === 1 ? 'service date' : 'service dates' }}
-        </p>
-      </div>
-
-      <div class="fun__actions">
-        <div class="fun__month">
-          <button
-            type="button"
-            class="fun__step"
-            aria-label="Previous month"
-            @click="prevMonth"
-          >
-            <Icon
-              name="chevronLeft"
-              :size="15"
-            />
-          </button>
-          <span class="fun__month-label">{{ monthLabel }}</span>
-          <button
-            type="button"
-            class="fun__step"
-            aria-label="Next month"
-            @click="nextMonth"
-          >
-            <Icon
-              name="chevronRight"
-              :size="15"
-            />
-          </button>
-        </div>
-        <Button @click="handlePrint">
-          Print
-        </Button>
-      </div>
-    </header>
-
     <p
       v-if="loadError"
       class="fun__warning"
@@ -986,47 +932,6 @@ function afterCollapse (el) {
 }
 
 /* --- Header ------------------------------------------------------------- */
-.fun__head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-16); }
-.fun__title-block { display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; }
-
-.fun__title {
-  font-size: var(--text-h1);
-  font-weight: 800;
-  letter-spacing: var(--tracking-h1);
-  line-height: var(--leading-h1);
-}
-
-.fun__sub { font-size: var(--text-body); color: var(--ink-4); }
-
-.fun__actions { display: flex; align-items: center; gap: var(--sp-9); }
-
-.fun__month {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-control);
-  background: var(--surface);
-}
-
-.fun__step {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: var(--r-tag);
-  background: none;
-  color: var(--ink-4);
-  cursor: pointer;
-  transition: background-color var(--dur-state) ease, color var(--dur-state) ease;
-}
-.fun__step:hover { background: var(--divider); color: var(--ink); }
-.fun__step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-.fun__month-label { padding: 0 var(--sp-10); font-size: var(--text-body-sm); font-weight: 800; color: var(--ink); white-space: nowrap; }
-
 .fun__warning {
   padding: var(--sp-10) var(--sp-12);
   border-radius: var(--r-inset);
@@ -1304,8 +1209,9 @@ function afterCollapse (el) {
 }
 
 /* --- Print: the report is a document before it is a screen -------------- */
+/* The shell's chrome (title, tabs, month stepper, Print button) is hidden by
+   FinanceView's own @media print rules; this strips what belongs to the report. */
 @media print {
-  .fun__actions,
   .fun__toggle { display: none; }
   .fun__card { box-shadow: none; break-inside: avoid; }
 }
@@ -1322,8 +1228,6 @@ function afterCollapse (el) {
 @media (max-width: 700px) {
   .fun__kpis,
   .fun__cards { grid-template-columns: 1fr 1fr; }
-  .fun__head { flex-direction: column; align-items: stretch; gap: var(--sp-12); }
-  .fun__actions { justify-content: space-between; }
   .fun__bar-label { width: 96px; }
 }
 </style>

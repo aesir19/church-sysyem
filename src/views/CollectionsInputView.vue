@@ -3,7 +3,6 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '../lib/supabase'
 import Avatar from '../components/ui/Avatar.vue'
 import Badge from '../components/ui/Badge.vue'
-import Icon from '../components/ui/icons/Icon.vue'
 import ContributionForm from '../components/collections/ContributionForm.vue'
 import EntryDetailModal from '../components/collections/EntryDetailModal.vue'
 import { defaultMonthKey, getMonthRange, monthKeyFromDate } from '../utils/expensesMonth'
@@ -19,16 +18,24 @@ import { useActiveChurch } from '../composables/useActiveChurch'
 // screen stacked them, so the totals were below the fold exactly when they were
 // the thing being checked.
 //
-// FundsTabs is gone. Collections, Expenses and Funds are siblings in the flat
-// nine now (see router/index.js), so a tab strip that only appeared on three of
-// the nine screens was claiming a hierarchy the navigation no longer has.
+// A TAB OF THE FINANCE WORKSPACE, NOT A PAGE OF ITS OWN. Collections, Expenses and
+// the Funds Report are one "Finance" destination now (9 - Finance.dc.html), so the
+// month stepper and the page title live in FinanceView's shared header, not here.
+// The active month arrives as a `month` v-model prop; saving into another month asks
+// the shell to move it, so all three tabs stay on the same month.
+
+const props = defineProps({
+  // "YYYY-MM". Owned by FinanceView so the whole workspace shares one month.
+  month: { type: String, default: () => defaultMonthKey() },
+})
+const emit = defineEmits(['update:month'])
 
 const { activeChurchId, ensureLoaded } = useActiveChurch()
 
 const COLLECTION_SELECT =
   'id, from, amount, is_tithes, collectedOn, created_at, members!collections_from_fkey(first_name, middle_name, last_name)'
 
-const month = ref(defaultMonthKey())
+const month = computed(() => props.month)
 const entries = ref([])
 const members = ref([])
 const loading = ref(true)
@@ -92,12 +99,6 @@ const kpis = computed(() => [
     tone: 'ink'
   }
 ])
-
-function shiftMonth (delta) {
-  const [year, m] = month.value.split('-').map(Number)
-  const date = new Date(year, m - 1 + delta, 1)
-  month.value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-}
 
 function normalise (row) {
   return {
@@ -184,9 +185,10 @@ async function loadEntries () {
 function onSaved (row) {
   const entry = normalise(row)
   // An entry saved against another month is not dropped silently — the month
-  // follows the entry, so what was just typed is visible where it landed.
+  // follows the entry, so what was just typed is visible where it landed. The
+  // shell owns the month, so ask it to move; its prop change reloads this list.
   if (monthKeyFromDate(entry.date) !== month.value) {
-    month.value = monthKeyFromDate(entry.date)
+    emit('update:month', monthKeyFromDate(entry.date))
     return
   }
   entries.value = [entry, ...entries.value]
@@ -222,46 +224,6 @@ watch(activeChurchId, async () => {
 
 <template>
   <div class="col">
-    <header
-      class="col__head anim-rise"
-      style="--i: 0"
-    >
-      <div class="col__title-block">
-        <h1 class="col__title">
-          Collections
-        </h1>
-        <p class="col__sub">
-          Tithes and offering, entered per service date
-        </p>
-      </div>
-
-      <div class="col__month">
-        <button
-          type="button"
-          class="col__step"
-          aria-label="Previous month"
-          @click="shiftMonth(-1)"
-        >
-          <Icon
-            name="chevronLeft"
-            :size="15"
-          />
-        </button>
-        <span class="col__month-label">{{ monthLabel }}</span>
-        <button
-          type="button"
-          class="col__step"
-          aria-label="Next month"
-          @click="shiftMonth(1)"
-        >
-          <Icon
-            name="chevronRight"
-            :size="15"
-          />
-        </button>
-      </div>
-    </header>
-
     <div class="col__grid">
       <div
         class="anim-rise"
@@ -405,46 +367,6 @@ watch(activeChurchId, async () => {
 <style scoped>
 .col { display: flex; flex-direction: column; gap: var(--sp-20); }
 
-.col__head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-16); }
-.col__title-block { display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; }
-
-.col__title {
-  font-size: var(--text-h1);
-  font-weight: 800;
-  letter-spacing: var(--tracking-h1);
-  line-height: var(--leading-h1);
-}
-
-.col__sub { font-size: var(--text-body); color: var(--ink-4); }
-
-/* --- Month stepper ------------------------------------------------------ */
-.col__month {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-control);
-  background: var(--surface);
-}
-
-.col__step {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: var(--r-tag);
-  background: none;
-  color: var(--ink-4);
-  cursor: pointer;
-  transition: background-color var(--dur-state) ease, color var(--dur-state) ease;
-}
-.col__step:hover { background: var(--divider); color: var(--ink); }
-.col__step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-.col__month-label { padding: 0 var(--sp-10); font-size: var(--text-body-sm); font-weight: 800; color: var(--ink); }
-
 /* --- Layout ------------------------------------------------------------- */
 .col__grid { display: grid; grid-template-columns: 344px 1fr; gap: var(--sp-18); align-items: start; }
 .col__right { display: flex; flex-direction: column; gap: var(--sp-18); min-width: 0; }
@@ -551,8 +473,6 @@ watch(activeChurchId, async () => {
 
 @media (max-width: 900px) {
   .col__grid { grid-template-columns: 1fr; }
-  .col__head { flex-direction: column; align-items: stretch; gap: var(--sp-12); }
-  .col__month { align-self: flex-start; }
 }
 
 @media (max-width: 620px) {

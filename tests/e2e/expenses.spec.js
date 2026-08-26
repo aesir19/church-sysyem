@@ -13,7 +13,7 @@ const EXPENSES = [
 ]
 
 async function gotoExpenses(page) {
-  await authedGoto(page, '/dashboard/expenses', {
+  await authedGoto(page, '/dashboard/finance/expenses', {
     tables: {
       expenses: EXPENSES,
       collections: [{ amount: 5000 }],

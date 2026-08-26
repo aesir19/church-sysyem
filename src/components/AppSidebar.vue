@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import AppLogo from './AppLogo.vue'
 import ChurchSwitcher from './ChurchSwitcher.vue'
 import SettingsMenu from './SettingsMenu.vue'
@@ -36,6 +36,15 @@ const { activeChurchName, showChurchSelector } = useActiveChurch()
 const { caps } = useCurrentRole()
 const { isDark, toggleTheme } = useTheme()
 
+const route = useRoute()
+
+// A `branch` item (Finance) owns a family of child URLs — /dashboard/finance/collections
+// and the other tabs. router-link-exact-active only fires on the exact `to`, which the
+// tab URLs never are, so the item would never light. This lights it for the whole branch.
+function isBranchActive (item) {
+  return !!item.branch && route.path.startsWith(`${item.to}/`)
+}
+
 // The ONE sign-out path. `useSession().signOut()` clears the cached church,
 // role and display name alongside the Supabase session — calling
 // supabase.auth.signOut() directly leaves the previous user's first name in
@@ -56,9 +65,12 @@ const NAV = [
   { key: 'calendar',    label: 'Calendar',    icon: 'calendar',    to: '/dashboard/calendar' },
   { key: 'events',      label: 'Events',      icon: 'events',      to: '/dashboard/events',      needs: 'canViewEvents' },
   { key: 'attendance',  label: 'Attendance',  icon: 'attendance',  to: '/dashboard/attendance',  needs: 'canViewAttendance' },
-  { key: 'collections', label: 'Collections', icon: 'collections', to: '/dashboard/collections', needs: 'canWriteFinance' },
-  { key: 'expenses',    label: 'Expenses',    icon: 'expenses',    to: '/dashboard/expenses',    needs: 'canWriteFinance' },
-  { key: 'funds',       label: 'Funds',       icon: 'funds',       to: '/dashboard/funds',       needs: 'canViewFinance' },
+  // Collections, Expenses and Funds were three items; they are one Finance workspace now
+  // (9 - Finance.dc.html). `branch` lights this item on any of its tab URLs
+  // (/dashboard/finance/*), which the exact-active class alone would miss. canViewFinance
+  // is the weakest finance gate, so the oversight roles keep the item and land on its
+  // Funds Report tab; the two entry tabs are hidden inside the view.
+  { key: 'finance',     label: 'Finance',     icon: 'funds',       to: '/dashboard/finance',     needs: 'canViewFinance', branch: true },
   { key: 'statistics',  label: 'Statistics',  icon: 'statistics',  to: null, badge: 'Soon' },
   { key: 'next',        label: "What's next", icon: 'next',        to: '/dashboard/whats-next',  badge: 'New' }
 ]
@@ -124,6 +136,7 @@ const roleLabel = computed(() => roleLabelFor(caps.value) || 'No role assigned')
           v-if="item.to"
           :to="item.to"
           class="side__item"
+          :class="{ 'is-active': isBranchActive(item) }"
           @click="emit('navigate')"
         >
           <Icon
@@ -301,14 +314,18 @@ const roleLabel = computed(() => roleLabelFor(caps.value) || 'No role assigned')
 .side__item:hover { background: var(--surface-subtle-2); color: var(--ink); }
 .side__item:hover .side__icon { opacity: .9; }
 
-/* vue-router adds router-link-active to ancestors too; the exact class is what
-   keeps Funds from lighting up while you are on Collections. */
-.side__item.router-link-exact-active {
+/* vue-router adds router-link-active to ancestors too, so the exact class is the
+   default — it keeps, say, Overview from lighting from a deeper route. `is-active` is
+   the opt-in exception for a branch item (Finance) that should light across its whole
+   family of tab URLs. */
+.side__item.router-link-exact-active,
+.side__item.is-active {
   background: var(--accent-tint);
   color: var(--accent-darkest);
   font-weight: 700;
 }
-.side__item.router-link-exact-active .side__icon { opacity: 1; color: var(--accent); }
+.side__item.router-link-exact-active .side__icon,
+.side__item.is-active .side__icon { opacity: 1; color: var(--accent); }
 
 .side__item.is-soon {
   cursor: default;
