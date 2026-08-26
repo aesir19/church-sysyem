@@ -1056,7 +1056,7 @@ function toTimeInput(iso) {
 .cmp__ready-mark { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; margin-top: 1px; border-radius: 50%; font-size: 10px; font-weight: 900; }
 .cmp__ready-item.is-done .cmp__ready-mark { background: var(--accent-tint, #e9f8ff); color: var(--accent); }
 .cmp__ready-item.is-todo .cmp__ready-mark { background: var(--danger-tint, #fdeef0); color: var(--accent-deep, #aa0b56); }
-.cmp__ready-item.is-neutral .cmp__ready-mark { background: var(--surface-2, #f2f4f7); color: var(--ink-5); }
+.cmp__ready-item.is-neutral .cmp__ready-mark { background: var(--surface-subtle-2, #f2f4f7); color: var(--ink-5); }
 .cmp__ready-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .cmp__ready-label { font-size: var(--text-body-sm); font-weight: 700; color: var(--ink); }
 .cmp__ready-item.is-todo .cmp__ready-label { color: var(--accent-deep, #aa0b56); }

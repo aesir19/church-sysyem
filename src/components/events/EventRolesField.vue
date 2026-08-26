@@ -157,7 +157,7 @@ function remove(role) {
 .rf__chip--finance { border-style: dashed; }
 .rf__chip-count { font-size: var(--text-meta); font-weight: 700; color: var(--ink-5); }
 .rf__chip-x { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: 1px; border-radius: 50%; font-size: 9px; color: var(--ink-5); }
-.rf__chip-x:hover { background: var(--surface-2, rgba(0,0,0,.06)); color: var(--danger, #d92d20); }
+.rf__chip-x:hover { background: var(--surface-subtle-2, rgba(0,0,0,.06)); color: var(--danger, #d92d20); }
 
 .rf__add { display: inline-flex; align-items: center; gap: var(--sp-7); padding: 8px 13px; border: 1px dashed var(--border-strong); border-radius: var(--r-pill, 999px); background: var(--surface); font: inherit; font-size: var(--text-body-sm); font-weight: 700; color: var(--ink-3); cursor: pointer; transition: border-color .16s, color .16s; }
 .rf__add:hover { border-color: var(--accent); color: var(--accent); }

@@ -253,7 +253,7 @@ const spanLabel = computed(() => {
 .prog__list { list-style: none; margin: 0; padding: 0; }
 .prog__item { position: relative; display: grid; grid-template-columns: 96px 1fr 170px; gap: var(--sp-14); align-items: start; padding: var(--sp-14) var(--sp-20); border-bottom: 1px solid var(--border-subtle, var(--border)); transition: background .16s; }
 .prog__item:last-child { border-bottom: none; }
-.prog__item:hover { background: var(--surface-2, #fbfcfd); }
+.prog__item:hover { background: var(--surface-subtle-2, #fbfcfd); }
 .prog__time { font-size: var(--text-body-sm); font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; }
 .prog__body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .prog__item-title { font-size: var(--text-body-sm); font-weight: 700; }
@@ -264,7 +264,7 @@ const spanLabel = computed(() => {
 .prog__controls { position: absolute; top: 8px; right: var(--sp-20); display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: var(--r-control); background: var(--surface); box-shadow: var(--shadow-1, 0 1px 4px rgba(16,24,40,.12)); opacity: 0; transition: opacity .15s; }
 .prog__item:hover .prog__controls { opacity: 1; }
 .prog__x { border: none; background: transparent; color: var(--ink-5); cursor: pointer; font-size: 12px; padding: 2px 5px; border-radius: var(--r-control); }
-.prog__x:hover:not(:disabled) { color: var(--ink); background: var(--surface-2, rgba(0,0,0,.04)); }
+.prog__x:hover:not(:disabled) { color: var(--ink); background: var(--surface-subtle-2, rgba(0,0,0,.04)); }
 .prog__x:disabled { opacity: .3; cursor: not-allowed; }
 
 .prog__addform { padding: var(--sp-14) var(--sp-20); display: flex; flex-direction: column; gap: var(--sp-10); border-top: 1px solid var(--border-subtle, var(--border)); }
