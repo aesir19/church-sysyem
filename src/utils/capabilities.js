@@ -21,6 +21,7 @@ export function deriveCapabilities(perm) {
   const isSecretariat = !!p.is_secretariat
   const isWelcome = !!p.is_welcome
   const isSmallGroupLeader = !!p.is_small_group_leader
+  const isEventsTeam = !!p.is_events_team
 
   return {
     role: p.role ?? null,
@@ -32,6 +33,7 @@ export function deriveCapabilities(perm) {
     isSecretariat,
     isWelcome,
     isSmallGroupLeader,
+    isEventsTeam,
 
     // VIEW capabilities. Head Pastor is deliberately NOT in canSeeMemberDetail —
     // it sees only the name/group directory, never member PII (matches 0014/0015).
@@ -70,6 +72,22 @@ export function deriveCapabilities(perm) {
     canManageAttendance: isSuperAdmin || isWelcome,
     canManageSmallGroups: isSuperAdmin || isChurchLeader,
 
+    // CALENDAR & EVENTS (0032). Two deliberately distinct keys, mirroring the SQL
+    // predicates can_view_events() / can_manage_events():
+    //   canViewEvents gates the Events PAGE and its nav entry — the five roles that may
+    //     see the planning phase (drafts included). It is view-only for the oversight
+    //     three; only canManageEvents writes.
+    //   canManageEvents gates every write button — Events Team (+ SuperAdmin).
+    // The members' Calendar is open to everyone and carries no capability gate; the SELECT
+    // policy shows non-privileged members published events only. UI-gating only; RLS (0032)
+    // is the enforcement, and the two must not drift.
+    canViewEvents: isSuperAdmin || isHeadPastor || isPastor || isChurchLeader || isEventsTeam,
+    canManageEvents: isSuperAdmin || isEventsTeam,
+    // Rooms are a per-church operational list owned by the Church Leader (+ SuperAdmin) —
+    // Q4/#87. Events Team USES rooms (picks one) but does not manage the list. Mirrors
+    // can_manage_rooms() (0035); RLS is the enforcement.
+    canManageRooms: isSuperAdmin || isChurchLeader,
+
     // SuperAdmin / Head Pastor act across all churches (church selector UI).
     isCrossChurch: isSuperAdmin || isHeadPastor,
   }
@@ -89,6 +107,7 @@ const MINISTRY_LABELS = [
   ['isFinance', 'Finance'],
   ['isSecretariat', 'Secretariat'],
   ['isWelcome', 'Welcome Team'],
+  ['isEventsTeam', 'Events Team'],
   ['isSmallGroupLeader', 'Small Group Leader'],
 ]
 

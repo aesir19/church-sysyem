@@ -53,6 +53,8 @@ const NAV = [
   { key: 'overview',    label: 'Overview',    icon: 'overview',    to: '/dashboard/overview' },
   { key: 'members',     label: 'Members',     icon: 'members',     to: '/dashboard/members' },
   { key: 'groups',      label: 'Groups',      icon: 'groups',      to: '/dashboard/groups' },
+  { key: 'calendar',    label: 'Calendar',    icon: 'calendar',    to: '/dashboard/calendar' },
+  { key: 'events',      label: 'Events',      icon: 'events',      to: '/dashboard/events',      needs: 'canViewEvents' },
   { key: 'attendance',  label: 'Attendance',  icon: 'attendance',  to: '/dashboard/attendance',  needs: 'canViewAttendance' },
   { key: 'collections', label: 'Collections', icon: 'collections', to: '/dashboard/collections', needs: 'canWriteFinance' },
   { key: 'expenses',    label: 'Expenses',    icon: 'expenses',    to: '/dashboard/expenses',    needs: 'canWriteFinance' },

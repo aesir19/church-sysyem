@@ -85,6 +85,35 @@ const routes = [
         name: 'GroupDetail',
         component: () => import('../views/GroupDetailView.vue')
       },
+      // CALENDAR & EVENTS (Stage 1, issue thread on #86/#87).
+      //
+      // Calendar carries NO capability gate — it is the members' read of the church
+      // year, open to everyone, and its SELECT policy (0032) already narrows a
+      // non-privileged member to published events only. Gating it would hide the one
+      // calendar screen every member is meant to have.
+      //
+      // Events is the management surface. requiresCapability: 'canViewEvents' bounces
+      // a deep-linker who lacks it to /members (the safe always-reachable fallback),
+      // and the nav hides the item for them — the hide-don't-lock rule (0016). The
+      // composer and edit paths need the stronger canManageEvents: an oversight role
+      // (Pastor / Church Leader / Head Pastor) may reach the list and a detail read,
+      // but not the create/edit forms.
+      { path: 'calendar', name: 'Calendar', component: () => import('../views/CalendarView.vue') },
+      { path: 'events', name: 'Events', component: () => import('../views/EventsView.vue'), meta: { requiresCapability: 'canViewEvents' } },
+      { path: 'events/new', name: 'EventNew', component: () => import('../views/EventComposerView.vue'), meta: { requiresCapability: 'canManageEvents' } },
+      // Named, not numbered — /dashboard/events/cogon/2026-08-30-youth-outreach (see events.js
+      // slugify/eventSlug). The date leads the slug because the calendar is mostly recurring and a
+      // worked-out occurrence has no row of its own; the church segment scopes the name, exactly
+      // as the group routes do. `events/:id/edit` keeps a plain id: its static `edit` tail scores
+      // above `:slug`, so /events/<id>/edit never collides with the two-segment detail path, and
+      // Edit is a menu action, not a link anyone shares.
+      { path: 'events/:church/:slug', name: 'EventDetail', component: () => import('../views/EventDetailView.vue'), meta: { requiresCapability: 'canViewEvents' } },
+      { path: 'events/:id/edit', name: 'EventEdit', component: () => import('../views/EventComposerView.vue'), meta: { requiresCapability: 'canManageEvents' } },
+      // The member's own read of one event (frame 7s, #87). NO capability gate — any signed-in
+      // member; RLS shows only a published event in their church. This is where a plain member
+      // reads an event and taps "I can serve"; the Calendar routes them here, not to EventDetail.
+      { path: 'e/:church/:slug', name: 'EventPublic', component: () => import('../views/EventPublicView.vue') },
+
       { path: 'attendance', name: 'Attendance', component: () => import('../views/AttendanceView.vue'), meta: { requiresCapability: 'canViewAttendance' } },
       { path: 'collections', name: 'Collections', component: () => import('../views/CollectionsInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } },
       { path: 'expenses', name: 'Expenses', component: () => import('../views/ExpensesInputView.vue'), meta: { requiresCapability: 'canWriteFinance' } },

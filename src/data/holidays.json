@@ -1,0 +1,377 @@
+[
+  {
+    "date": "2025-01-01",
+    "name": "New Year's Day",
+    "type": "regular"
+  },
+  {
+    "date": "2025-01-29",
+    "name": "Chinese New Year",
+    "type": "regular"
+  },
+  {
+    "date": "2025-04-01",
+    "name": "Feast of Ramadhan",
+    "type": "regular"
+  },
+  {
+    "date": "2025-04-09",
+    "name": "Day of Valor",
+    "type": "regular"
+  },
+  {
+    "date": "2025-04-17",
+    "name": "Maundy Thursday",
+    "type": "regular"
+  },
+  {
+    "date": "2025-04-18",
+    "name": "Good Friday",
+    "type": "regular"
+  },
+  {
+    "date": "2025-04-19",
+    "name": "Holy Saturday",
+    "type": "regular"
+  },
+  {
+    "date": "2025-05-01",
+    "name": "Labour Day",
+    "type": "regular"
+  },
+  {
+    "date": "2025-05-12",
+    "name": "Midterm Elections",
+    "type": "regular"
+  },
+  {
+    "date": "2025-06-06",
+    "name": "Feast of Sacrifice",
+    "type": "regular"
+  },
+  {
+    "date": "2025-06-12",
+    "name": "Independence Day",
+    "type": "regular"
+  },
+  {
+    "date": "2025-08-21",
+    "name": "Ninoy Aquino Day",
+    "type": "regular"
+  },
+  {
+    "date": "2025-08-25",
+    "name": "National Heroes Day",
+    "type": "regular"
+  },
+  {
+    "date": "2025-10-31",
+    "name": "All Saints' Day Eve",
+    "type": "regular"
+  },
+  {
+    "date": "2025-11-01",
+    "name": "All Saints' Day",
+    "type": "regular"
+  },
+  {
+    "date": "2025-11-30",
+    "name": "Bonifacio Day",
+    "type": "regular"
+  },
+  {
+    "date": "2025-12-08",
+    "name": "Feast of the Immaculate Conception of Mary",
+    "type": "regular"
+  },
+  {
+    "date": "2025-12-24",
+    "name": "Christmas Eve",
+    "type": "regular"
+  },
+  {
+    "date": "2025-12-25",
+    "name": "Christmas Day",
+    "type": "regular"
+  },
+  {
+    "date": "2025-12-30",
+    "name": "Rizal Day",
+    "type": "regular"
+  },
+  {
+    "date": "2025-12-31",
+    "name": "Last Day of The Year",
+    "type": "regular"
+  },
+  {
+    "date": "2026-01-01",
+    "name": "New Year's Day",
+    "type": "regular"
+  },
+  {
+    "date": "2026-02-17",
+    "name": "Chinese New Year",
+    "type": "regular"
+  },
+  {
+    "date": "2026-04-02",
+    "name": "Maundy Thursday",
+    "type": "regular"
+  },
+  {
+    "date": "2026-04-03",
+    "name": "Good Friday",
+    "type": "regular"
+  },
+  {
+    "date": "2026-04-04",
+    "name": "Holy Saturday",
+    "type": "regular"
+  },
+  {
+    "date": "2026-04-09",
+    "name": "Day of Valor",
+    "type": "regular"
+  },
+  {
+    "date": "2026-05-01",
+    "name": "Labour Day",
+    "type": "regular"
+  },
+  {
+    "date": "2026-06-12",
+    "name": "Independence Day",
+    "type": "regular"
+  },
+  {
+    "date": "2026-08-21",
+    "name": "Ninoy Aquino Day",
+    "type": "regular"
+  },
+  {
+    "date": "2026-08-31",
+    "name": "National Heroes Day",
+    "type": "regular"
+  },
+  {
+    "date": "2026-10-31",
+    "name": "All Saints' Day Eve",
+    "type": "regular"
+  },
+  {
+    "date": "2026-11-01",
+    "name": "All Saints' Day",
+    "type": "regular"
+  },
+  {
+    "date": "2026-11-30",
+    "name": "Bonifacio Day",
+    "type": "regular"
+  },
+  {
+    "date": "2026-12-08",
+    "name": "Feast of the Immaculate Conception of Mary",
+    "type": "regular"
+  },
+  {
+    "date": "2026-12-24",
+    "name": "Christmas Eve",
+    "type": "regular"
+  },
+  {
+    "date": "2026-12-25",
+    "name": "Christmas Day",
+    "type": "regular"
+  },
+  {
+    "date": "2026-12-30",
+    "name": "Rizal Day",
+    "type": "regular"
+  },
+  {
+    "date": "2026-12-31",
+    "name": "Last Day of The Year",
+    "type": "regular"
+  },
+  {
+    "date": "2027-01-01",
+    "name": "New Year's Day",
+    "type": "regular"
+  },
+  {
+    "date": "2027-02-06",
+    "name": "Chinese New Year",
+    "type": "regular"
+  },
+  {
+    "date": "2027-03-25",
+    "name": "Maundy Thursday",
+    "type": "regular"
+  },
+  {
+    "date": "2027-03-26",
+    "name": "Good Friday",
+    "type": "regular"
+  },
+  {
+    "date": "2027-03-27",
+    "name": "Holy Saturday",
+    "type": "regular"
+  },
+  {
+    "date": "2027-04-09",
+    "name": "Day of Valor",
+    "type": "regular"
+  },
+  {
+    "date": "2027-05-01",
+    "name": "Labour Day",
+    "type": "regular"
+  },
+  {
+    "date": "2027-06-12",
+    "name": "Independence Day",
+    "type": "regular"
+  },
+  {
+    "date": "2027-08-21",
+    "name": "Ninoy Aquino Day",
+    "type": "regular"
+  },
+  {
+    "date": "2027-08-30",
+    "name": "National Heroes Day",
+    "type": "regular"
+  },
+  {
+    "date": "2027-10-31",
+    "name": "All Saints' Day Eve",
+    "type": "regular"
+  },
+  {
+    "date": "2027-11-01",
+    "name": "All Saints' Day",
+    "type": "regular"
+  },
+  {
+    "date": "2027-11-30",
+    "name": "Bonifacio Day",
+    "type": "regular"
+  },
+  {
+    "date": "2027-12-08",
+    "name": "Feast of the Immaculate Conception of Mary",
+    "type": "regular"
+  },
+  {
+    "date": "2027-12-24",
+    "name": "Christmas Eve",
+    "type": "regular"
+  },
+  {
+    "date": "2027-12-25",
+    "name": "Christmas Day",
+    "type": "regular"
+  },
+  {
+    "date": "2027-12-30",
+    "name": "Rizal Day",
+    "type": "regular"
+  },
+  {
+    "date": "2027-12-31",
+    "name": "Last Day of The Year",
+    "type": "regular"
+  },
+  {
+    "date": "2028-01-01",
+    "name": "New Year's Day",
+    "type": "regular"
+  },
+  {
+    "date": "2028-01-26",
+    "name": "Chinese New Year",
+    "type": "regular"
+  },
+  {
+    "date": "2028-04-09",
+    "name": "Day of Valor",
+    "type": "regular"
+  },
+  {
+    "date": "2028-04-13",
+    "name": "Maundy Thursday",
+    "type": "regular"
+  },
+  {
+    "date": "2028-04-14",
+    "name": "Good Friday",
+    "type": "regular"
+  },
+  {
+    "date": "2028-04-15",
+    "name": "Holy Saturday",
+    "type": "regular"
+  },
+  {
+    "date": "2028-05-01",
+    "name": "Labour Day",
+    "type": "regular"
+  },
+  {
+    "date": "2028-06-12",
+    "name": "Independence Day",
+    "type": "regular"
+  },
+  {
+    "date": "2028-08-21",
+    "name": "Ninoy Aquino Day",
+    "type": "regular"
+  },
+  {
+    "date": "2028-08-28",
+    "name": "National Heroes Day",
+    "type": "regular"
+  },
+  {
+    "date": "2028-10-31",
+    "name": "All Saints' Day Eve",
+    "type": "regular"
+  },
+  {
+    "date": "2028-11-01",
+    "name": "All Saints' Day",
+    "type": "regular"
+  },
+  {
+    "date": "2028-11-30",
+    "name": "Bonifacio Day",
+    "type": "regular"
+  },
+  {
+    "date": "2028-12-08",
+    "name": "Feast of the Immaculate Conception of Mary",
+    "type": "regular"
+  },
+  {
+    "date": "2028-12-24",
+    "name": "Christmas Eve",
+    "type": "regular"
+  },
+  {
+    "date": "2028-12-25",
+    "name": "Christmas Day",
+    "type": "regular"
+  },
+  {
+    "date": "2028-12-30",
+    "name": "Rizal Day",
+    "type": "regular"
+  },
+  {
+    "date": "2028-12-31",
+    "name": "Last Day of The Year",
+    "type": "regular"
+  }
+]

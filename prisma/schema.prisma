@@ -542,6 +542,7 @@ model churches {
   checkin_token_rotated_at DateTime?           @default(now()) @db.Timestamptz(6)
   attendance               attendance[]
   collections              collections[]
+  events                   events[]
   expenses                 expenses[]
   members                  members[]
   service_schedules        service_schedules[]
@@ -563,9 +564,12 @@ model collections {
   collectedOn DateTime @db.Date
   from_church String   @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   created_at  DateTime @default(now()) @db.Timestamptz(6)
+  event_id    String?  @db.Uuid
   churches    churches @relation(fields: [from_church], references: [id], onDelete: Cascade)
   members     members? @relation(fields: [from], references: [id], onDelete: Cascade)
+  events      events?  @relation(fields: [event_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
+  @@index([event_id], map: "collections_event_idx")
   @@schema("public")
 }
 
@@ -579,10 +583,13 @@ model expenses {
   notes       String?
   created_at  DateTime @default(now()) @db.Timestamptz(6)
   created_by  String?  @db.Uuid
+  event_id    String?  @db.Uuid
   churches    churches @relation(fields: [from_church], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  events      events?  @relation(fields: [event_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([from_church, spent_on(sort: Desc)], map: "expenses_church_spent_on_idx")
   @@index([from_church, spent_on, description], map: "expenses_month_description_idx")
+  @@index([event_id], map: "expenses_event_idx")
   @@schema("public")
 }
 
@@ -625,6 +632,40 @@ model members {
 /// those are recorded as ad-hoc `services` rows instead.
 /// This table contains check constraints and requires additional setup for migrations.
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+/// Calendar events (Stage 1, migration 0032). A one-off event today; Stage 2 (#86) adds
+/// series_id so a series occurrence is just an event pointing at a series. status is
+/// draft | published | cancelled — published is what the members' Calendar shows,
+/// cancelled stays visible and marked. Writes are Events Team (+ SuperAdmin), own church
+/// only; the oversight roles (Pastor / Church Leader / Head Pastor) read the planning
+/// phase but never write. RLS in 0032 is the enforcement.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model events {
+  id               String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  church_id        String        @db.Uuid
+  title            String
+  kind             String
+  status           String        @default("draft")
+  starts_at        DateTime      @db.Timestamptz(6)
+  ends_at          DateTime?     @db.Timestamptz(6)
+  location         String?
+  description      String?
+  run_by           String?
+  projected_budget Decimal?      @db.Decimal(12, 2)
+  cancel_reason    String?
+  created_at       DateTime      @default(now()) @db.Timestamptz(6)
+  created_by       String?       @db.Uuid
+  updated_at       DateTime      @default(now()) @db.Timestamptz(6)
+  published_at     DateTime?     @db.Timestamptz(6)
+  churches         churches      @relation(fields: [church_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  collections      collections[]
+  expenses         expenses[]
+
+  @@unique([id, church_id], map: "events_id_church_key")
+  @@index([church_id, starts_at], map: "events_church_starts_idx")
+  @@index([church_id, status], map: "events_church_status_idx")
+  @@schema("public")
+}
+
 model service_schedules {
   id         String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   church_id  String     @db.Uuid
