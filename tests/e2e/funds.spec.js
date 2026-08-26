@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test'
 import { authedGoto, CHURCH } from './support/scenario.js'
 
-// Church funds — the one screen that computes rather than records. No writes, so
-// the coverage is the report rendering and its two interactions: the collapsible
-// breakdowns and the month stepper.
+// Church funds — the "Funds Report" tab of the Finance workspace, the one screen that
+// computes rather than records. No writes, so the coverage is the report rendering and
+// its two interactions: the collapsible breakdowns and the shared month stepper (which
+// lives in FinanceView's header now).
 
 const TODAY = new Date().toISOString().slice(0, 10)
 
@@ -19,14 +20,15 @@ const COLLECTIONS = [
 const EXPENSES = [{ spent_on: TODAY, description: 'Electricity', amount: 200 }]
 
 async function gotoFunds(page) {
-  await authedGoto(page, '/dashboard/funds', {
+  await authedGoto(page, '/dashboard/finance/report', {
     tables: {
       collectives_service_totals: SERVICE_TOTALS,
       collections: COLLECTIONS,
       expenses: EXPENSES,
     },
   })
-  await expect(page.getByRole('heading', { name: 'Church funds', exact: true })).toBeVisible()
+  // The shell titles the workspace "Finance"; the Report tab is the active one.
+  await expect(page.getByRole('heading', { name: 'Finance', exact: true })).toBeVisible()
 }
 
 test.describe('Church funds', () => {
@@ -49,8 +51,8 @@ test.describe('Church funds', () => {
     await expect(page.locator('#weekly-breakdown-content')).toBeHidden()
   })
 
-  test('the month stepper changes the report month', async ({ page }) => {
-    const label = page.locator('.fun__month-label')
+  test('the shared month stepper changes the report month', async ({ page }) => {
+    const label = page.locator('.fin__month-label')
     const before = (await label.textContent())?.trim()
     await page.getByRole('button', { name: 'Previous month' }).click()
     await expect(label).not.toHaveText(before)

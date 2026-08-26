@@ -152,11 +152,13 @@ describe('ChurchFundsView', { timeout: 20000 }, () => {
     expect(tablesRead).toContain('expenses')
   })
 
-  it('renders the month navigator and no preview banner', async () => {
+  it('renders as the Funds Report tab with no preview banner', async () => {
     const { html } = await render()
 
-    expect(html).toContain('Collectives report')
-    expect(html).toContain('Previous month')
+    // The title, month stepper and Print button moved to FinanceView's shared header
+    // (9 - Finance.dc.html); the Report tab renders only its report body now, so the
+    // "Previous month" control and the "Collectives report" subtitle live in the shell.
+    expect(html).not.toContain('Previous month')
     // The fixture-era banner is gone; nothing should advertise sample data.
     expect(html).not.toContain('Preview mode')
     expect(html).not.toContain('sample')

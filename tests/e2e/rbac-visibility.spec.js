@@ -63,22 +63,20 @@ test.describe('Members directory mode (a role without member detail)', () => {
 })
 
 test.describe('Nav hides out-of-scope items, per role', () => {
-  test('Welcome Team sees Attendance but not the finance items', async ({ page }) => {
+  test('Welcome Team sees Attendance but not Finance', async ({ page }) => {
     await authedGoto(page, '/dashboard/members', {
       rpc: { get_my_permissions: WELCOME, directory_search: DIRECTORY },
     })
     await expect(navLabel(page, 'Attendance')).toBeVisible()
-    await expect(navLabel(page, 'Collections')).toHaveCount(0)
-    await expect(navLabel(page, 'Expenses')).toHaveCount(0)
-    await expect(navLabel(page, 'Funds')).toHaveCount(0)
+    // Collections, Expenses and Funds are one "Finance" item now (9 - Finance.dc.html).
+    await expect(navLabel(page, 'Finance')).toHaveCount(0)
   })
 
-  test('Finance sees the finance items but not Attendance', async ({ page }) => {
+  test('Finance sees the Finance item but not Attendance', async ({ page }) => {
     await authedGoto(page, '/dashboard/members', {
       rpc: { get_my_permissions: FINANCE, directory_search: DIRECTORY },
     })
-    await expect(navLabel(page, 'Collections')).toBeVisible()
-    await expect(navLabel(page, 'Funds')).toBeVisible()
+    await expect(navLabel(page, 'Finance')).toBeVisible()
     await expect(navLabel(page, 'Attendance')).toHaveCount(0)
   })
 })
@@ -94,7 +92,7 @@ test.describe('Scopeless account', () => {
     await expect(page.locator('.who__name')).toHaveCount(0)
     // Finance and Attendance are both out of scope, so both are hidden.
     await expect(navLabel(page, 'Attendance')).toHaveCount(0)
-    await expect(navLabel(page, 'Funds')).toHaveCount(0)
+    await expect(navLabel(page, 'Finance')).toHaveCount(0)
   })
 })
 

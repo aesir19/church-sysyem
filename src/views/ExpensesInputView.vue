@@ -1,7 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '../lib/supabase'
-import Icon from '../components/ui/icons/Icon.vue'
 import ExpenseForm from '../components/expenses/ExpenseForm.vue'
 import { defaultMonthKey, getMonthRange, monthKeyFromDate } from '../utils/expensesMonth'
 import { summariseByDescription, largestLine, rankDescriptions } from '../utils/expenseStats'
@@ -12,12 +11,11 @@ import { useActiveChurch } from '../composables/useActiveChurch'
 // Expenses — what the church spent, charged against its share of the month's
 // allocation.
 //
-// Same shape as Collections, deliberately: form left, month right, one stepper
-// in the header. They are siblings in the flat nine and they are used by the
-// same person on the same afternoon; a treasurer should not have to relearn the
-// screen because the money is going the other way.
-//
-// FundsTabs is gone here too — see the note in CollectionsInputView.
+// Same shape as Collections, deliberately: form left, month right. They are tabs of
+// the same Finance workspace and are used by the same person on the same afternoon; a
+// treasurer should not have to relearn the screen because the money is going the other
+// way. The month stepper and the page title live in FinanceView's shared header now;
+// the active month arrives as a `month` v-model prop.
 //
 // NO ROW DETAIL DIALOG, and that is a deliberate omission rather than an
 // oversight. The mockup draws the rows with a pointer cursor, but 0009 grants
@@ -35,7 +33,13 @@ const EXPENSE_COLUMNS = 'id, spent_on, description, amount, notes, created_at'
 // have last month's wording on hand in a month that is still empty.
 const CHIP_MONTHS = 6
 
-const month = ref(defaultMonthKey())
+const props = defineProps({
+  // "YYYY-MM". Owned by FinanceView so the whole workspace shares one month.
+  month: { type: String, default: () => defaultMonthKey() },
+})
+const emit = defineEmits(['update:month'])
+
+const month = computed(() => props.month)
 const entries = ref([])
 const descriptionHistory = ref([])
 const collectionsTotal = ref(null)
@@ -101,12 +105,6 @@ const kpis = computed(() => {
     }
   ]
 })
-
-function shiftMonth (delta) {
-  const [year, m] = month.value.split('-').map(Number)
-  const date = new Date(year, m - 1 + delta, 1)
-  month.value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-}
 
 function formatDate (value) {
   if (!value) return ''
@@ -199,9 +197,10 @@ async function loadDescriptionHistory () {
 
 function onSaved (row) {
   // An expense saved into another month is not dropped silently — the month
-  // follows the entry, so what was just typed is visible where it landed.
+  // follows the entry, so what was just typed is visible where it landed. The
+  // shell owns the month, so ask it to move; its prop change reloads this list.
   if (monthKeyFromDate(row.spent_on) !== month.value) {
-    month.value = monthKeyFromDate(row.spent_on)
+    emit('update:month', monthKeyFromDate(row.spent_on))
   } else {
     entries.value = [row, ...entries.value]
   }
@@ -230,46 +229,6 @@ watch(activeChurchId, async () => {
 
 <template>
   <div class="exp">
-    <header
-      class="exp__head anim-rise"
-      style="--i: 0"
-    >
-      <div class="exp__title-block">
-        <h1 class="exp__title">
-          Expenses
-        </h1>
-        <p class="exp__sub">
-          Charged against the church share of the allocation
-        </p>
-      </div>
-
-      <div class="exp__month">
-        <button
-          type="button"
-          class="exp__step"
-          aria-label="Previous month"
-          @click="shiftMonth(-1)"
-        >
-          <Icon
-            name="chevronLeft"
-            :size="15"
-          />
-        </button>
-        <span class="exp__month-label">{{ monthLabel }}</span>
-        <button
-          type="button"
-          class="exp__step"
-          aria-label="Next month"
-          @click="shiftMonth(1)"
-        >
-          <Icon
-            name="chevronRight"
-            :size="15"
-          />
-        </button>
-      </div>
-    </header>
-
     <div class="exp__grid">
       <div
         class="anim-rise"
@@ -417,46 +376,6 @@ watch(activeChurchId, async () => {
 <style scoped>
 .exp { display: flex; flex-direction: column; gap: var(--sp-20); }
 
-.exp__head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--sp-16); }
-.exp__title-block { display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; }
-
-.exp__title {
-  font-size: var(--text-h1);
-  font-weight: 800;
-  letter-spacing: var(--tracking-h1);
-  line-height: var(--leading-h1);
-}
-
-.exp__sub { font-size: var(--text-body); color: var(--ink-4); }
-
-/* --- Month stepper ------------------------------------------------------ */
-.exp__month {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-control);
-  background: var(--surface);
-}
-
-.exp__step {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: var(--r-tag);
-  background: none;
-  color: var(--ink-4);
-  cursor: pointer;
-  transition: background-color var(--dur-state) ease, color var(--dur-state) ease;
-}
-.exp__step:hover { background: var(--divider); color: var(--ink); }
-.exp__step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-.exp__month-label { padding: 0 var(--sp-10); font-size: var(--text-body-sm); font-weight: 800; color: var(--ink); }
-
 /* --- Layout ------------------------------------------------------------- */
 .exp__grid { display: grid; grid-template-columns: 344px 1fr; gap: var(--sp-18); align-items: start; }
 .exp__right { display: flex; flex-direction: column; gap: var(--sp-18); min-width: 0; }
@@ -600,8 +519,6 @@ watch(activeChurchId, async () => {
 
 @media (max-width: 900px) {
   .exp__grid { grid-template-columns: 1fr; }
-  .exp__head { flex-direction: column; align-items: stretch; gap: var(--sp-12); }
-  .exp__month { align-self: flex-start; }
 }
 
 @media (max-width: 620px) {

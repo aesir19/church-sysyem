@@ -24,7 +24,7 @@ const COLLECTIONS = [
 ]
 
 async function gotoCollections(page) {
-  await authedGoto(page, '/dashboard/collections', {
+  await authedGoto(page, '/dashboard/finance/collections', {
     rpc: { directory_search: DIRECTORY },
     tables: { collections: COLLECTIONS },
   })
