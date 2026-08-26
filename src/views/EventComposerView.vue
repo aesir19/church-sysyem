@@ -22,13 +22,15 @@ import Spinner from '../components/ui/Spinner.vue'
 import { useActiveChurch } from '../composables/useActiveChurch'
 import { useToast } from '../composables/useToast'
 import Toggle from '../components/ui/Toggle.vue'
-import { EVENT_KINDS, createEvent, updateEvent, getEvent, eventLocation } from '../lib/data/events'
+import EventRolesField from '../components/events/EventRolesField.vue'
+import { EVENT_KINDS, createEvent, updateEvent, getEvent, eventLocation, listServiceOccurrences } from '../lib/data/events'
 import {
   createSeries, updateSeries, getSeries, editOccurrence, splitSeries,
-  ruleColumns, countFutureExceptions,
+  ruleColumns, countFutureExceptions, listCalendarOccurrences,
 } from '../lib/data/eventSeries'
-import { describeRule } from '../lib/recurrence'
+import { describeRule, ymd } from '../lib/recurrence'
 import { listRooms, findRoomClashes } from '../lib/data/eventRooms'
+import { listRoster, addRole, updateRole, deleteRole } from '../lib/data/eventRoles'
 import { ensureEventService } from '../lib/data/eventCloseout'
 
 const route = useRoute()
@@ -97,13 +99,108 @@ async function checkRoomClash() {
 // Re-check whenever the room or the time changes — the warning is shown before saving.
 watch(() => [form.value.room_id, form.value.date, form.value.starts, form.value.ends], checkRoomClash)
 
+// --- staffing: roles to fill + the publish-readiness rail (frame 6c) ---------
+// Roles are a one-off event's own event_roles rows. A repeating series has no event row to
+// hang them on, and an occurrence edit isn't where they're created — so the whole staffing
+// rail shows only for a new one-off or a one-off edit, mirroring how the room fields hide.
+const showStaffing = computed(() => (isNew.value && !form.value.repeats) || isOneOffEdit.value)
+// The roles the field edits (local until save). Each: { _key, id, label, count_required,
+// requires_finance, note }. `id` is null for one added here, set for one loaded from the event.
+const roles = ref([])
+const loadedRoles = ref([])            // snapshot for the add/update/delete diff on an edit
+const rosterFillById = ref({})         // roleId → people already assigned (edit only, for the rail)
+
+let roleKeySeq = 0
+function roleKey() { return `L${++roleKeySeq}` }
+
+// Readiness (the "BEFORE IT CAN BE PUBLISHED" rail). Advisory, not a hard gate — the Publish
+// button uses canPublish. Each item: { key, label, sub, state: 'done' | 'todo' | 'neutral' }.
+const readiness = computed(() => {
+  const items = []
+  const placeOk = canPublish.value
+  items.push({
+    key: 'when', label: 'Name, date and place',
+    sub: placeOk ? 'all set' : 'name, date and time still needed',
+    state: placeOk ? 'done' : 'todo',
+  })
+  const hasDesc = !!form.value.description.trim()
+  items.push({
+    key: 'desc', label: 'Description members will read',
+    sub: hasDesc ? 'written' : 'not written yet',
+    state: hasDesc ? 'done' : 'todo',
+  })
+  const required = roles.value.reduce((s, r) => s + (Number(r.count_required) || 0), 0)
+  if (!required) {
+    items.push({ key: 'roles', label: 'Roles filled', sub: 'no roles added yet', state: 'neutral' })
+  } else {
+    const filled = roles.value.reduce((s, r) => {
+      const have = r.id ? (rosterFillById.value[r.id] || 0) : 0
+      return s + Math.min(have, Number(r.count_required) || 0)
+    }, 0)
+    const gap = required - filled
+    items.push({
+      key: 'roles', label: 'Roles filled',
+      sub: gap > 0 ? `${gap} of ${required} still unassigned` : 'all assigned',
+      state: gap > 0 ? 'todo' : 'done',
+    })
+  }
+  return items
+})
+
+// "THAT DAY" — what else is already on the chosen date, so the day isn't double-booked. Pulls
+// the same three sources the calendar overlays (real events, worked-out series occurrences,
+// service times), the current event excluded. We surface them; we don't auto-move anything.
+const dayNote = ref('')
+async function refreshDayNote() {
+  dayNote.value = ''
+  if (!showStaffing.value || !form.value.date || !activeChurchId.value) return
+  const from = new Date(`${form.value.date}T00:00:00`)
+  const to = new Date(from); to.setDate(to.getDate() + 1)
+  const fromIso = from.toISOString(); const toIso = to.toISOString()
+  // listCalendarOccurrences already unions the day's real one-off events, series exceptions, and
+  // worked-out series occurrences; service times come from the members-safe schedule RPC.
+  const [occRes, svc] = await Promise.all([
+    listCalendarOccurrences({ churchId: activeChurchId.value, from: fromIso, to: toIso }),
+    listServiceOccurrences({ churchId: activeChurchId.value, from: fromIso, to: toIso }),
+  ])
+  const names = []
+  for (const it of occRes?.items || []) {
+    if (it.id && it.id === editId.value) continue    // don't count the event being edited
+    if (it.status === 'cancelled') continue
+    names.push(it.title)
+  }
+  for (const s of svc || []) names.push(s.title)
+  const pretty = from.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })  // "22 August"
+  const unique = [...new Set(names.filter(Boolean))]
+  dayNote.value = unique.length
+    ? `Also on ${pretty}: ${unique.join(', ')}.`
+    : `Nothing else on ${pretty}.`
+}
+watch(() => [form.value.date, showStaffing.value, activeChurchId.value], refreshDayNote)
+
 onMounted(async () => {
   await ensureLoaded()
   const roomRes = await listRooms({ churchId: activeChurchId.value })
   rooms.value = roomRes.ok ? roomRes.rooms : []
-  if (isOneOffEdit.value) return loadOneOff()
-  if (seriesId.value) return loadSeries()
+  if (isOneOffEdit.value) { await loadOneOff() }
+  else if (seriesId.value) { await loadSeries() }
+  refreshDayNote()
 })
+
+// The roles an existing one-off already declares (created here or on the detail roster) — loaded
+// so the composer edits the same rows, with the roster's fill counts for the readiness rail.
+async function loadRolesFor(eventId) {
+  const res = await listRoster({ eventId })
+  const list = res.ok ? res.roles : []
+  loadedRoles.value = list.map((r) => ({
+    _key: roleKey(), id: r.id, label: r.label,
+    count_required: r.count_required, requires_finance: r.requires_finance, note: r.note,
+  }))
+  roles.value = loadedRoles.value.map((r) => ({ ...r }))
+  const fill = {}
+  for (const r of list) fill[r.id] = Math.min(r.filled ?? 0, r.count_required)
+  rosterFillById.value = fill
+}
 
 async function loadOneOff() {
   loading.value = true
@@ -114,13 +211,16 @@ async function loadOneOff() {
     wasPublished.value = e.status === 'published'
     form.value = { ...form.value,
       title: e.title, kind: e.kind,
-      date: e.starts_at ? e.starts_at.slice(0, 10) : '',
+      // LOCAL calendar day — the time below is loaded local too, and starts_at is a UTC instant,
+      // so slicing its ISO string would read a day early for an early-morning Manila event.
+      date: e.starts_at ? ymd(new Date(e.starts_at)) : '',
       starts: e.starts_at ? toTimeInput(e.starts_at) : '',
       ends: e.ends_at ? toTimeInput(e.ends_at) : '',
       location: e.location || '', run_by: e.run_by || '',
       description: e.description || '', projected_budget: e.projected_budget ?? '',
       room_id: e.room_id || '', attendance_tracked: !!e.attendance_tracked,
     }
+    await loadRolesFor(e.id)
   } else { errorMsg.value = res.message }
   loading.value = false
 }
@@ -239,6 +339,41 @@ function seriesPayload() {
   return { ...sharedFields(), ...ruleColumns(buildRule()) }
 }
 
+// Reconcile the roles field against what the event had: delete the ones dropped, add the new
+// ones, update the changed. A one-off only (a series has no event row). Returns { ok }; a
+// failed role write is surfaced as a soft toast — it never undoes the event save.
+async function persistRoles(eventId, churchId) {
+  let ok = true
+  const currentIds = new Set(roles.value.filter((r) => r.id).map((r) => r.id))
+  for (const r of loadedRoles.value) {
+    if (r.id && !currentIds.has(r.id)) {
+      const res = await deleteRole(r.id); if (!res.ok) ok = false
+    }
+  }
+  const loadedById = new Map(loadedRoles.value.map((r) => [r.id, r]))
+  for (const r of roles.value) {
+    const payload = {
+      label: r.label,
+      count_required: Math.max(1, Number(r.count_required) || 1),
+      requires_finance: !!r.requires_finance,
+      note: r.note || null,
+    }
+    if (!r.id) {
+      const res = await addRole({
+        eventId, churchId, label: payload.label, countRequired: payload.count_required,
+        requiresFinance: payload.requires_finance, note: payload.note,
+      })
+      if (!res.ok) ok = false
+    } else {
+      const was = loadedById.get(r.id)
+      const changed = was && (was.label !== payload.label || was.count_required !== payload.count_required
+        || was.requires_finance !== payload.requires_finance || (was.note || null) !== payload.note)
+      if (changed) { const res = await updateRole(r.id, payload); if (!res.ok) ok = false }
+    }
+  }
+  return { ok }
+}
+
 // --- submit ---------------------------------------------------------------
 async function submit(publish) {
   if (saving.value) return
@@ -268,6 +403,12 @@ async function submit(publish) {
 
   showToast(publish ? 'Saved and published' : 'Saved as draft')
   const saved = res.rows[0]
+  // Persist the "Roles to fill" the same event carries (frame 6c). One-off only — a series has
+  // no event row. A role write that fails is soft: the event is already saved.
+  if (saved?.id && !form.value.repeats && !isSeriesEdit.value) {
+    const rres = await persistRoles(saved.id, saved.church_id || activeChurchId.value)
+    if (!rres.ok) showToast('Event saved, but some roles could not be saved.', 'error')
+  }
   // Q17: publishing a "track attendance" one-off provisions its ad-hoc service so live
   // check-in is ready (window: start−2h .. end+1h). Best-effort — a failure here does not
   // undo the save; the closeout panel will ensure it again if needed.
@@ -333,7 +474,10 @@ function toTimeInput(iso) {
 </script>
 
 <template>
-  <div class="cmp">
+  <div
+    class="cmp"
+    :class="{ 'cmp--railed': showStaffing }"
+  >
     <h1 class="cmp__title">
       {{ heading }}
     </h1>
@@ -352,410 +496,467 @@ function toTimeInput(iso) {
       v-else
       class="cmp__form"
     >
-      <div class="cmp__body">
-        <Alert
-          v-if="errorMsg"
-          tone="danger"
-          class="cmp__alert"
-        >
-          {{ errorMsg }}
-        </Alert>
+      <div class="cmp__layout">
+        <div class="cmp__body">
+          <Alert
+            v-if="errorMsg"
+            tone="danger"
+            class="cmp__alert"
+          >
+            {{ errorMsg }}
+          </Alert>
 
-        <div class="cmp__sec">
-          <h2 class="cmp__sec-title">
-            What it is
-          </h2>
-          <p class="cmp__sec-help">
-            The name is what members see in their calendar.
-          </p>
-        </div>
-        <div class="cmp__grid cmp__grid--2">
-          <label class="cmp__field cmp__field--wide">
-            <span class="cmp__label">Name of the event</span>
-            <input
-              v-model="form.title"
-              class="cmp__input"
-              type="text"
-              placeholder="e.g. Youth outreach — San Roque"
-            >
-          </label>
-          <label class="cmp__field">
-            <span class="cmp__label">Kind</span>
-            <select
-              v-model="form.kind"
-              class="cmp__input"
-            >
-              <option
-                v-for="k in EVENT_KINDS"
-                :key="k.value"
-                :value="k.value"
-              >{{ k.label }}</option>
-            </select>
-          </label>
-        </div>
+          <div class="cmp__sec">
+            <h2 class="cmp__sec-title">
+              What it is
+            </h2>
+            <p class="cmp__sec-help">
+              The name is what members see in their calendar.
+            </p>
+          </div>
+          <div class="cmp__grid cmp__grid--2">
+            <label class="cmp__field cmp__field--wide">
+              <span class="cmp__label">Name of the event</span>
+              <input
+                v-model="form.title"
+                class="cmp__input"
+                type="text"
+                placeholder="e.g. Youth outreach — San Roque"
+              >
+            </label>
+            <label class="cmp__field">
+              <span class="cmp__label">Kind</span>
+              <select
+                v-model="form.kind"
+                class="cmp__input"
+              >
+                <option
+                  v-for="k in EVENT_KINDS"
+                  :key="k.value"
+                  :value="k.value"
+                >{{ k.label }}</option>
+              </select>
+            </label>
+          </div>
 
-        <div class="cmp__sec">
-          <h2 class="cmp__sec-title">
-            When
-          </h2>
-          <p class="cmp__sec-help">
-            A one-off unless you set it to repeat.
-          </p>
-        </div>
-        <div class="cmp__grid cmp__grid--3">
-          <label class="cmp__field">
-            <span class="cmp__label">{{ form.repeats ? 'Starts on' : 'Date' }}</span>
-            <input
-              v-model="form.date"
-              class="cmp__input"
-              type="date"
-            >
-          </label>
-          <label class="cmp__field">
-            <span class="cmp__label">Starts</span>
-            <input
-              v-model="form.starts"
-              class="cmp__input"
-              type="time"
-            >
-          </label>
-          <label class="cmp__field">
-            <span class="cmp__label">Ends</span>
-            <input
-              v-model="form.ends"
-              class="cmp__input"
-              type="time"
-            >
-          </label>
-        </div>
+          <div class="cmp__sec">
+            <h2 class="cmp__sec-title">
+              When
+            </h2>
+            <p class="cmp__sec-help">
+              A one-off unless you set it to repeat.
+            </p>
+          </div>
+          <div class="cmp__grid cmp__grid--3">
+            <label class="cmp__field">
+              <span class="cmp__label">{{ form.repeats ? 'Starts on' : 'Date' }}</span>
+              <input
+                v-model="form.date"
+                class="cmp__input"
+                type="date"
+              >
+            </label>
+            <label class="cmp__field">
+              <span class="cmp__label">Starts</span>
+              <input
+                v-model="form.starts"
+                class="cmp__input"
+                type="time"
+              >
+            </label>
+            <label class="cmp__field">
+              <span class="cmp__label">Ends</span>
+              <input
+                v-model="form.ends"
+                class="cmp__input"
+                type="time"
+              >
+            </label>
+          </div>
 
-        <!-- Repeat section (frame 6c). Hidden on a one-off edit and an occurrence edit; those
+          <!-- Repeat section (frame 6c). Hidden on a one-off edit and an occurrence edit; those
              are not where the rule is created or changed. -->
-        <div
-          v-if="isNew || isSeriesEdit"
-          class="cmp__repeat"
-        >
-          <label
-            v-if="isNew"
-            class="cmp__toggle"
-          >
-            <input
-              v-model="form.repeats"
-              type="checkbox"
-            >
-            <span>This event repeats</span>
-          </label>
-
           <div
-            v-if="form.repeats"
-            class="cmp__repeat-body"
+            v-if="isNew || isSeriesEdit"
+            class="cmp__repeat"
           >
-            <div class="cmp__grid cmp__grid--3">
-              <label class="cmp__field">
-                <span class="cmp__label">How often</span>
-                <select
-                  v-model="form.cadence"
-                  class="cmp__input"
+            <label
+              v-if="isNew"
+              class="cmp__toggle"
+            >
+              <input
+                v-model="form.repeats"
+                type="checkbox"
+              >
+              <span>This event repeats</span>
+            </label>
+
+            <div
+              v-if="form.repeats"
+              class="cmp__repeat-body"
+            >
+              <div class="cmp__grid cmp__grid--3">
+                <label class="cmp__field">
+                  <span class="cmp__label">How often</span>
+                  <select
+                    v-model="form.cadence"
+                    class="cmp__input"
+                  >
+                    <option value="weekly">Every week / few weeks</option>
+                    <option value="monthly">Every month / few months</option>
+                    <option value="twice_monthly">Twice a month</option>
+                  </select>
+                </label>
+                <label
+                  v-if="form.cadence !== 'twice_monthly'"
+                  class="cmp__field"
                 >
-                  <option value="weekly">Every week / few weeks</option>
-                  <option value="monthly">Every month / few months</option>
-                  <option value="twice_monthly">Twice a month</option>
-                </select>
-              </label>
+                  <span class="cmp__label">Every</span>
+                  <div class="cmp__inline">
+                    <input
+                      v-model="form.intervalN"
+                      class="cmp__input cmp__input--num"
+                      type="number"
+                      min="1"
+                      max="24"
+                    >
+                    <span class="cmp__unit">{{ form.cadence === 'weekly' ? 'week(s)' : 'month(s)' }}</span>
+                  </div>
+                </label>
+                <label
+                  v-if="form.cadence !== 'weekly'"
+                  class="cmp__field"
+                >
+                  <span class="cmp__label">On the</span>
+                  <select
+                    v-model="form.anchor"
+                    class="cmp__input"
+                  >
+                    <option value="weekday">Same weekday (e.g. 3rd Saturday)</option>
+                    <option value="date">Same date (e.g. the 15th)</option>
+                  </select>
+                </label>
+              </div>
+
+              <!-- Which weekday-of-month, incl. "last" — lets a "last Saturday" series exist. -->
               <label
-                v-if="form.cadence !== 'twice_monthly'"
+                v-if="form.cadence === 'monthly' && form.anchor === 'weekday'"
                 class="cmp__field"
               >
-                <span class="cmp__label">Every</span>
-                <div class="cmp__inline">
+                <span class="cmp__label">Which one</span>
+                <select
+                  v-model="form.weekOfMonth1"
+                  class="cmp__input"
+                >
+                  <option value="auto">Whichever the start date falls on</option>
+                  <option
+                    v-for="n in NTHS"
+                    :key="n.v"
+                    :value="n.v"
+                  >The {{ n.l }} of the month</option>
+                </select>
+              </label>
+
+              <!-- Twice-a-month needs a SECOND day. -->
+              <div
+                v-if="form.cadence === 'twice_monthly'"
+                class="cmp__grid cmp__grid--2"
+              >
+                <label
+                  v-if="form.anchor === 'date'"
+                  class="cmp__field"
+                >
+                  <span class="cmp__label">…and also on day</span>
                   <input
-                    v-model="form.intervalN"
+                    v-model="form.dayOfMonth2"
                     class="cmp__input cmp__input--num"
                     type="number"
                     min="1"
-                    max="24"
+                    max="31"
+                    placeholder="e.g. 15"
                   >
-                  <span class="cmp__unit">{{ form.cadence === 'weekly' ? 'week(s)' : 'month(s)' }}</span>
-                </div>
-              </label>
-              <label
-                v-if="form.cadence !== 'weekly'"
-                class="cmp__field"
-              >
-                <span class="cmp__label">On the</span>
-                <select
-                  v-model="form.anchor"
-                  class="cmp__input"
+                </label>
+                <div
+                  v-else
+                  class="cmp__field"
                 >
-                  <option value="weekday">Same weekday (e.g. 3rd Saturday)</option>
-                  <option value="date">Same date (e.g. the 15th)</option>
-                </select>
-              </label>
-            </div>
-
-            <!-- Which weekday-of-month, incl. "last" — lets a "last Saturday" series exist. -->
-            <label
-              v-if="form.cadence === 'monthly' && form.anchor === 'weekday'"
-              class="cmp__field"
-            >
-              <span class="cmp__label">Which one</span>
-              <select
-                v-model="form.weekOfMonth1"
-                class="cmp__input"
-              >
-                <option value="auto">Whichever the start date falls on</option>
-                <option
-                  v-for="n in NTHS"
-                  :key="n.v"
-                  :value="n.v"
-                >The {{ n.l }} of the month</option>
-              </select>
-            </label>
-
-            <!-- Twice-a-month needs a SECOND day. -->
-            <div
-              v-if="form.cadence === 'twice_monthly'"
-              class="cmp__grid cmp__grid--2"
-            >
-              <label
-                v-if="form.anchor === 'date'"
-                class="cmp__field"
-              >
-                <span class="cmp__label">…and also on day</span>
-                <input
-                  v-model="form.dayOfMonth2"
-                  class="cmp__input cmp__input--num"
-                  type="number"
-                  min="1"
-                  max="31"
-                  placeholder="e.g. 15"
-                >
-              </label>
-              <div
-                v-else
-                class="cmp__field"
-              >
-                <span class="cmp__label">…and also the</span>
-                <div class="cmp__inline">
-                  <select
-                    v-model.number="form.weekOfMonth2"
-                    class="cmp__input"
-                  >
-                    <option
-                      v-for="n in NTHS"
-                      :key="n.v"
-                      :value="n.v"
+                  <span class="cmp__label">…and also the</span>
+                  <div class="cmp__inline">
+                    <select
+                      v-model.number="form.weekOfMonth2"
+                      class="cmp__input"
                     >
-                      {{ n.l }}
-                    </option>
-                  </select>
-                  <select
-                    v-model.number="form.weekday2"
-                    class="cmp__input"
-                  >
-                    <option
-                      v-for="(w, i) in WEEKDAYS"
-                      :key="w"
-                      :value="i"
+                      <option
+                        v-for="n in NTHS"
+                        :key="n.v"
+                        :value="n.v"
+                      >
+                        {{ n.l }}
+                      </option>
+                    </select>
+                    <select
+                      v-model.number="form.weekday2"
+                      class="cmp__input"
                     >
-                      {{ w }}
-                    </option>
-                  </select>
+                      <option
+                        v-for="(w, i) in WEEKDAYS"
+                        :key="w"
+                        :value="i"
+                      >
+                        {{ w }}
+                      </option>
+                    </select>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div class="cmp__grid cmp__grid--2">
-              <label class="cmp__field">
-                <span class="cmp__label">Ends</span>
-                <select
-                  v-model="form.endMode"
-                  class="cmp__input"
+              <div class="cmp__grid cmp__grid--2">
+                <label class="cmp__field">
+                  <span class="cmp__label">Ends</span>
+                  <select
+                    v-model="form.endMode"
+                    class="cmp__input"
+                  >
+                    <option value="never">Never — keeps repeating</option>
+                    <option value="on">On a date</option>
+                    <option value="after">After a number of times</option>
+                  </select>
+                </label>
+                <label
+                  v-if="form.endMode === 'on'"
+                  class="cmp__field"
                 >
-                  <option value="never">Never — keeps repeating</option>
-                  <option value="on">On a date</option>
-                  <option value="after">After a number of times</option>
-                </select>
-              </label>
-              <label
-                v-if="form.endMode === 'on'"
-                class="cmp__field"
-              >
-                <span class="cmp__label">End date</span>
-                <input
-                  v-model="form.endsOn"
-                  class="cmp__input"
-                  type="date"
+                  <span class="cmp__label">End date</span>
+                  <input
+                    v-model="form.endsOn"
+                    class="cmp__input"
+                    type="date"
+                  >
+                </label>
+                <label
+                  v-if="form.endMode === 'after'"
+                  class="cmp__field"
                 >
-              </label>
-              <label
-                v-if="form.endMode === 'after'"
-                class="cmp__field"
-              >
-                <span class="cmp__label">Number of times</span>
-                <input
-                  v-model="form.countN"
-                  class="cmp__input cmp__input--num"
-                  type="number"
-                  min="1"
-                >
-              </label>
-            </div>
+                  <span class="cmp__label">Number of times</span>
+                  <input
+                    v-model="form.countN"
+                    class="cmp__input cmp__input--num"
+                    type="number"
+                    min="1"
+                  >
+                </label>
+              </div>
 
-            <p
-              v-if="rulePreview"
-              class="cmp__preview"
-            >
-              <span aria-hidden="true">⟳</span> {{ rulePreview }}
+              <p
+                v-if="rulePreview"
+                class="cmp__preview"
+              >
+                <span aria-hidden="true">⟳</span> {{ rulePreview }}
+              </p>
+            </div>
+          </div>
+
+          <Alert
+            v-if="isPastOccurrence"
+            tone="warning"
+          >
+            This date has already happened. Past dates are kept as they were and can’t be changed.
+          </Alert>
+
+          <!-- Occurrence-edit scope (frame 7d), the owner's two-option model. -->
+          <div
+            v-if="isOccurrenceEdit && !isPastOccurrence"
+            class="cmp__scope"
+          >
+            <span class="cmp__label">This change is for…</span>
+            <label class="cmp__radio">
+              <input
+                v-model="form.scope"
+                type="radio"
+                value="this"
+              >
+              <span><strong>This date only.</strong> Every other date stays as it is.</span>
+            </label>
+            <label class="cmp__radio">
+              <input
+                v-model="form.scope"
+                type="radio"
+                value="after"
+              >
+              <span><strong>This date and the ones after it.</strong> Earlier dates are left untouched.</span>
+            </label>
+          </div>
+
+          <div class="cmp__sec">
+            <h2 class="cmp__sec-title">
+              Where, and who runs it
+            </h2>
+            <p class="cmp__sec-help">
+              The ministry named here is where the event’s roles are drawn from.
             </p>
           </div>
-        </div>
+          <div class="cmp__grid cmp__grid--2">
+            <label class="cmp__field">
+              <span class="cmp__label">Where</span>
+              <input
+                v-model="form.location"
+                class="cmp__input"
+                type="text"
+                placeholder="Main hall"
+              >
+            </label>
+            <label class="cmp__field">
+              <span class="cmp__label">Run by</span>
+              <input
+                v-model="form.run_by"
+                class="cmp__input"
+                type="text"
+                placeholder="Youth Ministry"
+              >
+            </label>
+          </div>
 
-        <Alert
-          v-if="isPastOccurrence"
-          tone="warning"
-        >
-          This date has already happened. Past dates are kept as they were and can’t be changed.
-        </Alert>
-
-        <!-- Occurrence-edit scope (frame 7d), the owner's two-option model. -->
-        <div
-          v-if="isOccurrenceEdit && !isPastOccurrence"
-          class="cmp__scope"
-        >
-          <span class="cmp__label">This change is for…</span>
-          <label class="cmp__radio">
-            <input
-              v-model="form.scope"
-              type="radio"
-              value="this"
-            >
-            <span><strong>This date only.</strong> Every other date stays as it is.</span>
-          </label>
-          <label class="cmp__radio">
-            <input
-              v-model="form.scope"
-              type="radio"
-              value="after"
-            >
-            <span><strong>This date and the ones after it.</strong> Earlier dates are left untouched.</span>
-          </label>
-        </div>
-
-        <div class="cmp__sec">
-          <h2 class="cmp__sec-title">
-            Where, and who runs it
-          </h2>
-          <p class="cmp__sec-help">
-            The ministry named here is where the event’s roles are drawn from.
-          </p>
-        </div>
-        <div class="cmp__grid cmp__grid--2">
-          <label class="cmp__field">
-            <span class="cmp__label">Where</span>
-            <input
-              v-model="form.location"
-              class="cmp__input"
-              type="text"
-              placeholder="Main hall"
-            >
-          </label>
-          <label class="cmp__field">
-            <span class="cmp__label">Run by</span>
-            <input
-              v-model="form.run_by"
-              class="cmp__input"
-              type="text"
-              placeholder="Youth Ministry"
-            >
-          </label>
-        </div>
-
-        <!-- Room (structured) + soft double-booking check (frames 7j, 7b). One-off events
+          <!-- Room (structured) + soft double-booking check (frames 7j, 7b). One-off events
              only — a series' occurrences pick a room once materialised. -->
-        <div
-          v-if="showRoomFields && rooms.length"
-          class="cmp__field"
-        >
-          <span class="cmp__label">Room</span>
-          <select
-            v-model="form.room_id"
-            class="cmp__input"
+          <div
+            v-if="showRoomFields && rooms.length"
+            class="cmp__field"
           >
-            <option value="">
-              No room needed
-            </option>
-            <option
-              v-for="r in rooms"
-              :key="r.id"
-              :value="r.id"
-              :disabled="!r.is_bookable"
+            <span class="cmp__label">Room</span>
+            <select
+              v-model="form.room_id"
+              class="cmp__input"
             >
-              {{ r.label }}{{ r.capacity ? ` · seats ${r.capacity}` : '' }}{{ r.is_bookable ? '' : ' · not bookable' }}
-            </option>
-          </select>
-        </div>
-        <Alert
-          v-if="showRoomFields && roomClashes.length"
-          tone="warning"
-        >
-          That room is already booked at this time:
-          <span
-            v-for="c in roomClashes"
-            :key="c.eventId"
-          >“{{ c.title }}”</span>. You can save anyway.
-        </Alert>
-
-        <!-- Track attendance switch (Q17): provisions live check-in at publish. -->
-        <div
-          v-if="showRoomFields"
-          class="cmp__track"
-        >
-          <Toggle v-model="form.attendance_tracked">
-            Track attendance for this event
-          </Toggle>
-          <p class="cmp__track-note">
-            Opens a check-in sheet 2 hours before and closes it 1 hour after the event.
-          </p>
-        </div>
-
-        <div class="cmp__sec">
-          <h2 class="cmp__sec-title">
-            What members will read
-          </h2>
-          <p class="cmp__sec-help">
-            Shown under the event in the calendar and in the reminder.
-          </p>
-        </div>
-        <label class="cmp__field">
-          <textarea
-            v-model="form.description"
-            class="cmp__input cmp__textarea"
-            rows="3"
-            aria-label="What members will read"
-            placeholder="A short description members will see once it is published."
-          />
-        </label>
-
-        <div class="cmp__sec">
-          <h2 class="cmp__sec-title">
-            Budget
-          </h2>
-          <p class="cmp__sec-help">
-            Shown for planning only — there is no approval step.
-          </p>
-        </div>
-        <label class="cmp__field cmp__field--budget">
-          <input
-            v-model="form.projected_budget"
-            class="cmp__input"
-            type="number"
-            min="0"
-            step="0.01"
-            aria-label="Projected budget"
-            placeholder="0.00"
+              <option value="">
+                No room needed
+              </option>
+              <option
+                v-for="r in rooms"
+                :key="r.id"
+                :value="r.id"
+                :disabled="!r.is_bookable"
+              >
+                {{ r.label }}{{ r.capacity ? ` · seats ${r.capacity}` : '' }}{{ r.is_bookable ? '' : ' · not bookable' }}
+              </option>
+            </select>
+          </div>
+          <Alert
+            v-if="showRoomFields && roomClashes.length"
+            tone="warning"
           >
-        </label>
+            That room is already booked at this time:
+            <span
+              v-for="c in roomClashes"
+              :key="c.eventId"
+            >“{{ c.title }}”</span>. You can save anyway.
+          </Alert>
+
+          <!-- Track attendance switch (Q17): provisions live check-in at publish. -->
+          <div
+            v-if="showRoomFields"
+            class="cmp__track"
+          >
+            <Toggle v-model="form.attendance_tracked">
+              Track attendance for this event
+            </Toggle>
+            <p class="cmp__track-note">
+              Opens a check-in sheet 2 hours before and closes it 1 hour after the event.
+            </p>
+          </div>
+
+          <div class="cmp__sec">
+            <h2 class="cmp__sec-title">
+              What members will read
+            </h2>
+            <p class="cmp__sec-help">
+              Shown under the event in the calendar and in the reminder.
+            </p>
+          </div>
+          <label class="cmp__field">
+            <textarea
+              v-model="form.description"
+              class="cmp__input cmp__textarea"
+              rows="3"
+              aria-label="What members will read"
+              placeholder="A short description members will see once it is published."
+            />
+          </label>
+
+          <div class="cmp__sec">
+            <h2 class="cmp__sec-title">
+              Budget
+            </h2>
+            <p class="cmp__sec-help">
+              Shown for planning only — there is no approval step.
+            </p>
+          </div>
+          <label class="cmp__field cmp__field--budget">
+            <input
+              v-model="form.projected_budget"
+              class="cmp__input"
+              type="number"
+              min="0"
+              step="0.01"
+              aria-label="Projected budget"
+              placeholder="0.00"
+            >
+          </label>
+
+          <!-- Roles to fill (6c). One-off only — a series has no event row to hang roles on, so
+             this hides when Repeats is on, the same rule the room fields follow. -->
+          <template v-if="showStaffing">
+            <div class="cmp__sec">
+              <h2 class="cmp__sec-title">
+                Roles to fill
+              </h2>
+              <p class="cmp__sec-help">
+                Add the roles now and the event tells you when it is ready to publish.
+              </p>
+            </div>
+            <EventRolesField v-model="roles" />
+          </template>
+        </div>
+
+        <!-- Right rail (6c): what is left before this can be published, and what else is on the
+           chosen day. One-off only, alongside the roles it reports on. -->
+        <aside
+          v-if="showStaffing"
+          class="cmp__rail"
+        >
+          <div class="cmp__rail-block">
+            <h3 class="cmp__rail-title">
+              Before it can be published
+            </h3>
+            <ul class="cmp__ready">
+              <li
+                v-for="r in readiness"
+                :key="r.key"
+                class="cmp__ready-item"
+                :class="`is-${r.state}`"
+              >
+                <span
+                  class="cmp__ready-mark"
+                  aria-hidden="true"
+                >{{ r.state === 'done' ? '✓' : (r.state === 'todo' ? '!' : '•') }}</span>
+                <span class="cmp__ready-body">
+                  <span class="cmp__ready-label">{{ r.label }}</span>
+                  <span class="cmp__ready-sub">{{ r.sub }}</span>
+                </span>
+              </li>
+            </ul>
+          </div>
+          <div
+            v-if="dayNote"
+            class="cmp__rail-block"
+          >
+            <h3 class="cmp__rail-title">
+              That day
+            </h3>
+            <p class="cmp__daynote">
+              {{ dayNote }}
+            </p>
+          </div>
+        </aside>
       </div>
 
       <div class="cmp__foot">
@@ -829,6 +1030,9 @@ function toTimeInput(iso) {
    modal — its commit is pinned to the form foot, per 5b — but it sits in the middle, not hugging
    the left with dead space beside it). */
 .cmp { display: flex; flex-direction: column; gap: var(--sp-5); width: 100%; max-width: 760px; margin: 0 auto; }
+/* When the staffing rail shows (a one-off), the page widens to seat the form + rail side by side
+   and stays centred; without it, it stays the narrow single column. */
+.cmp--railed { max-width: 1080px; }
 .cmp__title { margin: 0; font-size: var(--text-h1); font-weight: 800; letter-spacing: -0.03em; }
 .cmp__sub { margin: var(--sp-5) 0 var(--sp-16); font-size: var(--text-body); color: var(--ink-5); }
 .cmp__loading { display: grid; place-items: center; min-height: 200px; }
@@ -836,8 +1040,28 @@ function toTimeInput(iso) {
 /* Borderless: the form IS the page, not a card or a modal — no border, no shadow, no surface.
    Structure comes from the section headers and the underline fields below. */
 .cmp__form { display: flex; flex-direction: column; }
+/* Form body left, readiness rail right; the foot spans full width below both. */
+.cmp__layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-32); }
+.cmp--railed .cmp__layout { grid-template-columns: minmax(0, 1fr) 264px; }
 .cmp__body { padding: 0; display: flex; flex-direction: column; gap: var(--sp-18); }
 .cmp__alert { margin-bottom: var(--sp-5); }
+
+/* Readiness rail (6c). Sticks under the header as the form scrolls, and reads as quiet guidance —
+   a checklist of what is still open, and what else is on the day. */
+.cmp__rail { display: flex; flex-direction: column; gap: var(--sp-22); align-self: start; position: sticky; top: var(--sp-16); }
+.cmp__rail-block { display: flex; flex-direction: column; gap: var(--sp-10); }
+.cmp__rail-title { margin: 0; font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-5); }
+.cmp__ready { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-10); }
+.cmp__ready-item { display: flex; align-items: flex-start; gap: var(--sp-8); }
+.cmp__ready-mark { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; margin-top: 1px; border-radius: 50%; font-size: 10px; font-weight: 900; }
+.cmp__ready-item.is-done .cmp__ready-mark { background: var(--accent-tint, #e9f8ff); color: var(--accent); }
+.cmp__ready-item.is-todo .cmp__ready-mark { background: var(--danger-tint, #fdeef0); color: var(--accent-deep, #aa0b56); }
+.cmp__ready-item.is-neutral .cmp__ready-mark { background: var(--surface-2, #f2f4f7); color: var(--ink-5); }
+.cmp__ready-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cmp__ready-label { font-size: var(--text-body-sm); font-weight: 700; color: var(--ink); }
+.cmp__ready-item.is-todo .cmp__ready-label { color: var(--accent-deep, #aa0b56); }
+.cmp__ready-sub { font-size: var(--text-meta); color: var(--ink-5); }
+.cmp__daynote { margin: 0; font-size: var(--text-body-sm); color: var(--ink-3); line-height: 1.55; }
 
 /* Section header (What it is / When / …) with a divider above every section but the first. */
 .cmp__sec { display: flex; flex-direction: column; gap: 2px; padding-top: var(--sp-20); border-top: 1px solid var(--border-subtle, var(--border)); }
@@ -880,6 +1104,12 @@ function toTimeInput(iso) {
 .cmp__foot-status { font-size: var(--text-meta); color: var(--ink-5); }
 .cmp__foot-commit { margin-left: auto; display: flex; gap: var(--sp-9); }
 
+/* Below this the rail no longer fits beside the form — it drops under it, and the page narrows. */
+@media (max-width: 900px) {
+  .cmp--railed { max-width: 760px; }
+  .cmp--railed .cmp__layout { grid-template-columns: minmax(0, 1fr); gap: var(--sp-20); }
+  .cmp__rail { position: static; }
+}
 @media (max-width: 640px) {
   .cmp__grid--2, .cmp__grid--3 { grid-template-columns: 1fr; }
   .cmp__foot { flex-direction: column; align-items: stretch; }
