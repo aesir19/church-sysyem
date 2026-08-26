@@ -313,13 +313,13 @@ function fmtWhen(iso) {
 
 <style scoped>
 .asg { display: flex; flex-direction: column; gap: var(--sp-12); }
-.asg__tabs { display: inline-flex; gap: 2px; padding: 3px; background: var(--surface-2, var(--surface)); border: 1px solid var(--border); border-radius: var(--r-control); width: fit-content; }
+.asg__tabs { display: inline-flex; gap: 2px; padding: 3px; background: var(--surface-subtle-2, var(--surface)); border: 1px solid var(--border); border-radius: var(--r-control); width: fit-content; }
 .asg__tab { border: none; background: transparent; padding: 6px 16px; border-radius: calc(var(--r-control) - 3px); font: inherit; font-size: var(--text-body-sm); font-weight: 700; color: var(--ink-5); cursor: pointer; }
 .asg__tab.is-on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-1, 0 1px 2px rgba(0,0,0,.08)); }
 .asg__tab:disabled { opacity: .4; cursor: not-allowed; }
 .asg__results { list-style: none; margin: var(--sp-10) 0 0; padding: 0; max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .asg__result-btn { width: 100%; display: flex; align-items: center; gap: var(--sp-10); padding: var(--sp-9) var(--sp-10); border: 1px solid transparent; border-radius: var(--r-control); background: transparent; font: inherit; text-align: left; cursor: pointer; }
-.asg__result-btn:hover:not(:disabled) { background: var(--surface-2, var(--hover, rgba(0,0,0,.03))); }
+.asg__result-btn:hover:not(:disabled) { background: var(--surface-subtle-2, var(--hover, rgba(0,0,0,.03))); }
 .asg__result.is-sel .asg__result-btn { border-color: var(--accent); background: var(--accent-soft, rgba(0,0,0,.04)); }
 .asg__result-btn:disabled { cursor: not-allowed; opacity: .6; }
 .asg__result-name { flex: 1; min-width: 0; font-size: var(--text-body-sm); font-weight: 600; }

@@ -169,7 +169,7 @@ async function doDelete(room) {
 .rm__spacer { flex: 1; }
 .rm__link { border: none; background: none; color: var(--accent); font: inherit; font-size: var(--text-meta); font-weight: 700; cursor: pointer; }
 .rm__icon { border: none; background: none; color: var(--ink-5); cursor: pointer; padding: 4px; border-radius: var(--r-control); }
-.rm__icon:hover { color: var(--danger, #d92d20); background: var(--surface-2, rgba(0,0,0,.04)); }
+.rm__icon:hover { color: var(--danger, #d92d20); background: var(--surface-subtle-2, rgba(0,0,0,.04)); }
 .rm__muted { margin: 0 0 var(--sp-14); font-size: var(--text-body-sm); color: var(--ink-5); }
 .rm__add { padding-top: var(--sp-12); border-top: 1px solid var(--border-subtle, var(--border)); display: flex; flex-direction: column; gap: var(--sp-10); }
 .rm__add-grid { display: grid; grid-template-columns: 1fr 120px; gap: var(--sp-10); }
