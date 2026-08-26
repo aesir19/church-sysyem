@@ -30,10 +30,25 @@ describe('deriveCapabilities', () => {
       'canSeeMemberDetail', 'canWriteMembers', 'canViewFinance', 'canWriteFinance',
       'canSeeContributorIdentity',
       'canViewAttendance', 'canManageAttendance', 'canManageSmallGroups', 'isCrossChurch',
-      'isSmallGroupLeader', 'canBrowseDirectory', 'canRecordJourney',
+      'isSmallGroupLeader', 'canBrowseDirectory', 'canRecordJourney', 'canInvite',
     ]) {
       expect(c[key]).toBe(false)
     }
+  })
+
+  // 0037. Inviting is Super Admin or Church Leader. The SQL (invite_member) is the
+  // enforcement; this flag only decides whether the Invite User surface appears.
+  describe('canInvite', () => {
+    it('is true for a Super Admin and a Church Leader', () => {
+      expect(deriveCapabilities(perm('super_admin', { is_super_admin: true })).canInvite).toBe(true)
+      expect(deriveCapabilities(perm('church_leader', { is_church_leader: true })).canInvite).toBe(true)
+    })
+
+    it('is false for a Head Pastor, a Pastor and a plain member', () => {
+      expect(deriveCapabilities(perm('head_pastor', { is_head_pastor: true })).canInvite).toBe(false)
+      expect(deriveCapabilities(perm('pastor', { is_pastor: true })).canInvite).toBe(false)
+      expect(deriveCapabilities(perm('member')).canInvite).toBe(false)
+    })
   })
 
   // 0028. The safe directory (names + gender + group + journey) is open to every

@@ -1,0 +1,14 @@
+# Supabase CLI project config — greenfield, per ADR-0018.
+#
+# The site is NOT built or deployed by Supabase (GitHub Actions builds it; Netlify
+# is a tripwire). This file exists only so `supabase functions deploy` and
+# `supabase secrets set` have a project to attach to. Set project_id when linking:
+#   supabase link --project-ref <ref>
+project_id = "udfc-church-dashboard"
+
+[functions.invite-user]
+# JWT is verified by the platform before the function runs, so an unauthenticated
+# call never reaches our code. The function still re-derives authority from the
+# forwarded token via the invite_member RPC — the JWT check only proves *someone*
+# is signed in, not that they may invite.
+verify_jwt = true
