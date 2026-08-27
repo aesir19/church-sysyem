@@ -2,10 +2,14 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '../lib/supabase'
 import ExpenseForm from '../components/expenses/ExpenseForm.vue'
+import ExpenseDetailModal from '../components/expenses/ExpenseDetailModal.vue'
+import Badge from '../components/ui/Badge.vue'
 import { defaultMonthKey, getMonthRange, monthKeyFromDate } from '../utils/expensesMonth'
 import { summariseByDescription, largestLine, rankDescriptions } from '../utils/expenseStats'
 import { SHARE_OF_TOTAL_FUNDS } from '../utils/collectivesReport'
 import { formatPeso, formatPesoWhole, formatShare } from '../utils/money'
+import { netSum } from '../utils/financeSign'
+import { buildUnits } from '../utils/financeCorrections'
 import { useActiveChurch } from '../composables/useActiveChurch'
 
 // Expenses — what the church spent, charged against its share of the month's
@@ -17,16 +21,15 @@ import { useActiveChurch } from '../composables/useActiveChurch'
 // way. The month stepper and the page title live in FinanceView's shared header now;
 // the active month arrives as a `month` v-model prop.
 //
-// NO ROW DETAIL DIALOG, and that is a deliberate omission rather than an
-// oversight. The mockup draws the rows with a pointer cursor, but 0009 grants
-// `expenses` SELECT and INSERT only: there is no UPDATE grant and no DELETE
-// policy at all. An expense, once recorded, is permanent. Offering a row that
-// opens would promise a correction the database will refuse, so the rows do not
-// invite a click and the form says so before the money is saved instead.
+// ROW DETAIL + CORRECTIONS (0039). Expenses used to be insert-only, so the rows
+// did not open. They are append-only now: a click opens the record, and "Correct"
+// or "Void" writes a reversal (+ replacement) through correct_expense — the
+// original is never mutated. A reversed/voided record stays in the ledger.
 
 const { activeChurchId, ensureLoaded } = useActiveChurch()
 
-const EXPENSE_COLUMNS = 'id, spent_on, description, amount, notes, created_at'
+const EXPENSE_COLUMNS =
+  'id, spent_on, description, amount, notes, created_at, kind, corrects_id, reason, reason_note'
 
 // How far back the description chips look. Six months of one church's expenses
 // is a couple of hundred rows of a single short column — the cheapest way to
@@ -47,6 +50,15 @@ const currentUserId = ref('')
 const loading = ref(true)
 const errorMessage = ref('')
 
+const detailOpen = ref(false)
+const selected = ref(null)
+
+// Collapse the raw rows into logical records; stats read the live entries so a
+// reversed or voided expense neither double-counts nor shows as its own line.
+const units = computed(() => buildUnits(entries.value))
+const liveEntries = computed(() => units.value.filter((u) => u.live).map((u) => u.live))
+const recordCount = computed(() => units.value.length)
+
 const monthLabel = computed(() => {
   const [year, m] = month.value.split('-')
   if (!year || !m) return ''
@@ -54,9 +66,10 @@ const monthLabel = computed(() => {
     .toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })
 })
 
-const total = computed(() => entries.value.reduce((sum, row) => sum + Number(row.amount || 0), 0))
+// netSum over raw rows equals the sum of the live entries — reversals subtracted.
+const total = computed(() => netSum(entries.value))
 
-const byDescription = computed(() => summariseByDescription(entries.value))
+const byDescription = computed(() => summariseByDescription(liveEntries.value))
 
 const recentDescriptions = computed(() => rankDescriptions(descriptionHistory.value))
 
@@ -68,7 +81,7 @@ const churchShare = computed(() =>
   collectionsTotal.value === null ? null : collectionsTotal.value * SHARE_OF_TOTAL_FUNDS.church
 )
 
-const top = computed(() => largestLine(entries.value))
+const top = computed(() => largestLine(liveEntries.value))
 
 const kpis = computed(() => {
   const descriptions = byDescription.value.length
@@ -79,7 +92,7 @@ const kpis = computed(() => {
       key: 'spent',
       label: 'Spent this month',
       value: formatPesoWhole(total.value),
-      sub: `${entries.value.length} ${entries.value.length === 1 ? 'entry' : 'entries'} · ${descriptions} ${descriptions === 1 ? 'description' : 'descriptions'}`,
+      sub: `${recordCount.value} ${recordCount.value === 1 ? 'record' : 'records'} · ${descriptions} ${descriptions === 1 ? 'description' : 'descriptions'}`,
       tone: 'ink'
     },
     {
@@ -116,6 +129,42 @@ function formatDate (value) {
   })
 }
 
+function formatStamp (value) {
+  if (!value) return ''
+  return new Date(value).toLocaleString('en-PH', {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+  })
+}
+
+function normalise (row) {
+  return {
+    id: row.id,
+    spentOn: row.spent_on,
+    dateLabel: formatDate(row.spent_on),
+    description: row.description,
+    amount: Number(row.amount || 0),
+    notes: row.notes || '',
+    createdAt: row.created_at,
+    recordedLabel: formatStamp(row.created_at),
+    // Append-only correction fields (0039).
+    kind: row.kind ?? 'entry',
+    correctsId: row.corrects_id ?? null,
+    reason: row.reason ?? null,
+    reasonNote: row.reason_note ?? null
+  }
+}
+
+function openEntry (unit) {
+  selected.value = unit
+  detailOpen.value = true
+}
+
+// A correction writes new rows and can move a record to another month; reload.
+async function onChanged () {
+  detailOpen.value = false
+  await loadEntries()
+}
+
 async function fetchCurrentUser () {
   const { data } = await supabase.auth.getUser()
   currentUserId.value = data?.user?.id || ''
@@ -150,7 +199,7 @@ async function loadEntries () {
     return
   }
 
-  entries.value = data || []
+  entries.value = (data || []).map(normalise)
   loading.value = false
 }
 
@@ -166,14 +215,14 @@ async function loadCollectionsTotal () {
 
   const { data, error } = await supabase
     .from('collections')
-    .select('amount')
+    .select('amount, kind')
     .eq('from_church', activeChurchId.value)
     .gte('collectedOn', range.start)
     .lt('collectedOn', range.endExclusive)
 
   // null, not 0 — an unreadable month and an empty one are different facts, and
-  // the tile says so.
-  collectionsTotal.value = error ? null : (data || []).reduce((sum, r) => sum + Number(r.amount || 0), 0)
+  // the tile says so. netSum subtracts reversals (0039).
+  collectionsTotal.value = error ? null : netSum(data || [])
 }
 
 async function loadDescriptionHistory () {
@@ -202,7 +251,7 @@ function onSaved (row) {
   if (monthKeyFromDate(row.spent_on) !== month.value) {
     emit('update:month', monthKeyFromDate(row.spent_on))
   } else {
-    entries.value = [row, ...entries.value]
+    entries.value = [normalise(row), ...entries.value]
   }
   descriptionHistory.value = [{ description: row.description }, ...descriptionHistory.value]
 }
@@ -294,7 +343,7 @@ watch(activeChurchId, async () => {
               Monthly expenses
             </h2>
             <span class="exp__card-meta">
-              {{ entries.length }} {{ entries.length === 1 ? 'entry' : 'entries' }} · {{ formatPeso(total) }}
+              {{ recordCount }} {{ recordCount === 1 ? 'record' : 'records' }} · {{ formatPeso(total) }}
             </span>
           </div>
 
@@ -318,7 +367,7 @@ watch(activeChurchId, async () => {
           </div>
 
           <p
-            v-else-if="!entries.length"
+            v-else-if="!units.length"
             class="exp__empty"
           >
             Nothing recorded for {{ monthLabel }} yet.
@@ -349,20 +398,43 @@ watch(activeChurchId, async () => {
             </thead>
             <tbody>
               <tr
-                v-for="entry in entries"
-                :key="entry.id"
+                v-for="unit in units"
+                :key="unit.rootId"
+                class="exp__row"
+                :class="{ 'exp__row--voided': unit.voided }"
+                tabindex="0"
+                role="button"
+                :aria-label="`Open ${(unit.live || unit.original).description}, ${formatPeso((unit.live || unit.original).amount)}${unit.voided ? ', voided' : unit.corrected ? ', corrected' : ''}`"
+                @click="openEntry(unit)"
+                @keydown.enter.prevent="openEntry(unit)"
+                @keydown.space.prevent="openEntry(unit)"
               >
                 <td class="exp__date">
-                  {{ formatDate(entry.spent_on) }}
+                  {{ (unit.live || unit.original).dateLabel }}
                 </td>
                 <td class="exp__desc">
-                  {{ entry.description }}
+                  {{ (unit.live || unit.original).description }}
+                  <Badge
+                    v-if="unit.voided"
+                    tone="magenta"
+                  >
+                    Voided
+                  </Badge>
+                  <Badge
+                    v-else-if="unit.corrected"
+                    tone="neutral"
+                  >
+                    Corrected
+                  </Badge>
                 </td>
-                <td :class="{ 'exp__no-note': !entry.notes }">
-                  {{ entry.notes || '—' }}
+                <td :class="{ 'exp__no-note': !(unit.live || unit.original).notes }">
+                  {{ (unit.live || unit.original).notes || '—' }}
                 </td>
-                <td class="exp__num exp__amount">
-                  {{ formatPeso(entry.amount) }}
+                <td
+                  class="exp__num exp__amount"
+                  :class="{ 'exp__amount--voided': unit.voided }"
+                >
+                  {{ formatPeso((unit.live || unit.original).amount) }}
                 </td>
               </tr>
             </tbody>
@@ -370,6 +442,12 @@ watch(activeChurchId, async () => {
         </section>
       </div>
     </div>
+
+    <ExpenseDetailModal
+      v-model:open="detailOpen"
+      :unit="selected"
+      @changed="onChanged"
+    />
   </div>
 </template>
 
@@ -495,12 +573,18 @@ watch(activeChurchId, async () => {
 }
 .exp__table tr:last-child td { border-bottom: 0; }
 
+.exp__row { cursor: pointer; transition: background-color var(--dur-state) ease; }
+.exp__row:hover { background: var(--surface-subtle-2); }
+.exp__row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.exp__row--voided td { color: var(--ink-5); }
+
 .exp__date { color: var(--ink-4); white-space: nowrap; }
-.exp__desc { font-weight: 700; color: var(--ink); }
+.exp__desc { font-weight: 700; color: var(--ink); display: flex; align-items: center; gap: var(--sp-8); }
 .exp__no-note { color: var(--ink-6); }
 
 .exp__num { text-align: right; }
 .exp__amount { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--magenta-darkest); }
+.exp__amount--voided { text-decoration: line-through; color: var(--ink-5); }
 
 .exp__rows { display: flex; flex-direction: column; }
 .exp__row-skeleton { height: 46px; border-radius: 0; }

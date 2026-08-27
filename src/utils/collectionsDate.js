@@ -79,14 +79,6 @@ export function formatServiceDateShort(value) {
   return date.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })
 }
 
-/**
- * Check if a contribution is still within the editable window (3 hours).
- * @param {string} createdAt - ISO timestamp of when the record was inserted
- * @param {Date} [now] - Override for testing
- * @returns {boolean}
- */
-export function isWithinEditWindow(createdAt, now = new Date()) {
-  const created = new Date(createdAt)
-  const threeHoursMs = 3 * 60 * 60 * 1000
-  return (now.getTime() - created.getTime()) <= threeHoursMs
-}
+// The 3-hour edit window was retired in migration 0039: collections and expenses
+// are append-only now, corrected by tracked reversals rather than an in-place
+// edit. isWithinEditWindow (and its client/RLS enforcement) went with it.

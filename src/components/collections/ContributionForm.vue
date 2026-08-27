@@ -43,6 +43,7 @@ const anonymous = ref(false)
 const type = ref('tithes')
 const saving = ref(false)
 const submitted = ref(false)
+const reviewing = ref(false)
 const errorMessage = ref('')
 const picker = ref(null)
 
@@ -85,7 +86,16 @@ function pickDate (value) {
   date.value = value
 }
 
-async function submit () {
+// Contributor name for the review summary.
+const reviewContributor = computed(() => {
+  if (anonymous.value) return 'Anonymous'
+  const m = props.members.find((x) => x.id === memberId.value)
+  return m ? [m.first_name, m.last_name].filter(Boolean).join(' ') : '—'
+})
+
+// Two-step save (0039): a saved contribution can only be corrected by an
+// append-only reversal, so a typo is cheapest to catch before it is recorded.
+function submit () {
   errorMessage.value = ''
   submitted.value = true
 
@@ -104,6 +114,10 @@ async function submit () {
     return
   }
 
+  reviewing.value = true
+}
+
+async function commit () {
   saving.value = true
   const result = await write(
     supabase.from('collections').insert(
@@ -139,8 +153,17 @@ async function submit () {
   memberId.value = ''
   anonymous.value = false
   submitted.value = false
+  reviewing.value = false
   picker.value?.reset()
   showToast('Contribution recorded.')
+}
+
+function backToEdit () {
+  reviewing.value = false
+}
+
+function formatAmount (value) {
+  return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(value || 0)
 }
 </script>
 
@@ -264,19 +287,69 @@ async function submit () {
       </div>
     </div>
 
-    <Button
-      type="submit"
-      variant="primary"
-      size="lg"
-      block
-      :loading="saving"
-    >
-      Save contribution
-    </Button>
+    <template v-if="!reviewing">
+      <Button
+        type="submit"
+        variant="primary"
+        size="lg"
+        block
+      >
+        Review contribution
+      </Button>
 
-    <p class="cf__foot">
-      Only the Finance role can save here. Pastors see the totals, not this form.
-    </p>
+      <p class="cf__foot">
+        You'll confirm the figures before saving. A saved contribution can only be
+        corrected by a tracked reversal, so check it here first.
+      </p>
+    </template>
+
+    <template v-else>
+      <div class="cf__review">
+        <p class="cf__review-title">
+          Confirm this contribution
+        </p>
+        <dl class="cf__review-rows">
+          <div class="cf__review-row">
+            <dt>Amount</dt>
+            <dd class="cf__review-amt">
+              {{ formatAmount(parsedAmount) }}
+            </dd>
+          </div>
+          <div class="cf__review-row">
+            <dt>Contributor</dt>
+            <dd>{{ reviewContributor }}</dd>
+          </div>
+          <div class="cf__review-row">
+            <dt>Type</dt>
+            <dd>{{ type === 'tithes' ? 'Tithes' : 'Offering' }}</dd>
+          </div>
+          <div class="cf__review-row">
+            <dt>Service date</dt>
+            <dd>{{ date }}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="cf__review-actions">
+        <Button
+          type="button"
+          block
+          :disabled="saving"
+          @click="backToEdit"
+        >
+          Back to edit
+        </Button>
+        <Button
+          type="button"
+          variant="primary"
+          block
+          :loading="saving"
+          @click="commit"
+        >
+          Confirm &amp; save
+        </Button>
+      </div>
+    </template>
   </form>
 </template>
 
@@ -375,4 +448,22 @@ async function submit () {
 .cf__seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .cf__foot { font-size: var(--text-field); color: var(--ink-5); line-height: 1.5; }
+
+.cf__review {
+  padding: var(--sp-12) var(--sp-14);
+  border-radius: var(--r-inset);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+}
+.cf__review-title { font-size: var(--text-meta-sm); font-weight: 700; color: var(--ink-4); margin-bottom: var(--sp-8); }
+.cf__review-rows { display: flex; flex-direction: column; }
+.cf__review-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-12);
+  padding: var(--sp-7) 0; border-bottom: 1px solid var(--divider);
+}
+.cf__review-row:last-child { border-bottom: 0; }
+.cf__review-row dt { font-size: var(--text-body-sm); color: var(--ink-5); }
+.cf__review-row dd { font-size: var(--text-body-sm); font-weight: 700; color: var(--ink); text-align: right; }
+.cf__review-amt { color: var(--accent-darkest); font-variant-numeric: tabular-nums; }
+.cf__review-actions { display: flex; gap: var(--sp-10); }
 </style>

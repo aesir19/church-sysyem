@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase'
 import { defaultMonthKey, getMonthRange, parseMonthKey } from '../utils/expensesMonth'
 import { mergeMonthSourceWithLiveExpenses } from '../utils/reportExpenseMerge'
 import { buildLedgerWeeks, buildMonthSourceFromCollections, openingBalanceForMonth } from '../utils/collectivesSource'
+import { buildUnits } from '../utils/financeCorrections'
 import { formatPeso, formatPesoWhole, formatShare } from '../utils/money'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { useActiveChurch } from '../composables/useActiveChurch'
@@ -43,7 +44,14 @@ const { activeChurchId, ensureLoaded } = useActiveChurch()
 // Narrower than COLLECTION_SELECT in CollectionsInputView: the report has no
 // edit window to enforce, so it needs neither created_at nor middle_name.
 const REPORT_COLLECTION_SELECT =
-  'id, from, amount, is_tithes, collectedOn, members!collections_from_fkey(first_name, last_name)'
+  'id, from, amount, is_tithes, collectedOn, kind, corrects_id, members!collections_from_fkey(first_name, last_name)'
+
+// Collapse raw ledger rows (snake-cased from PostgREST) to the live entry of each
+// chain. buildUnits reads camel `correctsId`, so alias it first.
+function liveRows (rows) {
+  const mapped = (rows || []).map((r) => ({ ...r, correctsId: r.corrects_id ?? null, kind: r.kind ?? 'entry' }))
+  return buildUnits(mapped).filter((u) => u.live).map((u) => u.live)
+}
 
 const props = defineProps({
   // "YYYY-MM". Owned by FinanceView so the whole workspace shares one month.
@@ -211,7 +219,7 @@ async function loadMonth () {
       .order('collectedOn', { ascending: true })
   }
 
-  let expensesQuery = supabase.from('expenses').select('spent_on, description, amount')
+  let expensesQuery = supabase.from('expenses').select('id, spent_on, description, amount, kind, corrects_id')
   if (activeChurchId.value) expensesQuery = expensesQuery.eq('from_church', activeChurchId.value)
   expensesQuery = expensesQuery
     .gte('spent_on', range.start)
@@ -225,8 +233,12 @@ async function loadMonth () {
 
   if (requestId !== monthRequestId) return
 
-  monthCollections.value = collectionsResult.error ? [] : (collectionsResult.data || [])
-  liveExpenses.value = expensesResult.error ? [] : (expensesResult.data || [])
+  // Collapse the append-only ledger (0039) to live rows: a reversed or voided
+  // record neither doubles a contributor's total nor shows as its own line. The
+  // aggregate serviceTotals above already nets via the DB view; this keeps the
+  // per-row breakdowns consistent with it.
+  monthCollections.value = collectionsResult.error ? [] : liveRows(collectionsResult.data)
+  liveExpenses.value = expensesResult.error ? [] : liveRows(expensesResult.data)
 
   if (collectionsResult.error || expensesResult.error) {
     monthError.value = `Unable to load all records for ${monthLabel.value}. The figures below are incomplete.`
