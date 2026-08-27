@@ -18,26 +18,29 @@ supabase login
 #    https://supabase.com/dashboard/project/<THIS-IS-THE-REF>
 supabase link --project-ref <project-ref>
 
-# 3. Give the function its two secrets. These live ONLY on Supabase's servers —
+# 3. Give the function its one secret. It lives ONLY on Supabase's servers —
 #    never in the repo, never in the browser.
-#      SERVICE_ROLE_KEY    → Dashboard → Project Settings → API → service_role key
-#      INVITE_REDIRECT_URL → where the e-mail link lands, e.g.
-#                            https://your-site.example/set-password
-supabase secrets set SERVICE_ROLE_KEY="<service-role-key>" \
-                     INVITE_REDIRECT_URL="https://<your-site>/set-password"
+#      SERVICE_ROLE_KEY → Dashboard → Project Settings → API → service_role key
+supabase secrets set SERVICE_ROLE_KEY="<service-role-key>"
 
 # 4. Deploy the function.
 supabase functions deploy invite-user
 ```
 
-## One Auth setting
+The invite link returns to **wherever the app called the function from** — `localhost` while you
+test, your real site once it's deployed — so there is no per-environment secret to change. (You can
+optionally set `INVITE_REDIRECT_URL` as a fallback for non-browser callers, but it isn't needed.)
 
-The invite e-mail's link must be allowed to return to your site. In the dashboard:
+## One Auth setting — the allowlist
 
-- **Authentication → URL Configuration → Redirect URLs** — add the same
-  `https://<your-site>/set-password` you used above.
+The link is only honoured if its address is on Supabase's allowed list. In the dashboard:
 
-Without this, the link in the e-mail is refused and the invitee cannot set a password.
+- **Authentication → URL Configuration → Redirect URLs** — add every address the app is opened from:
+  - `http://localhost:5173/set-password` (local testing)
+  - `https://<your-site>/set-password` (once deployed)
+
+Without the matching entry, the link in the e-mail is refused and the invitee cannot set a password.
+This allowlist is also what makes it safe for the function to trust the calling origin.
 
 ## Checking it works
 

@@ -16,9 +16,14 @@
 // Secrets (supabase secrets set):
 //   SERVICE_ROLE_KEY      — the service-role key. NOT SUPABASE_SERVICE_ROLE_KEY,
 //                           which the platform reserves; we set our own name.
-//   INVITE_REDIRECT_URL   — where the e-mail link lands, e.g.
-//                           https://<site>/set-password (must be an allowed
-//                           redirect URL in Auth settings).
+//   INVITE_REDIRECT_URL   — OPTIONAL fallback base URL for the e-mail link, used
+//                           only when the request carries no Origin (a non-browser
+//                           caller). Normally the link returns to the ORIGIN the
+//                           app was called from, so local dev and the deployed
+//                           site each get their own return address with no secret
+//                           to change. Every such origin must be listed under
+//                           Auth → URL Configuration → Redirect URLs, which is
+//                           what makes trusting the Origin safe.
 // Provided by the platform: SUPABASE_URL, SUPABASE_ANON_KEY.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -58,12 +63,20 @@ Deno.serve(async (req) => {
   const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
   const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
   const SERVICE_ROLE_KEY = Deno.env.get('SERVICE_ROLE_KEY')
-  const REDIRECT_URL = Deno.env.get('INVITE_REDIRECT_URL')
 
-  if (!SERVICE_ROLE_KEY || !REDIRECT_URL) {
-    // A deploy that forgot its secrets fails closed and loud, not silently.
+  if (!SERVICE_ROLE_KEY) {
+    // A deploy that forgot its secret fails closed and loud, not silently.
     return json({ error: 'invite sending is not configured' }, 500)
   }
+
+  // The link returns to wherever the app was called from — localhost in dev, the
+  // site in production — so no secret changes between environments. Supabase only
+  // honours a redirect that is in its allowed list, so an attacker cannot bend
+  // this into an open redirect by forging Origin. Falls back to a configured base
+  // for a caller with no Origin (non-browser).
+  const originBase = req.headers.get('Origin') || Deno.env.get('INVITE_REDIRECT_URL')
+  if (!originBase) return json({ error: 'invite sending is not configured' }, 500)
+  const REDIRECT_URL = `${originBase.replace(/\/+$/, '')}/set-password`
 
   let body: { email?: string; member_id?: string; role?: string | null; mode?: string }
   try {
