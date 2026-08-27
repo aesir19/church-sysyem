@@ -2,8 +2,9 @@
 /**
  * Set your password — the screen an invited user lands on from their email.
  *
- * The validation and the redirect are the existing ones. `validateNewPassword`
- * still enforces eight characters and a match; the meter below it advises
+ * Account creation is fully in-app, so setting the password is the last step:
+ * on success the user is signed out and sent to /login to sign in with it.
+ * `validateNewPassword` still enforces eight characters and a match; the meter below it advises
  * twelve without refusing eight, because raising the enforced minimum is a
  * policy decision for the owner rather than something to change while
  * repainting. Flagged in the handover, not decided here.
@@ -19,6 +20,7 @@ import Alert from '../components/ui/Alert.vue'
 import Button from '../components/ui/Button.vue'
 import Input from '../components/ui/Input.vue'
 import Icon from '../components/ui/icons/Icon.vue'
+import Spinner from '../components/ui/Spinner.vue'
 
 const router = useRouter()
 const { email, load: loadUser } = useCurrentUser()
@@ -26,6 +28,7 @@ const password = ref('')
 const confirmPassword = ref('')
 const revealed = ref(false)
 const loading = ref(false)
+const redirecting = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 
@@ -62,8 +65,16 @@ async function handleSetPassword () {
     // password" is the one worth passing through, and it is safe to.
     errorMessage.value = error.message || 'Could not set your password. Please try again.'
   } else {
-    successMessage.value = 'Password set. Taking you on…'
-    setTimeout(() => { router.push('/account-pending') }, 1500)
+    // The account is created entirely in-app, so finish by handing the user to
+    // the login page to sign in with the password they just set. They are still
+    // authenticated from the invite link, and the router bounces a signed-in
+    // visitor away from /login — so sign out first, then redirect.
+    successMessage.value = 'Password set. Taking you to sign in…'
+    // Hold the button in its working state through the hand-off so the pause
+    // reads as motion, not a frozen page.
+    redirecting.value = true
+    await supabase.auth.signOut()
+    setTimeout(() => { router.push('/login') }, 1500)
   }
 
   loading.value = false
@@ -102,7 +113,10 @@ async function handleSetPassword () {
         v-if="successMessage"
         tone="success"
       >
-        {{ successMessage }}
+        <span class="setpw__redirect">
+          <Spinner :size="15" />
+          {{ successMessage }}
+        </span>
       </Alert>
 
       <!-- A hidden username field, which is not decoration. A password form
@@ -186,11 +200,11 @@ async function handleSetPassword () {
         variant="primary"
         size="lg"
         block
-        :loading="loading"
+        :loading="loading || redirecting"
         :disabled="!!successMessage"
         class="setpw__submit"
       >
-        {{ loading ? 'Saving…' : 'Save and continue' }}
+        {{ redirecting ? 'Taking you to sign in…' : (loading ? 'Saving…' : 'Save and continue') }}
       </Button>
     </form>
   </AuthShell>
@@ -198,6 +212,8 @@ async function handleSetPassword () {
 
 <style scoped>
 .setpw { display: flex; flex-direction: column; gap: var(--sp-14); }
+
+.setpw__redirect { display: inline-flex; align-items: center; gap: var(--sp-8); }
 
 /* Present for the password manager, absent for everyone else. Not
    `display: none` — a hidden-by-display field is skipped by some managers, and
