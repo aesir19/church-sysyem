@@ -7,9 +7,10 @@
 // afterwards (mirrors invite_member/0037). `canSetRole` is what draws or hides
 // the role row, but the SQL is the enforcement, not this flag.
 //
-// The member search is the same one LinkAccountModal uses, and it needs no church
-// filter of its own: members RLS already scopes the rows to what the caller may
-// see — every church for a Super Admin, their own for a Church Leader — which is
+// The member lookup is driven by the e-mail above, not a name search: an invite is
+// tied to the member record that already carries that address. It needs no church
+// filter of its own — members RLS already scopes the rows to what the caller may
+// see (every church for a Super Admin, their own for a Church Leader), which is
 // exactly the set each is allowed to invite.
 
 import { ref, watch, computed } from 'vue'
@@ -31,58 +32,78 @@ const props = defineProps({
 const emit = defineEmits(['update:open', 'invite'])
 
 const email = ref('')
-const query = ref('')
 const rows = ref([])
-const searching = ref(false)
+const looking = ref(false)
 const chosen = ref(null)
 const role = ref('unassigned')
-const searchError = ref('')
+const lookupError = ref('')
+let lookupToken = 0
+let debounce = null
 
 // Reset every time it opens — a form that remembers the last invite is how the
 // wrong member gets attached to the next e-mail.
 watch(() => props.open, isOpen => {
   if (!isOpen) return
+  clearTimeout(debounce)
   email.value = ''
-  query.value = ''
   rows.value = []
   chosen.value = null
   role.value = 'unassigned'
-  searchError.value = ''
+  lookupError.value = ''
 })
-
-async function search () {
-  const needle = query.value.trim()
-  if (!needle) {
-    rows.value = []
-    return
-  }
-
-  searching.value = true
-  searchError.value = ''
-
-  const { data, error } = await supabase
-    .from('members')
-    .select('id, first_name, last_name, birthdate, member_of')
-    .is('archived_at', null)
-    .or(`first_name.ilike.%${needle}%,last_name.ilike.%${needle}%`)
-    .order('last_name')
-    .limit(20)
-
-  searching.value = false
-
-  if (error) {
-    searchError.value = 'Could not search member records.'
-    rows.value = []
-    return
-  }
-
-  rows.value = data || []
-}
 
 // A light client-side check so an obvious typo is caught before a round trip. The
 // server validates for real; this is only to fail fast on an empty or shapeless
 // address.
 const emailLooksValid = computed(() => /^\S+@\S+\.\S+$/.test(email.value.trim()))
+
+// The list follows the e-mail. Every edit clears the current match — the chosen
+// member must always be the one whose address is in the box, never a stale pick
+// left over from a previous address — then, once the address is well-formed, we
+// look up the member record that carries it.
+watch(email, () => {
+  clearTimeout(debounce)
+  rows.value = []
+  chosen.value = null
+  lookupError.value = ''
+  if (!emailLooksValid.value) {
+    looking.value = false
+    return
+  }
+  looking.value = true
+  debounce = setTimeout(lookupByEmail, 300)
+})
+
+async function lookupByEmail () {
+  const needle = email.value.trim()
+  const token = ++lookupToken
+  looking.value = true
+  lookupError.value = ''
+
+  // ilike with no wildcards is an exact, case-insensitive match — the member whose
+  // stored e-mail is this address, and no partial-name hits.
+  const { data, error } = await supabase
+    .from('members')
+    .select('id, first_name, last_name, birthdate, member_of')
+    .is('archived_at', null)
+    .ilike('email', needle)
+    .order('last_name')
+    .limit(20)
+
+  // A newer keystroke already started another lookup; drop this stale result.
+  if (token !== lookupToken) return
+  looking.value = false
+
+  if (error) {
+    lookupError.value = 'Could not look up member records.'
+    rows.value = []
+    return
+  }
+
+  rows.value = data || []
+  // One unambiguous match is the common case — attach it without an extra click.
+  chosen.value = rows.value.length === 1 ? rows.value[0] : null
+}
 const canSend = computed(() => emailLooksValid.value && !!chosen.value && !props.sending)
 
 function confirm () {
@@ -133,41 +154,30 @@ function confirm () {
 
       <div class="iu__field">
         <span class="iu__label">Member record</span>
-        <div class="iu__search">
-          <input
-            v-model="query"
-            type="search"
-            class="iu__input"
-            placeholder="Search member records by name"
-            aria-label="Search member records by name"
-            @keyup.enter="search"
-          >
-          <Button
-            size="sm"
-            :loading="searching"
-            @click="search"
-          >
-            Search
-          </Button>
-        </div>
 
         <p
-          v-if="searchError"
+          v-if="lookupError"
           class="iu__state iu__state--error"
         >
-          {{ searchError }}
+          {{ lookupError }}
         </p>
         <p
-          v-else-if="searching"
+          v-else-if="!emailLooksValid"
           class="iu__state"
         >
-          <Spinner /> Searching…
+          Enter an e-mail address above to find its member record.
         </p>
         <p
-          v-else-if="query && !rows.length"
+          v-else-if="looking"
           class="iu__state"
         >
-          No active member matches that name.
+          <Spinner /> Looking up member records…
+        </p>
+        <p
+          v-else-if="!rows.length"
+          class="iu__state iu__state--warn"
+        >
+          No member record has this e-mail address.
         </p>
 
         <ul
@@ -266,8 +276,6 @@ function confirm () {
 
 .iu__label { font-size: var(--text-meta); font-weight: 700; color: var(--ink-3); }
 
-.iu__search { display: flex; gap: var(--sp-8); }
-
 .iu__input {
   flex: 1;
   padding: 10px 12px;
@@ -290,6 +298,7 @@ function confirm () {
   color: var(--ink-3);
 }
 .iu__state--error { color: var(--magenta-darkest); }
+.iu__state--warn { color: var(--magenta-darkest); }
 
 .iu__list {
   list-style: none;
