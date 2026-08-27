@@ -72,6 +72,13 @@ export function deriveCapabilities(perm) {
     canManageAttendance: isSuperAdmin || isWelcome,
     canManageSmallGroups: isSuperAdmin || isChurchLeader,
 
+    // May the caller send an account invitation? Mirrors invite_member (0037):
+    // Super Admin invites anyone with any role; a Church Leader invites a member
+    // in their own church with no role. The role restriction is enforced in SQL
+    // and reflected in the UI (a Church Leader sees no role picker); this flag only
+    // decides whether the Invite User surface appears at all.
+    canInvite: isSuperAdmin || isChurchLeader,
+
     // CALENDAR & EVENTS (0032). Two deliberately distinct keys, mirroring the SQL
     // predicates can_view_events() / can_manage_events():
     //   canViewEvents gates the Events PAGE and its nav entry — the five roles that may

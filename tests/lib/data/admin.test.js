@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // or one .from(), so a single recording mock is enough — unlike listGroups, which fires
 // two concurrent queries against different tables and needs a builder per table.
 
-const state = vi.hoisted(() => ({ rpc: {}, from: null, calls: [] }))
+const state = vi.hoisted(() => ({ rpc: {}, from: null, calls: [], invoke: null }))
 
 vi.mock('../../../src/lib/supabase', () => ({
   supabase: {
@@ -14,6 +14,12 @@ vi.mock('../../../src/lib/supabase', () => ({
       // Real supabase.rpc returns a thenable builder; writeRpc awaits it directly.
       return Promise.resolve(result)
     }),
+    functions: {
+      invoke: vi.fn((name, opts) => {
+        state.calls.push(['invoke', name, opts?.body])
+        return Promise.resolve(state.invoke ?? { data: { ok: true }, error: null })
+      })
+    },
     from: vi.fn(table => {
       state.calls.push(['from', table])
       const builder = {
@@ -31,15 +37,18 @@ vi.mock('../../../src/lib/supabase', () => ({
 
 const {
   listAccounts, listChurchAccounts, listChurches, linkAccount, setUserRole,
-  assignSmallGroupLeader, unassignSmallGroupLeader, listGroupLeaders, ADMIN_MESSAGES
+  assignSmallGroupLeader, unassignSmallGroupLeader, listGroupLeaders,
+  listPendingInvites, inviteAccount, resendInvite, ADMIN_MESSAGES
 } = await import('../../../src/lib/data/admin')
 
 const rpcCalls = name => state.calls.filter(c => c[0] === 'rpc' && c[1] === name)
+const invokeCalls = () => state.calls.filter(c => c[0] === 'invoke')
 
 beforeEach(() => {
   state.rpc = {}
   state.from = null
   state.calls = []
+  state.invoke = null
 })
 
 describe('listAccounts', () => {
@@ -197,6 +206,110 @@ describe('the writes', () => {
     const res = await assignSmallGroupLeader({ accountId: 'a1', groupId: 'g1' })
 
     expect(res.ok).toBe(false)
+  })
+})
+
+describe('listPendingInvites', () => {
+  it('refuses without the invite capability, and does not call the database', async () => {
+    const res = await listPendingInvites({ canInvite: false })
+
+    expect(res.ok).toBe(false)
+    expect(res.permitted).toBe(false)
+    expect(res.message).toBe(ADMIN_MESSAGES.notPermitted)
+    expect(rpcCalls('list_pending_invites')).toHaveLength(0)
+  })
+
+  it('returns the pending rows the RPC scoped to the caller', async () => {
+    state.rpc.list_pending_invites = {
+      data: [{ id: 'i1', email: 'new@example.test', full_name: 'Ana Cruz', role: null }],
+      error: null
+    }
+
+    const res = await listPendingInvites({ canInvite: true })
+
+    expect(res.ok).toBe(true)
+    expect(res.rows).toHaveLength(1)
+    expect(res.rows[0].email).toBe('new@example.test')
+  })
+
+  it('reports a failure rather than an empty queue', async () => {
+    state.rpc.list_pending_invites = { data: null, error: { message: 'boom' } }
+
+    const res = await listPendingInvites({ canInvite: true })
+
+    expect(res.ok).toBe(false)
+    expect(res.message).toBe(ADMIN_MESSAGES.loadFailed)
+  })
+})
+
+describe('inviteAccount', () => {
+  it('sends the e-mail, member and role through the Edge Function in invite mode', async () => {
+    state.invoke = { data: { ok: true, full_name: 'Ana Cruz' }, error: null }
+
+    const res = await inviteAccount({ email: 'new@example.test', memberId: 'm1', role: 'member' })
+
+    expect(res.ok).toBe(true)
+    expect(res.fullName).toBe('Ana Cruz')
+    expect(invokeCalls()[0][1]).toBe('invite-user')
+    expect(invokeCalls()[0][2]).toEqual({
+      email: 'new@example.test', member_id: 'm1', role: 'member', mode: 'invite'
+    })
+  })
+
+  it('passes null role through untouched (a Church Leader sets none)', async () => {
+    state.invoke = { data: { ok: true }, error: null }
+
+    await inviteAccount({ email: 'new@example.test', memberId: 'm1' })
+
+    expect(invokeCalls()[0][2]).toEqual({
+      email: 'new@example.test', member_id: 'm1', role: null, mode: 'invite'
+    })
+  })
+
+  it('surfaces the caller-safe message the function returned on the error body', async () => {
+    // supabase-js hides the response body on `error`; the caller-safe line is read
+    // back off error.context (the raw Response). This is exactly that path.
+    state.invoke = {
+      data: null,
+      error: { context: { json: async () => ({ error: 'that email already has an account' }) } }
+    }
+
+    const res = await inviteAccount({ email: 'taken@example.test', memberId: 'm1', role: 'member' })
+
+    expect(res.ok).toBe(false)
+    expect(res.message).toBe('that email already has an account')
+  })
+
+  it('falls back to a generic message when the error body cannot be read', async () => {
+    state.invoke = { data: null, error: { message: 'network' } }
+
+    const res = await inviteAccount({ email: 'x@example.test', memberId: 'm1', role: 'member' })
+
+    expect(res.ok).toBe(false)
+    expect(res.message).toBe(ADMIN_MESSAGES.inviteFailed)
+  })
+})
+
+describe('resendInvite', () => {
+  it('re-sends by e-mail with no member and resend mode', async () => {
+    state.invoke = { data: { ok: true }, error: null }
+
+    const res = await resendInvite({ email: 'new@example.test' })
+
+    expect(res.ok).toBe(true)
+    expect(invokeCalls()[0][2]).toEqual({ email: 'new@example.test', mode: 'resend' })
+  })
+
+  it('reports the function refusal', async () => {
+    state.invoke = {
+      data: null,
+      error: { context: { json: async () => ({ error: 'You are not allowed to resend that invitation.' }) } }
+    }
+
+    const res = await resendInvite({ email: 'new@example.test' })
+
+    expect(res.ok).toBe(false)
+    expect(res.message).toBe('You are not allowed to resend that invitation.')
   })
 })
 

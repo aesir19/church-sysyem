@@ -36,7 +36,9 @@ const MESSAGES = {
   unlinkFailed: 'That account could not be unlinked.',
   roleFailed: 'That role could not be changed.',
   assignFailed: 'That leader could not be assigned.',
-  unassignFailed: 'That leader could not be unassigned.'
+  unassignFailed: 'That leader could not be unassigned.',
+  inviteFailed: 'That invitation could not be sent.',
+  resendFailed: 'That invitation could not be resent.'
 }
 
 const fail = (message, cause = null, extra = {}) =>
@@ -127,6 +129,66 @@ export function unassignSmallGroupLeader ({ accountId, groupId }) {
     supabase.rpc('unassign_small_group_leader', { p_account: accountId, p_group: groupId }),
     { messages: { failed: MESSAGES.unassignFailed } }
   )
+}
+
+/**
+ * Pending invitations the caller may see. SuperAdmin sees all; a Church Leader
+ * sees only their own church's. Zero rows to anyone else — so `permitted` is
+ * derived from the capability, not the row count (rule 2 of this module).
+ *
+ * @param {{ canInvite: boolean }} params
+ */
+export async function listPendingInvites ({ canInvite }) {
+  if (!canInvite) return fail(MESSAGES.notPermitted)
+
+  const { data, error } = await supabase.rpc('list_pending_invites')
+  if (error) return fail(MESSAGES.loadFailed, error)
+
+  return ok(data || [])
+}
+
+/**
+ * Send an account invitation and pre-attach a member (and, for a SuperAdmin, a
+ * role). Goes through the invite-user Edge Function, not an RPC: sending the
+ * e-mail needs the service-role key, which never reaches the browser (ADR-0018).
+ * All authorisation is still the database's, under the caller's JWT, inside the
+ * function.
+ *
+ * @param {{ email: string, memberId: string, role?: string|null }} params
+ */
+export async function inviteAccount ({ email, memberId, role = null }) {
+  return invokeInvite('invite', { email, member_id: memberId, role }, MESSAGES.inviteFailed)
+}
+
+/**
+ * Re-send a pending invitation. No new member link — the pending row already
+ * carries it; this just re-mails the address.
+ *
+ * @param {{ email: string }} params
+ */
+export async function resendInvite ({ email }) {
+  return invokeInvite('resend', { email }, MESSAGES.resendFailed)
+}
+
+// The Edge Function returns { ok, full_name } on success and { error: <message> }
+// with a non-2xx status on failure. supabase-js surfaces that failure as `error`
+// and hides the body on it, so the caller-safe message is read back off
+// error.context (the raw Response). Anything unreadable falls back to `fallback`.
+async function invokeInvite (mode, body, fallback) {
+  const { data, error } = await supabase.functions.invoke('invite-user', {
+    body: { ...body, mode }
+  })
+
+  if (error) {
+    let message = fallback
+    try {
+      const payload = await error.context?.json?.()
+      if (payload?.error) message = payload.error
+    } catch { /* keep the fallback */ }
+    return fail(message, error)
+  }
+
+  return ok([], { fullName: data?.full_name ?? null })
 }
 
 /**

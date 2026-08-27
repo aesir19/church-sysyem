@@ -107,6 +107,7 @@ export function useCurrentRole() {
     canViewAttendance: c('canViewAttendance'),
     canManageAttendance: c('canManageAttendance'),
     canManageSmallGroups: c('canManageSmallGroups'),
+    canInvite: c('canInvite'),
     canViewEvents: c('canViewEvents'),
     canManageEvents: c('canManageEvents'),
     canManageRooms: c('canManageRooms'),
