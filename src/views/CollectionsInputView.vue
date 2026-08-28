@@ -8,6 +8,8 @@ import EntryDetailModal from '../components/collections/EntryDetailModal.vue'
 import { defaultMonthKey, getMonthRange, monthKeyFromDate } from '../utils/expensesMonth'
 import { contributorLabel, isAnonymousRow } from '../utils/collectionPayload'
 import { formatPeso, formatPesoWhole, formatShare } from '../utils/money'
+import { netSum } from '../utils/financeSign'
+import { buildUnits } from '../utils/financeCorrections'
 import { useActiveChurch } from '../composables/useActiveChurch'
 
 // Collections — tithes and offering, entered per service date.
@@ -33,7 +35,7 @@ const emit = defineEmits(['update:month'])
 const { activeChurchId, ensureLoaded } = useActiveChurch()
 
 const COLLECTION_SELECT =
-  'id, from, amount, is_tithes, collectedOn, created_at, members!collections_from_fkey(first_name, middle_name, last_name)'
+  'id, from, amount, is_tithes, collectedOn, created_at, kind, corrects_id, reason, reason_note, event_id, members!collections_from_fkey(first_name, middle_name, last_name)'
 
 const month = computed(() => props.month)
 const entries = ref([])
@@ -51,21 +53,27 @@ const monthLabel = computed(() => {
     .toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })
 })
 
+// Collapse the raw rows into logical records (original + any correction chain).
+// The table shows one row per unit; the totals net the raw rows.
+const units = computed(() => buildUnits(entries.value))
+const recordCount = computed(() => units.value.length)
+
 const totals = computed(() => {
   const all = entries.value
-  const sum = (rows) => rows.reduce((t, r) => t + Number(r.amount || 0), 0)
   const tithes = all.filter((r) => r.isTithes)
   const offering = all.filter((r) => !r.isTithes)
   const anonymous = all.filter((r) => r.anonymous)
+  // netSum subtracts reversals (0039), so a corrected or voided entry counts at
+  // its live value — the same figure the DB aggregate view reports.
   return {
-    total: sum(all),
-    tithes: sum(tithes),
-    offering: sum(offering),
-    anonymous: sum(anonymous),
-    anonymousCount: anonymous.length,
-    // "86 entries across 4 service dates" — the second number is what tells a
+    total: netSum(all),
+    tithes: netSum(tithes),
+    offering: netSum(offering),
+    anonymous: netSum(anonymous),
+    anonymousCount: units.value.filter((u) => u.live && u.live.anonymous).length,
+    // "86 records across 4 service dates" — the second number is what tells a
     // treasurer whether a whole service is missing from the sheet.
-    dates: new Set(all.map((r) => r.date)).size
+    dates: new Set(units.value.filter((u) => u.live).map((u) => u.live.date)).size
   }
 })
 
@@ -74,7 +82,7 @@ const kpis = computed(() => [
     key: 'total',
     label: 'Recorded this month',
     value: formatPesoWhole(totals.value.total),
-    sub: `${entries.value.length} ${entries.value.length === 1 ? 'entry' : 'entries'} across ${totals.value.dates} ${totals.value.dates === 1 ? 'service date' : 'service dates'}`,
+    sub: `${recordCount.value} ${recordCount.value === 1 ? 'record' : 'records'} across ${totals.value.dates} ${totals.value.dates === 1 ? 'service date' : 'service dates'}`,
     tone: 'ink'
   },
   {
@@ -114,7 +122,13 @@ function normalise (row) {
     createdAt: row.created_at,
     recordedLabel: formatStamp(row.created_at),
     isTithes: row.is_tithes,
-    typeLabel: row.is_tithes ? 'Tithes' : 'Offering'
+    typeLabel: row.is_tithes ? 'Tithes' : 'Offering',
+    eventId: row.event_id ?? null,
+    // Append-only correction fields (0039). buildUnits reads kind + correctsId.
+    kind: row.kind ?? 'entry',
+    correctsId: row.corrects_id ?? null,
+    reason: row.reason ?? null,
+    reasonNote: row.reason_note ?? null
   }
 }
 
@@ -194,18 +208,16 @@ function onSaved (row) {
   entries.value = [entry, ...entries.value]
 }
 
-function openEntry (entry) {
-  selected.value = entry
+function openEntry (unit) {
+  selected.value = unit
   detailOpen.value = true
 }
 
-function onUpdated ({ id, amount }) {
-  const i = entries.value.findIndex((e) => e.id === id)
-  if (i !== -1) entries.value[i] = { ...entries.value[i], amount }
-}
-
-function onDeleted (id) {
-  entries.value = entries.value.filter((e) => e.id !== id)
+// A correction writes new rows (reversal + optional replacement) and can move a
+// record to another month, so reload rather than patch the chain in place.
+async function onChanged () {
+  detailOpen.value = false
+  await loadEntries()
 }
 
 onMounted(async () => {
@@ -262,7 +274,7 @@ watch(activeChurchId, async () => {
               Monthly entries
             </h2>
             <span class="col__card-meta">
-              {{ entries.length }} {{ entries.length === 1 ? 'record' : 'records' }} · newest first
+              {{ recordCount }} {{ recordCount === 1 ? 'record' : 'records' }} · newest first
             </span>
           </div>
 
@@ -286,7 +298,7 @@ watch(activeChurchId, async () => {
           </div>
 
           <p
-            v-else-if="!entries.length"
+            v-else-if="!units.length"
             class="col__empty"
           >
             Nothing recorded for {{ monthLabel }} yet.
@@ -317,36 +329,52 @@ watch(activeChurchId, async () => {
             </thead>
             <tbody>
               <tr
-                v-for="entry in entries"
-                :key="entry.id"
+                v-for="unit in units"
+                :key="unit.rootId"
                 class="col__row"
+                :class="{ 'col__row--voided': unit.voided }"
                 tabindex="0"
                 role="button"
-                :aria-label="`Open ${formatPeso(entry.amount)} from ${entry.anonymous ? 'an anonymous giver' : entry.name}`"
-                @click="openEntry(entry)"
-                @keydown.enter.prevent="openEntry(entry)"
-                @keydown.space.prevent="openEntry(entry)"
+                :aria-label="`Open ${formatPeso((unit.live || unit.original).amount)} from ${(unit.live || unit.original).anonymous ? 'an anonymous giver' : (unit.live || unit.original).name}${unit.voided ? ', voided' : unit.corrected ? ', corrected' : ''}`"
+                @click="openEntry(unit)"
+                @keydown.enter.prevent="openEntry(unit)"
+                @keydown.space.prevent="openEntry(unit)"
               >
                 <td class="col__date">
-                  {{ entry.dateLabel }}
+                  {{ (unit.live || unit.original).dateLabel }}
                 </td>
                 <td>
                   <span class="col__who">
                     <Avatar
-                      :name="entry.anonymous ? '' : entry.name"
-                      :placeholder="entry.anonymous"
+                      :name="(unit.live || unit.original).anonymous ? '' : (unit.live || unit.original).name"
+                      :placeholder="(unit.live || unit.original).anonymous"
                       :size="28"
                     />
-                    <span :class="{ 'col__anon': entry.anonymous }">{{ entry.name }}</span>
+                    <span :class="{ 'col__anon': (unit.live || unit.original).anonymous }">{{ (unit.live || unit.original).name }}</span>
+                    <Badge
+                      v-if="unit.voided"
+                      tone="magenta"
+                    >
+                      Voided
+                    </Badge>
+                    <Badge
+                      v-else-if="unit.corrected"
+                      tone="neutral"
+                    >
+                      Corrected
+                    </Badge>
                   </span>
                 </td>
                 <td>
-                  <Badge :tone="entry.isTithes ? 'accent' : 'magenta'">
-                    {{ entry.typeLabel }}
+                  <Badge :tone="(unit.live || unit.original).isTithes ? 'accent' : 'magenta'">
+                    {{ (unit.live || unit.original).typeLabel }}
                   </Badge>
                 </td>
-                <td class="col__num col__amount">
-                  {{ formatPeso(entry.amount) }}
+                <td
+                  class="col__num col__amount"
+                  :class="{ 'col__amount--voided': unit.voided }"
+                >
+                  {{ formatPeso(unit.voided ? unit.original.amount : (unit.live || unit.original).amount) }}
                 </td>
               </tr>
             </tbody>
@@ -357,9 +385,9 @@ watch(activeChurchId, async () => {
 
     <EntryDetailModal
       v-model:open="detailOpen"
-      :entry="selected"
-      @updated="onUpdated"
-      @deleted="onDeleted"
+      :unit="selected"
+      :members="members"
+      @changed="onChanged"
     />
   </div>
 </template>
@@ -451,6 +479,10 @@ watch(activeChurchId, async () => {
 
 .col__num { text-align: right; }
 .col__amount { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* A voided record stays visible but reads as struck from the ledger. */
+.col__row--voided td { color: var(--ink-5); }
+.col__amount--voided { text-decoration: line-through; color: var(--ink-5); }
 
 .col__rows { display: flex; flex-direction: column; }
 .col__row-skeleton { height: 46px; border-radius: 0; }

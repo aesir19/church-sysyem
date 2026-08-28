@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   getDefaultServiceDate,
-  isWithinEditWindow,
   formatDateISO,
   recentServiceDates,
   formatServiceDateShort,
@@ -97,32 +96,6 @@ describe('formatServiceDateShort', () => {
     expect(formatServiceDateShort('')).toBe('')
     expect(formatServiceDateShort(null)).toBe('')
     expect(formatServiceDateShort('nope')).toBe('')
-  })
-})
-
-describe('isWithinEditWindow', () => {
-  it('returns true if created less than 3 hours ago', () => {
-    const now = new Date('2026-07-01T12:00:00Z')
-    const createdAt = '2026-07-01T10:00:00Z' // 2 hours ago
-    expect(isWithinEditWindow(createdAt, now)).toBe(true)
-  })
-
-  it('returns true if created exactly 3 hours ago', () => {
-    const now = new Date('2026-07-01T13:00:00Z')
-    const createdAt = '2026-07-01T10:00:00Z' // exactly 3 hours
-    expect(isWithinEditWindow(createdAt, now)).toBe(true)
-  })
-
-  it('returns false if created more than 3 hours ago', () => {
-    const now = new Date('2026-07-01T13:00:01Z')
-    const createdAt = '2026-07-01T10:00:00Z' // 3h + 1s
-    expect(isWithinEditWindow(createdAt, now)).toBe(false)
-  })
-
-  it('returns false for entries from yesterday', () => {
-    const now = new Date('2026-07-01T10:00:00Z')
-    const createdAt = '2026-06-30T10:00:00Z'
-    expect(isWithinEditWindow(createdAt, now)).toBe(false)
   })
 })
 

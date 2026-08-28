@@ -47,6 +47,7 @@ const description = ref('')
 const notes = ref('')
 const saving = ref(false)
 const submitted = ref(false)
+const reviewing = ref(false)
 const errorMessage = ref('')
 
 // Held as a string and parsed once. A number input bound with .number gives
@@ -82,7 +83,11 @@ function isActive (label) {
   return trimmedDescription.value.toLowerCase() === label.toLowerCase()
 }
 
-async function submit () {
+// Two-step save (0039): a recorded expense can only be corrected by an
+// append-only reversal, never edited in place, so a typo is cheapest to catch
+// BEFORE it becomes a record. submit() validates and shows the review; commit()
+// writes only after the treasurer confirms the figures.
+function submit () {
   errorMessage.value = ''
   submitted.value = true
 
@@ -98,6 +103,10 @@ async function submit () {
   if (!Number.isFinite(parsedAmount.value) || parsedAmount.value <= 0) return
   if (!trimmedDescription.value) return
 
+  reviewing.value = true
+}
+
+async function commit () {
   saving.value = true
   const result = await write(
     supabase.from('expenses').insert({
@@ -130,7 +139,16 @@ async function submit () {
   description.value = ''
   notes.value = ''
   submitted.value = false
+  reviewing.value = false
   showToast('Expense recorded.')
+}
+
+function backToEdit () {
+  reviewing.value = false
+}
+
+function formatAmount (value) {
+  return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(value || 0)
 }
 </script>
 
@@ -229,19 +247,72 @@ async function submit () {
       placeholder="e.g. Meralco, July billing"
     />
 
-    <Button
-      type="submit"
-      variant="primary"
-      size="lg"
-      block
-      :loading="saving"
-    >
-      Save expense
-    </Button>
+    <template v-if="!reviewing">
+      <Button
+        type="submit"
+        variant="primary"
+        size="lg"
+        block
+      >
+        Review expense
+      </Button>
 
-    <p class="ef__foot">
-      Recorded expenses cannot be edited or deleted. Check the amount before saving.
-    </p>
+      <p class="ef__foot">
+        You'll confirm the figures before this is recorded. A saved expense can
+        only be corrected by a tracked reversal, so check it here first.
+      </p>
+    </template>
+
+    <template v-else>
+      <div class="ef__review">
+        <p class="ef__review-title">
+          Confirm this expense
+        </p>
+        <dl class="ef__review-rows">
+          <div class="ef__review-row">
+            <dt>Amount</dt>
+            <dd class="ef__review-amt">
+              {{ formatAmount(parsedAmount) }}
+            </dd>
+          </div>
+          <div class="ef__review-row">
+            <dt>Description</dt>
+            <dd>{{ trimmedDescription }}</dd>
+          </div>
+          <div class="ef__review-row">
+            <dt>Date spent</dt>
+            <dd>{{ spentOn }}</dd>
+          </div>
+          <div
+            v-if="notes.trim()"
+            class="ef__review-row"
+          >
+            <dt>Notes</dt>
+            <dd>{{ notes.trim() }}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="ef__review-actions">
+        <Button
+          type="button"
+          block
+          :disabled="saving"
+          @click="backToEdit"
+        >
+          Back to edit
+        </Button>
+        <Button
+          type="button"
+          variant="primary"
+          block
+          :loading="saving"
+          @click="commit"
+        >
+          Confirm &amp; save
+        </Button>
+      </div>
+    </template>
   </form>
 </template>
 
@@ -317,4 +388,22 @@ async function submit () {
 .ef__chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .ef__foot { font-size: var(--text-field); color: var(--ink-5); line-height: 1.5; }
+
+.ef__review {
+  padding: var(--sp-12) var(--sp-14);
+  border-radius: var(--r-inset);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+}
+.ef__review-title { font-size: var(--text-meta-sm); font-weight: 700; color: var(--ink-4); margin-bottom: var(--sp-8); }
+.ef__review-rows { display: flex; flex-direction: column; }
+.ef__review-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-12);
+  padding: var(--sp-7) 0; border-bottom: 1px solid var(--divider);
+}
+.ef__review-row:last-child { border-bottom: 0; }
+.ef__review-row dt { font-size: var(--text-body-sm); color: var(--ink-5); }
+.ef__review-row dd { font-size: var(--text-body-sm); font-weight: 700; color: var(--ink); text-align: right; }
+.ef__review-amt { color: var(--magenta-darkest); font-variant-numeric: tabular-nums; }
+.ef__review-actions { display: flex; gap: var(--sp-10); }
 </style>

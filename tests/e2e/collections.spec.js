@@ -1,9 +1,11 @@
 import { test, expect } from '@playwright/test'
 import { authedGoto } from './support/scenario.js'
 
-// Collections — the contribution form (the screen's only write), the inline
-// member autocomplete, and the entry-detail correct/delete dialog. canWriteFinance
-// gates the route; SuperAdmin has it.
+// Collections — the contribution form (the screen's only write, a two-step
+// review before it is recorded since 0039), the inline member autocomplete, and
+// the entry-detail correct/void dialog. The ledger is append-only: an entry is
+// corrected or voided by reversal, never deleted. canWriteFinance gates the
+// route; SuperAdmin has it.
 
 const TODAY = new Date().toISOString().slice(0, 10)
 const NOW_ISO = new Date().toISOString()
@@ -44,7 +46,9 @@ test.describe('Collections', () => {
   test('records an anonymous contribution', async ({ page }) => {
     await page.getByRole('spinbutton', { name: 'Amount' }).fill('500')
     await page.getByRole('checkbox', { name: /Anonymous/ }).check()
-    await page.getByRole('button', { name: 'Save contribution' }).click()
+    // Two-step save: review the figures, then confirm the write.
+    await page.getByRole('button', { name: 'Review contribution' }).click()
+    await page.getByRole('button', { name: 'Confirm & save' }).click()
 
     await expect(page.getByText('Contribution recorded.')).toBeVisible()
   })
@@ -54,17 +58,20 @@ test.describe('Collections', () => {
     await page.locator('#contribution-member').fill('Maria')
     await page.locator('#contribution-member-option-0').click()
     await expect(page.locator('.mac__note')).toHaveText(/Selected: Maria Abad/)
-    await page.getByRole('button', { name: 'Save contribution' }).click()
+    await page.getByRole('button', { name: 'Review contribution' }).click()
+    await page.getByRole('button', { name: 'Confirm & save' }).click()
 
     await expect(page.getByText('Contribution recorded.')).toBeVisible()
   })
 
-  test('opens an entry and deletes it', async ({ page }) => {
+  test('opens an entry and voids it', async ({ page }) => {
+    // Append-only (0039): the entry is not deleted, it is voided by a reversal
+    // through correct_collection. A reason is required; "duplicate" needs no note.
     await page.getByRole('button', { name: /Ferdinand Aguilar/ }).click()
-    await page.getByRole('button', { name: 'Delete', exact: true }).click()
-    await page.getByRole('button', { name: 'Delete entry' }).click()
+    await page.getByRole('button', { name: 'Void', exact: true }).click()
+    await page.locator('#void-reason').selectOption('duplicate')
+    await page.getByRole('button', { name: 'Void record' }).click()
 
-    await expect(page.getByText('Entry deleted.')).toBeVisible()
-    await expect(page.getByRole('button', { name: /Ferdinand Aguilar/ })).toHaveCount(0)
+    await expect(page.getByText('Record voided.')).toBeVisible()
   })
 })

@@ -15,6 +15,7 @@
 
 import { supabase } from '../supabase'
 import { write } from './write'
+import { netSum } from '../../utils/financeSign'
 
 const MESSAGES = {
   loadFailed: 'Could not load the closeout. Please try again.',
@@ -95,7 +96,7 @@ export async function listEventExpenses({ eventId }) {
   if (!eventId) return { ok: false, expenses: [], message: MESSAGES.loadFailed }
   const { data, error } = await supabase
     .from('expenses')
-    .select('id, description, amount, spent_on, event_id, from_church')
+    .select('id, description, amount, spent_on, event_id, from_church, kind, corrects_id, reason')
     .eq('event_id', eventId)
     .order('spent_on', { ascending: false })
   if (error) return { ok: false, expenses: [], message: MESSAGES.loadFailed }
@@ -155,7 +156,8 @@ export function deriveCloseout({ event, attendanceCount = 0, expenses = [], coll
   const started = event?.starts_at ? new Date(event.starts_at) : null
   const happened = !!started && started.getTime() < now.getTime() && event.status !== 'draft'
   const closed = !!event?.closed_at
-  const expenseTotal = expenses.reduce((s, e) => s + Number(e.amount ?? 0), 0)
+  // Net of reversals (0039): a reversed event expense must cancel, not double-count.
+  const expenseTotal = netSum(expenses)
   return {
     happened,
     closed,
