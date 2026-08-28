@@ -18,7 +18,7 @@ const FEATURED = {
   title: 'Statistics Report',
   blurb:
     'A reporting hub that turns existing records — members, attendance and giving — into clear numbers, trends and print-ready summaries for leadership.',
-  stage: 'Planning',
+  stage: 'Build',
   stages: ['Planning', 'Design', 'Build', 'Launch'],
   chips: [
     'Membership growth over time',
@@ -45,16 +45,6 @@ const ITEMS = [
   },
   {
     n: 3,
-    title: 'Church Calendar',
-    points: ['A shared calendar of services, meetings and church-wide dates']
-  },
-  {
-    n: 4,
-    title: 'Events Planning',
-    points: ['Plan events end to end — details, people and resources']
-  },
-  {
-    n: 5,
     title: 'Approval Workflows',
     points: [
       'New small groups & ministries',
@@ -64,7 +54,9 @@ const ITEMS = [
   }
 ]
 
-const [first, second, ...rest] = ITEMS
+// How far the featured item has progressed. Every rail up to and including the
+// current stage reads as filled; the label of the current one is highlighted.
+const activeStageIndex = FEATURED.stages.indexOf(FEATURED.stage)
 </script>
 
 <template>
@@ -84,13 +76,12 @@ const [first, second, ...rest] = ITEMS
       </p>
     </header>
 
-    <div class="next__top">
-      <!-- Featured -->
-      <Card
-        tint="dark"
-        class="feature anim-rise"
-        style="--i: 1"
-      >
+    <!-- Featured — full row, the one thing actively being built -->
+    <Card
+      tint="dark"
+      class="feature anim-rise"
+      style="--i: 1"
+    >
         <div class="feature__meta">
           <Badge
             tone="onDark"
@@ -121,7 +112,7 @@ const [first, second, ...rest] = ITEMS
           >
             <span
               class="stepper__rail"
-              :class="{ 'is-done': i === 0 }"
+              :class="{ 'is-done': i <= activeStageIndex }"
             />
             <span class="stepper__label">{{ stage }}</span>
           </li>
@@ -136,41 +127,15 @@ const [first, second, ...rest] = ITEMS
             {{ chip }}
           </li>
         </ul>
-      </Card>
+    </Card>
 
-      <!-- The two that sit beside it -->
-      <div class="next__pair">
-        <Card
-          v-for="(item, i) in [first, second]"
-          :key="item.n"
-          class="item anim-rise"
-          :style="`--i: ${2 + i}`"
-        >
-          <div class="item__head">
-            <span class="item__n">{{ item.n }}</span>
-            <h3 class="item__title">
-              {{ item.title }}
-            </h3>
-          </div>
-          <ul class="item__points">
-            <li
-              v-for="p in item.points"
-              :key="p"
-            >
-              {{ p }}
-            </li>
-          </ul>
-        </Card>
-      </div>
-    </div>
-
-    <!-- The remaining three -->
+    <!-- The backlog — one row of numbered items beneath the featured card -->
     <div class="next__rest">
       <Card
-        v-for="(item, i) in rest"
+        v-for="(item, i) in ITEMS"
         :key="item.n"
         class="item anim-rise"
-        :style="`--i: ${4 + i}`"
+        :style="`--i: ${2 + i}`"
       >
         <div class="item__head">
           <span class="item__n">{{ item.n }}</span>
@@ -234,16 +199,11 @@ const [first, second, ...rest] = ITEMS
 
 .next__sub { font-size: var(--text-body); color: var(--ink-4); max-width: 62ch; }
 
-.next__top {
+.next__rest {
   display: grid;
-  grid-template-columns: 1.35fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: var(--sp-16);
-  align-items: start;
 }
-
-.next__pair,
-.next__rest { display: grid; gap: var(--sp-16); }
-.next__rest { grid-template-columns: repeat(3, 1fr); }
 
 /* --- Featured --------------------------------------------------------- */
 .feature { display: flex; flex-direction: column; gap: var(--sp-14); padding: var(--sp-22); }
@@ -355,7 +315,6 @@ const [first, second, ...rest] = ITEMS
 .ask__sub { font-size: var(--text-body-sm); color: var(--accent-darkest); opacity: .85; }
 
 @media (max-width: 1100px) {
-  .next__top { grid-template-columns: 1fr; }
   .next__rest { grid-template-columns: 1fr; }
 }
 
