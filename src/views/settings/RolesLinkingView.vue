@@ -22,7 +22,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useCurrentRole } from '../../composables/useCurrentRole'
 import {
   listAccounts, linkAccount, setUserRole,
-  listPendingInvites, inviteAccount, resendInvite
+  listPendingInvites, inviteAccount, resendInvite, cancelInvite
 } from '../../lib/data/admin'
 import { showToast } from '../../composables/useToast'
 import Badge from '../../components/ui/Badge.vue'
@@ -32,12 +32,12 @@ import Spinner from '../../components/ui/Spinner.vue'
 import Soon from '../../components/ui/Soon.vue'
 import LinkAccountModal from '../../components/settings/LinkAccountModal.vue'
 import InviteUserModal from '../../components/settings/InviteUserModal.vue'
+import CancelInviteModal from '../../components/settings/CancelInviteModal.vue'
 import NotYoursPanel from '../../components/settings/NotYoursPanel.vue'
 
-const { caps } = useCurrentRole()
+const { caps, loadPermissions } = useCurrentRole()
 
 const loading = ref(true)
-const permitted = ref(false)
 const errorMessage = ref('')
 const accounts = ref([])
 const filter = ref('')
@@ -49,6 +49,12 @@ const linkTarget = ref(null)
 // (the page) turns on for either; the management sections gate on isSuperAdmin.
 const canManageAccounts = computed(() => !!caps.value.isSuperAdmin)
 const canInvite = computed(() => !!caps.value.canInvite)
+
+// The page opens for anyone who can invite. Derived, not captured: an earlier version
+// set this once inside load() at mount, before get_my_permissions had resolved, so a
+// Super Admin whose role arrived a beat later was left staring at "not yours to open"
+// with no way back. A computed tracks caps as they settle.
+const permitted = computed(() => canInvite.value)
 
 const inviteOpen = ref(false)
 const inviteSending = ref(false)
@@ -85,9 +91,9 @@ async function load () {
   loading.value = true
   errorMessage.value = ''
 
-  // The page opens for anyone who can invite; a Church Leader gets there without
-  // being able to read the account queue, so permission is the invite capability.
-  permitted.value = canInvite.value
+  // Resolve the role BEFORE gating on it. get_my_permissions is a round trip; reading
+  // caps before it lands is what stranded a Super Admin on the refusal panel.
+  await loadPermissions()
 
   // The account queue and linked table are a Super Admin's. Only load them then —
   // a Church Leader would get zero rows and a `permitted: false` anyway.
@@ -113,21 +119,22 @@ async function load () {
 
 onMounted(load)
 
-async function onInvite ({ email, memberId, memberName, role }) {
+async function onInvite ({ memberId, memberName, email, role }) {
   inviteSending.value = true
   inviteError.value = ''
 
-  const res = await inviteAccount({ email, memberId, role })
+  // The address is the member's, derived server-side — never passed from here.
+  const res = await inviteAccount({ memberId, role })
 
   inviteSending.value = false
   if (!res.ok) {
-    // Keep the dialog open with the reason, so a duplicate e-mail or an already
-    // linked member can be corrected without retyping everything.
+    // Keep the dialog open with the reason, so an already-linked member or a member
+    // with no e-mail can be corrected without starting over.
     inviteError.value = res.message
     return
   }
 
-  showToast(`Invitation sent to ${email} for ${memberName}.`)
+  showToast(`Invitation sent to ${memberName} at ${res.email || email}.`)
   inviteOpen.value = false
   await load()
 }
@@ -135,6 +142,23 @@ async function onInvite ({ email, memberId, memberName, role }) {
 async function onResend (invite) {
   const res = await resendInvite({ email: invite.email })
   showToast(res.ok ? `Invitation resent to ${invite.email}.` : res.message)
+  if (res.ok) await load()
+}
+
+// Cancel a pending invite — through a confirm dialog, since it deletes the unfinished
+// login. Works for orphaned invites too (their login is already gone), which is how the
+// list's leftover rows get cleared without touching the database by hand.
+const cancelTarget = ref(null)
+const cancelling = ref(false)
+
+async function onCancel () {
+  if (!cancelTarget.value) return
+  const invite = cancelTarget.value
+  cancelling.value = true
+  const res = await cancelInvite({ email: invite.email })
+  cancelling.value = false
+  cancelTarget.value = null
+  showToast(res.ok ? `Invitation for ${invite.full_name} cancelled.` : res.message)
   if (res.ok) await load()
 }
 
@@ -257,7 +281,7 @@ async function onSetRole (account, role) {
             </h2>
             <p class="rl__sub">
               Invitations that have been sent but not yet accepted. Resend if one did
-              not arrive.
+              not arrive, or cancel to withdraw it.
             </p>
           </div>
         </div>
@@ -301,7 +325,17 @@ async function onSetRole (account, role) {
                 :key="invite.id"
               >
                 <td class="rl__cell-strong">
-                  {{ invite.email }}
+                  <span class="rl__email-cell">
+                    {{ invite.email }}
+                    <!-- The login was removed by hand, so this invite no longer shows
+                         as live and silently blocks re-inviting until it is cancelled. -->
+                    <Badge
+                      v-if="invite.orphaned"
+                      tone="magenta"
+                    >
+                      Login removed
+                    </Badge>
+                  </span>
                 </td>
                 <td>{{ invite.full_name }}</td>
                 <td>
@@ -310,12 +344,24 @@ async function onSetRole (account, role) {
                   </Badge>
                 </td>
                 <td class="rl__cell-right">
-                  <Button
-                    size="sm"
-                    @click="onResend(invite)"
-                  >
-                    Resend
-                  </Button>
+                  <div class="rl__row-actions">
+                    <!-- Resend re-mails a live invite; an orphan has no live login to
+                         re-mail, so it can only be cancelled. -->
+                    <Button
+                      v-if="!invite.orphaned"
+                      size="sm"
+                      @click="onResend(invite)"
+                    >
+                      Resend
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="dangerQuiet"
+                      @click="cancelTarget = invite"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
                 </td>
               </tr>
             </tbody>
@@ -525,6 +571,13 @@ async function onSetRole (account, role) {
       @update:open="inviteOpen = $event"
       @invite="onInvite"
     />
+
+    <CancelInviteModal
+      :open="!!cancelTarget"
+      :invite="cancelTarget"
+      @update:open="cancelTarget = null"
+      @confirm="onCancel"
+    />
   </section>
 </template>
 
@@ -534,7 +587,7 @@ async function onSetRole (account, role) {
 .rl__crumbs {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--sp-7);
   font-size: var(--text-meta);
   font-weight: 600;
   color: var(--ink-4);
@@ -545,9 +598,9 @@ async function onSetRole (account, role) {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 20px;
+  gap: var(--sp-20);
   flex-wrap: wrap;
-  margin-top: 10px;
+  margin-top: var(--sp-10);
 }
 
 .rl__head-actions { display: flex; align-items: center; gap: var(--sp-8); }
@@ -561,7 +614,7 @@ async function onSetRole (account, role) {
 }
 
 .rl__lede {
-  margin: 5px 0 0;
+  margin: var(--sp-5) 0 0;
   max-width: 70ch;
   font-size: var(--text-body-sm);
   color: var(--ink-3);
@@ -571,13 +624,13 @@ async function onSetRole (account, role) {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: var(--sp-14);
-  margin-top: 20px;
+  margin-top: var(--sp-20);
 }
 
 .rl__tile {
   display: flex;
   flex-direction: column;
-  padding: 16px 18px;
+  padding: var(--sp-16) var(--sp-18);
   border: 1px solid var(--border);
   border-radius: var(--r-card);
   background: var(--surface);
@@ -602,9 +655,9 @@ async function onSetRole (account, role) {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--sp-16);
   flex-wrap: wrap;
-  margin-top: 26px;
+  margin-top: var(--sp-26);
 }
 
 .rl__h2 {
@@ -624,7 +677,7 @@ async function onSetRole (account, role) {
 
 .rl__filter {
   width: 220px;
-  padding: 9px 12px;
+  padding: var(--sp-9) var(--sp-12);
   border: 1px solid var(--border);
   border-radius: var(--r-control);
   background: var(--surface);
@@ -636,7 +689,7 @@ async function onSetRole (account, role) {
   display: flex;
   align-items: center;
   gap: var(--sp-8);
-  margin-top: 16px;
+  margin-top: var(--sp-16);
   font-size: var(--text-body-sm);
   color: var(--ink-3);
 }
@@ -644,7 +697,7 @@ async function onSetRole (account, role) {
 
 .rl__queue {
   list-style: none;
-  margin: 16px 0 0;
+  margin: var(--sp-16) 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -655,8 +708,8 @@ async function onSetRole (account, role) {
   display: grid;
   /* 4a's signature: identity on the left, what we know on the right, split by a rule. */
   grid-template-columns: 1fr 1.15fr;
-  gap: 22px;
-  padding: 18px 20px;
+  gap: var(--sp-22);
+  padding: var(--sp-18) var(--sp-20);
   border: 1px solid var(--border);
   border-radius: var(--r-card);
   background: var(--surface);
@@ -675,10 +728,10 @@ async function onSetRole (account, role) {
 }
 .rl__signup { font-size: var(--text-meta); color: var(--ink-4); }
 
-.rl__chips { display: flex; gap: 7px; margin-top: 12px; flex-wrap: wrap; }
+.rl__chips { display: flex; gap: var(--sp-7); margin-top: var(--sp-12); flex-wrap: wrap; }
 
 .rl__match {
-  padding-left: 22px;
+  padding-left: var(--sp-22);
   border-left: 1px solid var(--divider);
 }
 
@@ -686,13 +739,13 @@ async function onSetRole (account, role) {
   grid-column: 1 / -1;
   display: flex;
   justify-content: flex-end;
-  gap: 9px;
-  padding-top: 14px;
+  gap: var(--sp-9);
+  padding-top: var(--sp-14);
   border-top: 1px solid var(--divider);
 }
 
 .rl__table-wrap {
-  margin-top: 12px;
+  margin-top: var(--sp-12);
   border: 1px solid var(--border);
   border-radius: var(--r-card);
   background: var(--surface);
@@ -714,7 +767,7 @@ async function onSetRole (account, role) {
 }
 
 .rl__table td {
-  padding: 12px 20px;
+  padding: var(--sp-12) var(--sp-20);
   border-top: 1px solid var(--divider);
   color: var(--ink-2);
 }
@@ -723,8 +776,12 @@ async function onSetRole (account, role) {
 .rl__cell-right { text-align: right; }
 .rl__empty { color: var(--ink-4); }
 
+.rl__email-cell { display: inline-flex; align-items: center; gap: var(--sp-8); flex-wrap: wrap; }
+
+.rl__row-actions { display: inline-flex; align-items: center; gap: var(--sp-8); justify-content: flex-end; }
+
 .rl__role-select {
-  padding: 6px 10px;
+  padding: var(--sp-6) var(--sp-10);
   border: 1px solid var(--border);
   border-radius: var(--r-control);
   background: var(--surface);
@@ -748,6 +805,6 @@ async function onSetRole (account, role) {
 @media (max-width: 900px) {
   .rl__tiles { grid-template-columns: 1fr; }
   .rl__card { grid-template-columns: 1fr; }
-  .rl__match { padding-left: 0; border-left: 0; border-top: 1px solid var(--divider); padding-top: 14px; }
+  .rl__match { padding-left: 0; border-left: 0; border-top: 1px solid var(--divider); padding-top: var(--sp-14); }
 }
 </style>

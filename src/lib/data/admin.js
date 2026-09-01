@@ -38,7 +38,8 @@ const MESSAGES = {
   assignFailed: 'That leader could not be assigned.',
   unassignFailed: 'That leader could not be unassigned.',
   inviteFailed: 'That invitation could not be sent.',
-  resendFailed: 'That invitation could not be resent.'
+  resendFailed: 'That invitation could not be resent.',
+  cancelFailed: 'That invitation could not be cancelled.'
 }
 
 const fail = (message, cause = null, extra = {}) =>
@@ -148,26 +149,39 @@ export async function listPendingInvites ({ canInvite }) {
 }
 
 /**
- * Send an account invitation and pre-attach a member (and, for a SuperAdmin, a
- * role). Goes through the invite-user Edge Function, not an RPC: sending the
- * e-mail needs the service-role key, which never reaches the browser (ADR-0018).
- * All authorisation is still the database's, under the caller's JWT, inside the
- * function.
+ * Send an account invitation to a member. The address is NOT passed — the Edge
+ * Function derives it from the member record, the one source of truth (ADR-0019),
+ * so a mistyped address is impossible. Goes through the invite-user Edge Function,
+ * not an RPC: sending the e-mail needs the service-role key, which never reaches the
+ * browser (ADR-0018). All authorisation is still the database's, under the caller's
+ * JWT, inside the function.
  *
- * @param {{ email: string, memberId: string, role?: string|null }} params
+ * @param {{ memberId: string, role?: string|null }} params
  */
-export async function inviteAccount ({ email, memberId, role = null }) {
-  return invokeInvite('invite', { email, member_id: memberId, role }, MESSAGES.inviteFailed)
+export async function inviteAccount ({ memberId, role = null }) {
+  return invokeInvite('invite', { member_id: memberId, role }, MESSAGES.inviteFailed)
 }
 
 /**
  * Re-send a pending invitation. No new member link — the pending row already
- * carries it; this just re-mails the address.
+ * carries it; this just re-mails the member's address.
  *
  * @param {{ email: string }} params
  */
 export async function resendInvite ({ email }) {
   return invokeInvite('resend', { email }, MESSAGES.resendFailed)
+}
+
+/**
+ * Cancel a pending invitation — live or orphaned. Deletes the un-accepted login (if
+ * one still exists) and releases the invite record, so the member can be invited
+ * again. Identified by the address on the pending row. Same permission as resend:
+ * a Super Admin cancels any, a Church Leader only their own church's.
+ *
+ * @param {{ email: string }} params
+ */
+export async function cancelInvite ({ email }) {
+  return invokeInvite('cancel', { email }, MESSAGES.cancelFailed)
 }
 
 // The Edge Function returns { ok, full_name } on success and { error: <message> }
@@ -188,7 +202,7 @@ async function invokeInvite (mode, body, fallback) {
     return fail(message, error)
   }
 
-  return ok([], { fullName: data?.full_name ?? null })
+  return ok([], { fullName: data?.full_name ?? null, email: data?.email ?? null })
 }
 
 /**
