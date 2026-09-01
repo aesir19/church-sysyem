@@ -683,7 +683,9 @@ async function onSetRole (account, role) {
   background: var(--surface);
   font-family: inherit;
   font-size: var(--text-meta);
+  color: var(--ink);
 }
+.rl__filter::placeholder { color: var(--ink-5); }
 
 .rl__state {
   display: flex;

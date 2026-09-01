@@ -294,7 +294,9 @@ function confirm () {
   background: var(--surface-subtle);
   font-family: inherit;
   font-size: var(--text-field);
+  color: var(--ink);
 }
+.iu__input::placeholder { color: var(--ink-5); }
 
 .iu__state {
   display: flex;
