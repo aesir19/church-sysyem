@@ -57,15 +57,20 @@ const waitingCount = ref(null)
 
 const canManageAccounts = computed(() => !!caps.value.isSuperAdmin)
 const canAssignPastors = computed(() => !!caps.value.isSuperAdmin || !!caps.value.isHeadPastor)
+// A Church Leader may invite too (own church, no role), so this entry is wider than
+// the account queue behind it — which stays Super Admin only inside the screen.
+const canInvite = computed(() => !!caps.value.canInvite)
 
 const entries = computed(() => {
   const list = []
 
-  if (canManageAccounts.value) {
+  if (canInvite.value) {
     list.push({
       key: 'roles',
-      label: 'Roles & account linking',
-      hint: waitingCount.value ? `${waitingCount.value} awaiting a link` : 'Tie a sign-in to a member',
+      label: 'Invite user',
+      hint: canManageAccounts.value
+        ? (waitingCount.value ? `${waitingCount.value} awaiting a link` : 'Invite, link and assign roles')
+        : 'Invite someone and link their member',
       to: '/dashboard/settings/roles'
     })
   }

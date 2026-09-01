@@ -30,10 +30,25 @@ describe('deriveCapabilities', () => {
       'canSeeMemberDetail', 'canWriteMembers', 'canViewFinance', 'canWriteFinance',
       'canSeeContributorIdentity',
       'canViewAttendance', 'canManageAttendance', 'canManageSmallGroups', 'isCrossChurch',
-      'isSmallGroupLeader', 'canBrowseDirectory', 'canRecordJourney',
+      'isSmallGroupLeader', 'canBrowseDirectory', 'canRecordJourney', 'canInvite',
     ]) {
       expect(c[key]).toBe(false)
     }
+  })
+
+  // 0037. Inviting is Super Admin or Church Leader. The SQL (invite_member) is the
+  // enforcement; this flag only decides whether the Invite User surface appears.
+  describe('canInvite', () => {
+    it('is true for a Super Admin and a Church Leader', () => {
+      expect(deriveCapabilities(perm('super_admin', { is_super_admin: true })).canInvite).toBe(true)
+      expect(deriveCapabilities(perm('church_leader', { is_church_leader: true })).canInvite).toBe(true)
+    })
+
+    it('is false for a Head Pastor, a Pastor and a plain member', () => {
+      expect(deriveCapabilities(perm('head_pastor', { is_head_pastor: true })).canInvite).toBe(false)
+      expect(deriveCapabilities(perm('pastor', { is_pastor: true })).canInvite).toBe(false)
+      expect(deriveCapabilities(perm('member')).canInvite).toBe(false)
+    })
   })
 
   // 0028. The safe directory (names + gender + group + journey) is open to every
@@ -289,5 +304,58 @@ describe('routeAllowed', () => {
     expect(routeAllowed(finance, { requiresCapability: 'canWriteFinance' })).toBe(true)
     expect(routeAllowed(baseline, { requiresCapability: 'canWriteFinance' })).toBe(false)
     expect(routeAllowed(baseline, { requiresCapability: 'canViewAttendance' })).toBe(false)
+  })
+})
+
+// Calendar & Events (migration 0032). Two deliberately distinct capabilities: the page
+// gate (canViewEvents — the five roles, view-only for three of them) and the write gate
+// (canManageEvents — Events Team + SuperAdmin only). These mirror can_view_events() /
+// can_manage_events() in SQL and must not drift.
+describe('events capabilities (0032)', () => {
+  const superAdmin = deriveCapabilities(perm('super_admin', { is_super_admin: true }))
+  const headPastor = deriveCapabilities(perm('head_pastor', { is_head_pastor: true }))
+  const pastor = deriveCapabilities(perm('pastor', { is_pastor: true }))
+  const churchLeader = deriveCapabilities(perm('church_leader', { is_church_leader: true }))
+  const eventsTeam = deriveCapabilities(perm('member', { is_events_team: true }))
+  const finance = deriveCapabilities(perm('member', { is_finance: true }))
+  const member = deriveCapabilities(perm('member'))
+
+  it('derives isEventsTeam from the ministry flag, leaving role as member', () => {
+    expect(eventsTeam.isEventsTeam).toBe(true)
+    expect(eventsTeam.role).toBe('member')
+    expect(member.isEventsTeam).toBe(false)
+  })
+
+  it('canViewEvents admits the five privileged roles and no one else', () => {
+    expect(superAdmin.canViewEvents).toBe(true)
+    expect(headPastor.canViewEvents).toBe(true)
+    expect(pastor.canViewEvents).toBe(true)
+    expect(churchLeader.canViewEvents).toBe(true)
+    expect(eventsTeam.canViewEvents).toBe(true)
+    // Not an events role, not oversight — no page access.
+    expect(finance.canViewEvents).toBe(false)
+    expect(member.canViewEvents).toBe(false)
+  })
+
+  it('canManageEvents is Events Team + SuperAdmin only — the oversight roles are view-only', () => {
+    expect(superAdmin.canManageEvents).toBe(true)
+    expect(eventsTeam.canManageEvents).toBe(true)
+    // The three oversight roles may VIEW but never WRITE.
+    expect(headPastor.canManageEvents).toBe(false)
+    expect(pastor.canManageEvents).toBe(false)
+    expect(churchLeader.canManageEvents).toBe(false)
+    expect(finance.canManageEvents).toBe(false)
+    expect(member.canManageEvents).toBe(false)
+  })
+
+  it('fails closed for null permissions', () => {
+    const c = deriveCapabilities(null)
+    expect(c.isEventsTeam).toBe(false)
+    expect(c.canViewEvents).toBe(false)
+    expect(c.canManageEvents).toBe(false)
+  })
+
+  it('labels a purely Events Team account as Events Team', () => {
+    expect(roleLabel(eventsTeam)).toBe('Events Team')
   })
 })

@@ -87,9 +87,10 @@ async function render(component, props = {}, slots = null) {
 }
 
 // SSR escapes the apostrophe, so the raw string never appears in the output.
+// Collections, Expenses and Funds are one "Finance" item now (9 - Finance.dc.html).
 const NAV_LABELS = [
   'Overview', 'Members', 'Groups', 'Attendance',
-  'Collections', 'Expenses', 'Funds', 'Statistics', 'What&#39;s next',
+  'Finance', 'Statistics', 'What&#39;s next',
 ]
 
 beforeEach(() => {
@@ -106,7 +107,7 @@ describe('AppSidebar', () => {
     expect(warnings).toEqual([])
   })
 
-  it('renders all nine nav items', async () => {
+  it('renders the flat-seven nav items', async () => {
     const { html } = await render(AppSidebar)
     for (const label of NAV_LABELS) {
       expect(html, label).toContain(label)
@@ -121,7 +122,7 @@ describe('AppSidebar', () => {
     roleState.caps = {} // a scopeless caller: no gated capability
     const { html } = await render(AppSidebar)
 
-    for (const label of ['Attendance', 'Collections', 'Expenses', 'Funds']) {
+    for (const label of ['Attendance', 'Finance']) {
       expect(html, label).not.toContain(label)
     }
     // The ungated items are still there.
@@ -136,7 +137,7 @@ describe('AppSidebar', () => {
     roleState.caps = { canViewAttendance: true }
     const { html } = await render(AppSidebar)
     expect(html).toContain('Attendance')
-    expect(html).not.toContain('Collections') // still lacks canWriteFinance
+    expect(html).not.toContain('Finance') // still lacks canViewFinance
   })
 
   it('renders an unbuilt screen as a non-link badged Soon', async () => {
@@ -151,8 +152,7 @@ describe('AppSidebar', () => {
     const { html } = await render(AppSidebar)
     for (const path of [
       '/dashboard/overview', '/dashboard/members', '/dashboard/groups',
-      '/dashboard/attendance', '/dashboard/collections', '/dashboard/expenses',
-      '/dashboard/funds', '/dashboard/whats-next',
+      '/dashboard/attendance', '/dashboard/finance', '/dashboard/whats-next',
     ]) {
       expect(html, path).toContain(`href="${path}"`)
     }
@@ -165,7 +165,7 @@ describe('AppTabBar', () => {
 
     expect(errors).toEqual([])
     expect(warnings).toEqual([])
-    for (const label of ['Home', 'People', 'Check in', 'Funds', 'More']) {
+    for (const label of ['Home', 'People', 'Check in', 'Finance', 'More']) {
       expect(html, label).toContain(label)
     }
   })
@@ -180,7 +180,7 @@ describe('AppTabBar', () => {
     expect(html).toContain('People')
     expect(html).toContain('More')
     expect(html).not.toContain('Check in')
-    expect(html).not.toContain('Funds')
+    expect(html).not.toContain('Finance')
     expect(html).not.toContain('is-locked')
     expect(html).not.toContain('tabs__lock')
   })
@@ -189,23 +189,33 @@ describe('AppTabBar', () => {
     const { html } = await render(AppTabBar)
     for (const path of [
       '/dashboard/overview', '/dashboard/members',
-      '/dashboard/attendance', '/dashboard/funds',
+      '/dashboard/attendance', '/dashboard/finance',
     ]) {
       expect(html, path).toContain(`href="${path}"`)
     }
   })
 
-  // Groups, Collections, Expenses and What's next have no tab of their own. The
-  // bar must still show where you are, or a phone user on Groups sees five dark
-  // tabs and no answer to "where am I".
+  // Groups, What's next and the like have no tab of their own. The bar must still show
+  // where you are, or a phone user on Groups sees five dark tabs and no answer to "where
+  // am I" — so More carries the marker. On a tabbed route it is the tab that lights, not
+  // More. (isTabCurrent drives both; the substring pins it to the More control.)
   it('marks More as current on a screen with no tab of its own', async () => {
     currentRoute.value = { fullPath: '/dashboard/groups', path: '/dashboard/groups' }
     const { html } = await render(AppTabBar)
-    expect(html).toContain('is-current')
+    expect(html).toContain('is-current tabs__tab tabs__more')
 
     currentRoute.value = { fullPath: '/dashboard/overview', path: '/dashboard/overview' }
     const onTabbed = await render(AppTabBar)
-    expect(onTabbed.html).not.toContain('is-current')
+    expect(onTabbed.html).not.toContain('is-current tabs__tab tabs__more')
+  })
+
+  // The Finance tab gathers three child URLs; it must light on any of them, which a bare
+  // exact-active class would miss.
+  it('marks the Finance tab current across its child tab URLs', async () => {
+    currentRoute.value = { fullPath: '/dashboard/finance/report', path: '/dashboard/finance/report' }
+    const { html } = await render(AppTabBar)
+    expect(html).toContain('tabs__tab is-current')
+    expect(html).not.toContain('is-current tabs__tab tabs__more')
   })
 
   it('marks More as current while the drawer is open', async () => {

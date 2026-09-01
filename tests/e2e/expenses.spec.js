@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test'
 import { authedGoto } from './support/scenario.js'
 
-// Expenses — record-only by design (0009 grants INSERT but no UPDATE/DELETE, so
-// there is no row dialog). Covers the form write and the description chips that
-// reuse prior wording.
+// Expenses — append-only since 0039: a saved expense is confirmed through a
+// two-step review before it is written, and the rows open a detail dialog that
+// corrects or voids by reversal (never an in-place edit). Covers the two-step
+// form write and the description chips that reuse prior wording.
 
 const TODAY = new Date().toISOString().slice(0, 10)
 const NOW_ISO = new Date().toISOString()
@@ -13,7 +14,7 @@ const EXPENSES = [
 ]
 
 async function gotoExpenses(page) {
-  await authedGoto(page, '/dashboard/expenses', {
+  await authedGoto(page, '/dashboard/finance/expenses', {
     tables: {
       expenses: EXPENSES,
       collections: [{ amount: 5000 }],
@@ -35,7 +36,9 @@ test.describe('Expenses', () => {
   test('records an expense', async ({ page }) => {
     await page.getByRole('spinbutton', { name: 'Amount' }).fill('1500')
     await page.getByRole('textbox', { name: 'Description' }).fill('Snacks')
-    await page.getByRole('button', { name: 'Save expense' }).click()
+    // Two-step save: review the figures, then confirm the write.
+    await page.getByRole('button', { name: 'Review expense' }).click()
+    await page.getByRole('button', { name: 'Confirm & save' }).click()
 
     await expect(page.getByText('Expense recorded.')).toBeVisible()
     await expect(page.locator('.exp__desc', { hasText: 'Snacks' })).toBeVisible()
@@ -43,7 +46,9 @@ test.describe('Expenses', () => {
 
   test('reuses a prior description via a chip', async ({ page }) => {
     // The chip is a button; clicking it fills the free-text Description field.
-    await page.getByRole('button', { name: 'Electricity' }).click()
+    // exact:true so it does not also match the entry row, whose accessible name
+    // is "Open Electricity, ₱2,000.00" now that rows open a detail dialog.
+    await page.getByRole('button', { name: 'Electricity', exact: true }).click()
     await expect(page.getByRole('textbox', { name: 'Description' })).toHaveValue('Electricity')
   })
 })

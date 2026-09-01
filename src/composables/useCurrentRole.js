@@ -91,6 +91,7 @@ export function useCurrentRole() {
     isFinance: c('isFinance'),
     isSecretariat: c('isSecretariat'),
     isWelcome: c('isWelcome'),
+    isEventsTeam: c('isEventsTeam'),
     // Derived by capabilities.js since 0022 but never surfaced here until the group
     // page needed it: a Small Group Leader gets no click-through from a roster row to
     // member detail, so the restriction on their account holds there too.
@@ -106,6 +107,10 @@ export function useCurrentRole() {
     canViewAttendance: c('canViewAttendance'),
     canManageAttendance: c('canManageAttendance'),
     canManageSmallGroups: c('canManageSmallGroups'),
+    canInvite: c('canInvite'),
+    canViewEvents: c('canViewEvents'),
+    canManageEvents: c('canManageEvents'),
+    canManageRooms: c('canManageRooms'),
     isCrossChurch: c('isCrossChurch'),
     // group membership is group-specific (Finance = Pastor-only)
     canManageGroupMembers: (opts) => canManageGroupMembersPure(caps.value, opts),

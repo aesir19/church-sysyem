@@ -38,19 +38,26 @@ const TABS = [
   { key: 'overview',   label: 'Home',     icon: 'overview',   to: '/dashboard/overview' },
   { key: 'members',    label: 'People',   icon: 'members',    to: '/dashboard/members' },
   { key: 'attendance', label: 'Check in', icon: 'attendance', to: '/dashboard/attendance', needs: 'canViewAttendance' },
-  { key: 'funds',      label: 'Funds',    icon: 'funds',      to: '/dashboard/funds',      needs: 'canViewFinance' }
+  // Finance gathers the old Collections / Expenses / Funds tabs. `branch` marks it
+  // current across all its tab URLs (/dashboard/finance/*), which exact-active misses.
+  { key: 'finance',    label: 'Finance',  icon: 'funds',      to: '/dashboard/finance',    needs: 'canViewFinance', branch: true }
 ]
 
 const tabs = computed(() =>
   TABS.filter((tab) => !tab.needs || caps.value[tab.needs])
 )
 
-// Groups, Collections, Expenses and What's next have no tab. Rather than leave
-// the bar with nothing lit on those screens — which reads as "you are nowhere"
-// — More carries the current marker, which is also true: that is where they
-// live.
+// A tab is current on its exact route, or — for a branch tab (Finance) — anywhere in
+// its family of child URLs. Drives both the lit tab and the More fallback below.
+function isTabCurrent (tab) {
+  return route.path === tab.to || (!!tab.branch && route.path.startsWith(`${tab.to}/`))
+}
+
+// Groups, What's next and the like have no tab. Rather than leave the bar with nothing
+// lit on those screens — which reads as "you are nowhere" — More carries the current
+// marker, which is also true: that is where they live.
 const onUntabbedRoute = computed(() =>
-  !TABS.some((tab) => route.path === tab.to)
+  !TABS.some(isTabCurrent)
 )
 
 const moreCurrent = computed(() => props.menuOpen || onUntabbedRoute.value)
@@ -66,6 +73,7 @@ const moreCurrent = computed(() => props.menuOpen || onUntabbedRoute.value)
       :key="tab.key"
       :to="tab.to"
       class="tabs__tab"
+      :class="{ 'is-current': isTabCurrent(tab) }"
     >
       <span class="tabs__icon-box">
         <Icon
@@ -136,16 +144,17 @@ const moreCurrent = computed(() => props.menuOpen || onUntabbedRoute.value)
   white-space: nowrap;
 }
 
-/* exact-active, not active: /dashboard/overview would otherwise light up from
-   any child route, and Funds from Collections. */
-.tabs__tab.router-link-exact-active,
+/* `is-current` is computed (isTabCurrent): the exact route for a plain tab, or the whole
+   branch for Finance. It replaces a bare exact-active class, which would never light
+   Finance on its child tab URLs (/dashboard/finance/report). */
+.tabs__tab.is-current,
 .tabs__more.is-current {
   color: var(--accent);
 }
-.tabs__tab.router-link-exact-active .tabs__icon-box,
+.tabs__tab.is-current .tabs__icon-box,
 .tabs__more.is-current .tabs__icon-box { opacity: 1; }
 
-.tabs__tab.router-link-exact-active .tabs__label,
+.tabs__tab.is-current .tabs__label,
 .tabs__more.is-current .tabs__label { font-weight: 800; }
 
 .tabs__tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r-tag); }
