@@ -96,7 +96,9 @@ async function gotoAttendance(page) {
     onWrite,
   })
   // The roster having painted is the signal that context + roster both loaded.
-  await expect(rosterName(page, 'Ulysses Urbno')).toBeVisible()
+  // The full suite starts six Vite/browser workers together, so first paint can
+  // exceed Playwright's 5-second assertion default on a contended machine.
+  await expect(rosterName(page, 'Ulysses Urbno')).toBeVisible({ timeout: 15_000 })
 }
 
 test.describe('Attendance', () => {
@@ -117,7 +119,7 @@ test.describe('Attendance', () => {
     await page.locator('#link-member-option-0').click()
 
     // The click registered as a selection...
-    await expect(page.locator('.mac__note')).toHaveText(/Selected: Ferdinand Aguilar/)
+    await expect(page.getByRole('dialog').locator('.mac__note')).toHaveText(/Selected: Ferdinand Aguilar/)
     // ...and the dialog is still open. This is the assertion that pins the bug.
     await expect(dialogTitle).toBeVisible()
   })
@@ -136,15 +138,44 @@ test.describe('Attendance', () => {
   })
 
   test('records a first-time guest from staff entry', async ({ page }) => {
-    await page.getByRole('button', { name: '+ Record attendee' }).click()
-    await expect(page.getByRole('heading', { name: 'Record attendee' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Record attendance' })).toBeVisible()
+    await expect(page.getByRole('button', { name: '+ Record attendee' })).toHaveCount(0)
 
     await page.getByRole('button', { name: 'First-time guest' }).click()
     await page.getByLabel('Guest name').fill('Bella Guest')
     await page.getByRole('button', { name: 'Mark present' }).click()
 
     await expect(page.getByText('Attendance recorded.')).toBeVisible()
+    await expect(page.getByText('Bella Guest marked present. Ready for the next person.')).toBeVisible()
+    await expect(page.getByLabel('Guest name')).toBeFocused()
+    await expect(page.getByLabel('Guest name')).toHaveValue('')
     await expect(rosterName(page, 'Bella Guest')).toBeVisible()
+  })
+
+  test('records members continuously without reopening a dialog', async ({ page }) => {
+    const memberSearch = page.getByRole('combobox', { name: 'Search member' })
+    await memberSearch.fill('Ferdi')
+    await page.locator('#record-attendee-member-option-0').click()
+    await page.getByRole('button', { name: 'Mark present' }).click()
+
+    await expect(page.getByText('Ferdinand Aguilar marked present. Ready for the next person.')).toBeVisible()
+    await expect(memberSearch).toBeFocused()
+    await expect(memberSearch).toHaveValue('')
+    await expect(rosterName(page, 'Ferdinand Aguilar')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Record attendance' })).toBeVisible()
+  })
+
+  test('puts the inline recorder before attendance analytics on mobile', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 })
+
+    const recorder = page.getByRole('heading', { name: 'Record attendance' })
+    const liveSummary = page.getByText('Live now', { exact: true })
+    await expect(recorder).toBeVisible()
+    await expect(liveSummary).toBeVisible()
+
+    const recorderBox = await recorder.boundingBox()
+    const liveBox = await liveSummary.boundingBox()
+    expect(recorderBox.y).toBeLessThan(liveBox.y)
   })
 
   // Regression for the Welcome-Team "Unknown" bug: a member attendee whose
