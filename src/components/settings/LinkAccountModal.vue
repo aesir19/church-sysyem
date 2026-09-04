@@ -212,13 +212,15 @@ function confirm () {
 
 .lam__input {
   flex: 1;
-  padding: 10px 12px;
+  padding: var(--sp-10) var(--sp-12);
   border: 1px solid var(--border);
   border-radius: var(--r-control);
   background: var(--surface-subtle);
   font-family: inherit;
   font-size: var(--text-field);
+  color: var(--ink);
 }
+.lam__input::placeholder { color: var(--ink-5); }
 
 .lam__state {
   display: flex;
