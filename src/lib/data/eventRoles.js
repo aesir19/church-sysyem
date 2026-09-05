@@ -203,22 +203,28 @@ export async function findPersonClashes({ churchId, memberId, startsAt, endsAt, 
 }
 
 /**
- * Published events in the next `withinDays` that are short of volunteers — the calendar's
- * "needs a decision" gaps card (6a, story 3). Bounded by the short look-ahead window, so the
- * per-event fill lookups stay few. Returns [{ id, title, starts_at, needed, filled, gap }].
+ * Upcoming events that are short of volunteers. The default remains the calendar's bounded,
+ * published-only seven-day gaps card. A management worklist may omit the horizon and include
+ * drafts; RLS remains authoritative, so callers without draft access still receive only
+ * published rows. Returns [{ id, title, starts_at, status, needed, filled, gap }].
  */
-export async function listUnderstaffedEvents({ churchId, withinDays = 7, now = new Date() }) {
+export async function listUnderstaffedEvents({ churchId, withinDays = 7, includeDrafts = false, now = new Date() }) {
   if (!churchId) return []
   const from = now.toISOString()
-  const to = new Date(now.getTime() + withinDays * 86400000).toISOString()
-  const { data, error } = await supabase
+  let query = supabase
     .from('events')
-    .select('id, title, starts_at')
+    .select('id, title, starts_at, status')
     .eq('church_id', churchId)
-    .eq('status', 'published')
+    .in('status', includeDrafts ? ['draft', 'published'] : ['published'])
     .gte('starts_at', from)
-    .lt('starts_at', to)
     .order('starts_at', { ascending: true })
+
+  if (Number.isFinite(withinDays)) {
+    const to = new Date(now.getTime() + withinDays * 86400000).toISOString()
+    query = query.lt('starts_at', to)
+  }
+
+  const { data, error } = await query
   if (error || !data?.length) return []
   const out = []
   for (const e of data) {
