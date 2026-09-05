@@ -5,11 +5,6 @@
  * The chrome is AuthShell / Input / Button / Alert; what is left here is this
  * page's own copy and its own submit.
  *
- * WHAT IS NOT DRAWN, DELIBERATELY. The mockup puts a "Forgot?" link beside the
- * password label. There is no password-reset route, no reset email template and
- * no rate limit on one — that is a feature with a security review attached, not
- * a repaint. A link that goes nowhere is worse than no link on the one screen
- * where somebody is already stuck, so it goes to planning instead.
  */
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -109,6 +104,13 @@ async function handleLogin () {
         </template>
       </Input>
 
+      <router-link
+        to="/forgot-password"
+        class="signin__forgot"
+      >
+        Forgot password?
+      </router-link>
+
       <!-- The label changes with the loading state rather than being replaced
            by a bare spinner: a button whose text disappears is a button whose
            accessible name disappears with it. -->
@@ -132,6 +134,10 @@ async function handleLogin () {
 
 <style scoped>
 .signin { display: flex; flex-direction: column; gap: var(--sp-14); }
+
+.signin__forgot { align-self: flex-end; display: inline-flex; align-items: center; min-height: 44px; color: var(--accent-dark); font-size: var(--text-label); font-weight: 700; }
+.signin__forgot:hover { text-decoration: underline; }
+.signin__forgot:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .signin__submit { margin-top: var(--sp-6); padding: 13px; font-size: var(--text-body); font-weight: 800; }
 

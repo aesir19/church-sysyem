@@ -19,6 +19,7 @@ const routerMock = vi.hoisted(() => ({
     state.afterGuard = cb
   }),
   push: vi.fn(),
+  replace: vi.fn(),
 }))
 
 const supabaseMock = vi.hoisted(() => ({
@@ -140,12 +141,12 @@ describe('router auth guards', () => {
     state.linked = true
     await loadRouter()
 
-    state.authStateChangeHandler('PASSWORD_RECOVERY')
-    expect(routerMock.push).toHaveBeenCalledWith('/set-password')
+    state.authStateChangeHandler('PASSWORD_RECOVERY', state.session)
+    await vi.waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/reset-password'))
 
     const next = vi.fn()
     await state.guard({ path: '/dashboard/members', meta: { requiresAuth: true } }, {}, next)
-    expect(next).toHaveBeenCalledWith('/set-password')
+    expect(next).toHaveBeenCalledWith('/reset-password')
   })
 
   it('clears pending password flag after leaving set-password route', async () => {

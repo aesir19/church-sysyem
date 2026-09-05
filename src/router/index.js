@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { supabase } from '../lib/supabase'
 import { deriveCapabilities, routeAllowed } from '../utils/capabilities'
+import { isRecoverySession, recoveryUserId, setRecoveryUser } from '../lib/passwordRecovery'
 
 // Every route is lazy-loaded. This closes docs/DEFECTS.md D9 — previously every
 // view was imported eagerly into one 404 KB chunk — but it is load-bearing for
@@ -19,6 +20,11 @@ const routes = [
     component: () => import('../views/LoginView.vue')
   },
   {
+    path: '/forgot-password',
+    name: 'ForgotPassword',
+    component: () => import('../views/ForgotPasswordView.vue')
+  },
+  {
     // PUBLIC AND UNAUTHENTICATED, deliberately. No `meta` at all, and the guard
     // short-circuits on it below. The check-in token travels in the URL fragment
     // (/checkin#t=...), which browsers never send to the server, so it stays out
@@ -27,6 +33,14 @@ const routes = [
     path: '/checkin',
     name: 'Checkin',
     component: () => import('../views/CheckinView.vue')
+  },
+  {
+    // Public so an expired link gets an explanation. The form itself requires
+    // a verified recovery session; an ordinary signed-in session is insufficient.
+    path: '/reset-password',
+    name: 'ResetPassword',
+    component: () => import('../views/SetPasswordView.vue'),
+    props: { recovery: true }
   },
   {
     path: '/set-password',
@@ -176,10 +190,11 @@ const router = createRouter({
 
 // Detect invite or recovery tokens in the URL hash before routing
 let pendingPasswordSet = false
+let recoveryRedirect = new URLSearchParams(window.location.hash.slice(1)).get('type') === 'recovery'
 
 function detectInviteToken() {
-  const hash = window.location.hash
-  if (hash.includes('type=invite') || hash.includes('type=recovery')) {
+  const hash = new URLSearchParams(window.location.hash.slice(1))
+  if (hash.get('type') === 'invite') {
     pendingPasswordSet = true
   }
 }
@@ -187,10 +202,18 @@ function detectInviteToken() {
 detectInviteToken()
 
 // Listen for auth state changes from invite/recovery links
-supabase.auth.onAuthStateChange((event) => {
-  if (event === 'PASSWORD_RECOVERY') {
-    pendingPasswordSet = true
-    router.push('/set-password')
+supabase.auth.onAuthStateChange((event, session) => {
+  if (event === 'PASSWORD_RECOVERY' && session?.user?.id) {
+    setRecoveryUser(session.user.id)
+    // Leave the Auth callback before routing: guards call getSession(), which
+    // must not wait on the lock held while Auth notifies its subscribers.
+    setTimeout(() => { router.replace('/reset-password') }, 0)
+  } else if (event === 'SIGNED_OUT') {
+    setRecoveryUser()
+    pendingPasswordSet = false
+    recoveryRedirect = false
+  } else if (session && recoveryUserId.value && !isRecoverySession(session)) {
+    setRecoveryUser()
   }
 })
 
@@ -224,6 +247,20 @@ router.beforeEach(async (to, from, next) => {
 
   const { data: { session } } = await supabase.auth.getSession()
 
+  if ((recoveryRedirect || isRecoverySession(session)) && ['/login', '/set-password'].includes(to.path)) {
+    next('/reset-password')
+    return
+  }
+
+  if (to.path === '/reset-password') {
+    // The SDK has finished consuming the callback. Do not leave failed tokens
+    // or provider error text in the address bar or Vue Router's history state.
+    recoveryRedirect = false
+    if (to.hash || Object.keys(to.query || {}).length) next({ path: '/reset-password', replace: true })
+    else next()
+    return
+  }
+
   if (to.meta.requiresAuth && !session) {
     next('/login')
     return
@@ -255,6 +292,10 @@ router.beforeEach(async (to, from, next) => {
   }
 
   if (to.path.startsWith('/dashboard') && session) {
+    if (isRecoverySession(session)) {
+      next('/reset-password')
+      return
+    }
     if (pendingPasswordSet) {
       next('/set-password')
       return
