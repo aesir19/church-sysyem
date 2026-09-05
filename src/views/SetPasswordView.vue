@@ -1,18 +1,8 @@
 <script setup>
-/**
- * Set your password — the screen an invited user lands on from their email.
- *
- * Account creation is fully in-app, so setting the password is the last step:
- * on success the user is signed out and sent to /login to sign in with it.
- * `validateNewPassword` still enforces eight characters and a match; the meter below it advises
- * twelve without refusing eight, because raising the enforced minimum is a
- * policy decision for the owner rather than something to change while
- * repainting. Flagged in the handover, not decided here.
- */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { supabase } from '../lib/supabase'
-import { useCurrentUser } from '../composables/useCurrentUser'
+import { isRecoverySession, recoveryUserId } from '../lib/passwordRecovery'
 import { validateNewPassword } from '../utils/authValidation'
 import { passwordStrength } from '../utils/passwordStrength'
 import AuthShell from '../components/AuthShell.vue'
@@ -22,69 +12,132 @@ import Input from '../components/ui/Input.vue'
 import Icon from '../components/ui/icons/Icon.vue'
 import Spinner from '../components/ui/Spinner.vue'
 
+const props = defineProps({ recovery: { type: Boolean, default: false } })
 const router = useRouter()
-const { email, load: loadUser } = useCurrentUser()
+const email = ref('')
+const verifiedUserId = ref('')
+const checking = ref(true)
 const password = ref('')
 const confirmPassword = ref('')
 const revealed = ref(false)
 const loading = ref(false)
 const redirecting = ref(false)
+const passwordSaved = ref(false)
+const savedUserId = ref('')
+const sessionChanged = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
-
+let redirectTimer
+let verification = 0
+const allowed = computed(() => !!verifiedUserId.value && (!props.recovery || verifiedUserId.value === recoveryUserId.value))
 const strength = computed(() => passwordStrength(password.value))
-
-onMounted(loadUser)
-
-// Only once there is something to confirm, and only when it actually differs —
-// otherwise the field is red for every keystroke of a correct password.
 const confirmError = computed(() =>
   confirmPassword.value && confirmPassword.value !== password.value
     ? 'The two passwords do not match.'
     : ''
 )
 
-async function handleSetPassword () {
-  loading.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
+async function verifySession () {
+  const attempt = ++verification
+  checking.value = true
+  verifiedUserId.value = ''
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session || (props.recovery && !isRecoverySession(session))) return
+    const { data, error } = await supabase.auth.getUser()
+    if (attempt !== verification || error || data.user?.id !== session.user.id) return
+    if (props.recovery && !isRecoverySession(session)) return
+    verifiedUserId.value = data.user.id
+    email.value = data.user.email || ''
+  } catch {
+    // A session that cannot be verified never enables the password form.
+  } finally {
+    if (attempt === verification) checking.value = false
+  }
+}
 
+onMounted(verifySession)
+watch(recoveryUserId, () => {
+  if (!props.recovery || passwordSaved.value) return
+  password.value = ''
+  confirmPassword.value = ''
+  void verifySession()
+})
+onUnmounted(() => { verification++; clearTimeout(redirectTimer) })
+
+async function finishSignOut () {
+  if (redirecting.value) return
+  redirecting.value = true
+  errorMessage.value = ''
+  try {
+    const { data, error: userError } = await supabase.auth.getUser()
+    if (userError && ![401, 403].includes(userError.status) && userError.name !== 'AuthSessionMissingError') throw userError
+    if (userError || data.user?.id !== savedUserId.value) {
+      sessionChanged.value = true
+      errorMessage.value = 'Your password was saved, but your session changed. Open a new reset link for the same account to finish signing out its sessions.'
+      redirecting.value = false
+      return
+    }
+    const { error } = await supabase.auth.signOut({ scope: 'global' })
+    if (error) throw error
+    successMessage.value = props.recovery
+      ? 'Password reset. Taking you to sign in…'
+      : 'Password set. Taking you to sign in…'
+    redirectTimer = setTimeout(() => { router.replace('/login') }, 1500)
+  } catch {
+    errorMessage.value = 'Your password was saved, but we could not sign out your sessions. Retry sign out to finish.'
+    redirecting.value = false
+  }
+}
+
+async function handleSetPassword () {
+  if (loading.value || redirecting.value || passwordSaved.value || !allowed.value) return
+  errorMessage.value = ''
   const validationError = validateNewPassword(password.value, confirmPassword.value)
   if (validationError) {
     errorMessage.value = validationError
-    loading.value = false
     return
   }
-
-  const { error } = await supabase.auth.updateUser({ password: password.value })
-
-  if (error) {
-    // Unlike sign-in, this caller is already authenticated, so there is no
-    // account to enumerate — but the raw string is still written for a
-    // developer. Supabase's own "New password should be different from the old
-    // password" is the one worth passing through, and it is safe to.
-    errorMessage.value = error.message || 'Could not set your password. Please try again.'
-  } else {
-    // The account is created entirely in-app, so finish by handing the user to
-    // the login page to sign in with the password they just set. They are still
-    // authenticated from the invite link, and the router bounces a signed-in
-    // visitor away from /login — so sign out first, then redirect.
-    successMessage.value = 'Password set. Taking you to sign in…'
-    // Hold the button in its working state through the hand-off so the pause
-    // reads as motion, not a frozen page.
-    redirecting.value = true
-    await supabase.auth.signOut()
-    setTimeout(() => { router.push('/login') }, 1500)
+  loading.value = true
+  try {
+    // Recheck the account at submission in case another tab changed sessions.
+    const { data, error: userError } = await supabase.auth.getUser()
+    if (userError || data.user?.id !== verifiedUserId.value || !allowed.value) {
+      verifiedUserId.value = ''
+      password.value = ''
+      confirmPassword.value = ''
+      return
+    }
+    const { error } = await supabase.auth.updateUser({ password: password.value })
+    if (error) {
+      if (error.status === 401 || error.status === 403 || error.code === 'session_not_found') {
+        verifiedUserId.value = ''
+      } else {
+        errorMessage.value = error.code === 'same_password'
+          ? 'Choose a password different from your current password.'
+          : error.code === 'weak_password'
+            ? 'That password does not meet the account security requirements. Choose a stronger password.'
+            : 'Could not save your password. Please try again.'
+      }
+      return
+    }
+    passwordSaved.value = true
+    savedUserId.value = data.user.id
+    password.value = ''
+    confirmPassword.value = ''
+    await finishSignOut()
+  } catch {
+    errorMessage.value = 'Cannot reach the server. Check your connection and try again.'
+  } finally {
+    loading.value = false
   }
-
-  loading.value = false
 }
 </script>
 
 <template>
   <AuthShell
     wash="auth"
-    title="Set your password"
+    :title="recovery ? 'Reset your password' : 'Set your password'"
   >
     <template #badge>
       <span class="setpw__tile"><Icon
@@ -95,11 +148,82 @@ async function handleSetPassword () {
     </template>
 
     <template #subtitle>
-      You were invited to the <strong>UDFC dashboard</strong>. Choose a password
-      to finish.
+      <template v-if="recovery">
+        Choose a new password for your UDFC account.
+      </template>
+      <template v-else>
+        You were invited to the <strong>UDFC dashboard</strong>. Choose a password to finish.
+      </template>
     </template>
 
+    <p
+      v-if="checking && !passwordSaved"
+      role="status"
+    >
+      Checking your link…
+    </p>
+    <div
+      v-else-if="passwordSaved"
+      class="setpw"
+    >
+      <Alert
+        v-if="successMessage"
+        tone="success"
+      >
+        <span class="setpw__redirect"><Spinner :size="15" />{{ successMessage }}</span>
+      </Alert>
+      <Alert
+        v-if="errorMessage"
+        tone="danger"
+      >
+        {{ errorMessage }}
+      </Alert>
+      <Button
+        v-if="!redirecting && !sessionChanged"
+        block
+        @click="finishSignOut"
+      >
+        Retry sign out
+      </Button>
+      <Button
+        v-if="sessionChanged"
+        to="/forgot-password"
+        block
+      >
+        Request a new link
+      </Button>
+      <p
+        v-else-if="redirecting && !successMessage"
+        role="status"
+      >
+        Signing out your sessions…
+      </p>
+    </div>
+    <div
+      v-else-if="!allowed"
+      class="setpw"
+    >
+      <Alert tone="warning">
+        {{ recovery ? 'This reset link is invalid or has expired. Request a new link to continue.' : 'This invitation link is invalid or has expired. Ask an administrator for a new invitation.' }}
+      </Alert>
+      <Button
+        v-if="recovery"
+        to="/forgot-password"
+        variant="primary"
+        size="lg"
+        block
+      >
+        Request a new link
+      </Button>
+      <Button
+        to="/login"
+        block
+      >
+        Back to sign in
+      </Button>
+    </div>
     <form
+      v-else
       class="setpw"
       @submit.prevent="handleSetPassword"
     >
@@ -204,7 +328,7 @@ async function handleSetPassword () {
         :disabled="!!successMessage"
         class="setpw__submit"
       >
-        {{ redirecting ? 'Taking you to sign in…' : (loading ? 'Saving…' : 'Save and continue') }}
+        {{ loading ? 'Saving…' : recovery ? 'Reset password' : 'Save and continue' }}
       </Button>
     </form>
   </AuthShell>

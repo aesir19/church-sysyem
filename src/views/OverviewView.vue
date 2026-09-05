@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, defineAsyncComponent } from 'vue'
 import Card from '../components/ui/Card.vue'
 import Badge from '../components/ui/Badge.vue'
 import Button from '../components/ui/Button.vue'
@@ -42,6 +42,12 @@ const funds = ref({ total: 0 })
 const openService = ref(null)
 
 const now = new Date()
+// The rework is deliberately dev-only until the owner picks a direction. Production
+// continues to render the proven Overview below even if these files are merged by mistake.
+const showPrototype = import.meta.env.DEV
+const OverviewPrototype = showPrototype
+  ? defineAsyncComponent(() => import('./overview-prototype/OverviewPrototype.vue'))
+  : null
 
 const greetingDate = computed(() =>
   now.toLocaleDateString('en-PH', {
@@ -151,7 +157,21 @@ function shortDate (iso) {
 </script>
 
 <template>
-  <div class="ov">
+  <OverviewPrototype
+    v-if="showPrototype"
+    :greeting="greeting"
+    :greeting-date="greetingDate"
+    :church-name="activeChurchName"
+    :counts="counts"
+    :attention="attention"
+    :services="services"
+    :open-service="openService"
+    :loading-overview="loading"
+  />
+  <div
+    v-else
+    class="ov"
+  >
     <!-- Greeting -->
     <header
       class="ov__head anim-rise"

@@ -6,7 +6,7 @@ import Button from '../components/ui/Button.vue'
 import OverflowMenu from '../components/ui/OverflowMenu.vue'
 import Icon from '../components/ui/icons/Icon.vue'
 import Modal from '../components/ui/Modal.vue'
-import RecordAttendeeModal from '../components/attendance/RecordAttendeeModal.vue'
+import AttendanceRecorder from '../components/attendance/AttendanceRecorder.vue'
 import CheckinQrModal from '../components/attendance/CheckinQrModal.vue'
 import CheckinWindowsModal from '../components/attendance/CheckinWindowsModal.vue'
 import LinkMemberModal from '../components/attendance/LinkMemberModal.vue'
@@ -37,10 +37,10 @@ import { useActiveChurch } from '../composables/useActiveChurch'
 //
 // WHAT MOVED. The old screen was one 2,000-line file with two tabs: a setup tab
 // (schedules, QR, link rotation) and a record tab (picker, summary tiles,
-// roster). The mockup collapses that into a single screen whose subject is the
-// roster, with everything else behind a button. The setup did not disappear —
-// it is CheckinWindowsModal and CheckinQrModal — because self check-in only
-// works inside a scheduled window, and nothing else in the app manages those.
+// roster). The screen keeps the roster and live context together, while the
+// repeated staff-recording workflow stays visible beside the live count. Rare
+// setup remains in CheckinWindowsModal and CheckinQrModal because self check-in
+// only works inside a scheduled window, and nothing else manages those.
 //
 // canManageAttendance (Welcome Team / SuperAdmin) gates every write; viewers
 // (Pastor / Church Leader / Head Pastor) get the same screen read-only. RLS is
@@ -73,14 +73,11 @@ const schedules = ref([])
 const members = ref([])
 const serviceCounts = ref(new Map())
 
-const recordOpen = ref(false)
 const qrOpen = ref(false)
 const windowsOpen = ref(false)
 
-// The corner keeps only the verb (Record attendee) and Show QR — the one action
-// ushers reach for repeatedly while a service is open. Configuring the check-in
-// windows is rare setup, so it moves into the ⋯ menu (5 - Action Bar System:
-// "everything rare — outputs, settings, destruction").
+// Configuring check-in windows is rare setup, so it stays in the overflow menu.
+// The repeated usher workflow is the inline AttendanceRecorder below.
 const cornerMenu = computed(() => [
   { key: 'windows', label: 'Check-in windows', onSelect: () => { windowsOpen.value = true } }
 ])
@@ -436,14 +433,6 @@ function formatRecordedAt (value) {
         <Button @click="qrOpen = true">
           Show QR
         </Button>
-        <Button
-          v-if="canManageAttendance"
-          variant="primary"
-          :disabled="!selectedServiceId"
-          @click="recordOpen = true"
-        >
-          + Record attendee
-        </Button>
       </div>
     </header>
 
@@ -488,7 +477,7 @@ function formatRecordedAt (value) {
     </div>
 
     <template v-else>
-      <div class="att__grid">
+      <div class="att__workspace">
         <!-- The live card. Gradient only while the service being viewed is the
              one actually running: the same card in cyan over last month's
              roster would say "live now" about a service that closed weeks
@@ -546,10 +535,24 @@ function formatRecordedAt (value) {
           </Button>
         </section>
 
+        <AttendanceRecorder
+          v-if="canManageAttendance"
+          class="att__recorder anim-rise"
+          style="--i: 2"
+          :service-id="selectedServiceId"
+          :service-label="selectedService?.label || ''"
+          :service-date="longDate(selectedService?.service_date)"
+          :recorded="summary.total"
+          :church-id="activeChurchId"
+          :members="members"
+          @recorded="onRecorded"
+        />
+
         <!-- Last ten services -->
         <section
           class="card att__chart anim-rise"
-          style="--i: 2"
+          :class="{ 'att__chart--wide': canManageAttendance }"
+          style="--i: 3"
         >
           <div class="att__card-head">
             <h2 class="att__card-title">
@@ -584,7 +587,7 @@ function formatRecordedAt (value) {
       <!-- Who attended -->
       <section
         class="card att__roster anim-rise"
-        style="--i: 3"
+        style="--i: 4"
       >
         <div class="att__card-head att__card-head--padded">
           <h2 class="att__card-title">
@@ -703,18 +706,6 @@ function formatRecordedAt (value) {
       </section>
     </template>
 
-    <RecordAttendeeModal
-      v-if="canManageAttendance"
-      v-model:open="recordOpen"
-      :service-id="selectedServiceId"
-      :service-label="selectedService?.label || ''"
-      :service-date="longDate(selectedService?.service_date)"
-      :recorded="summary.total"
-      :church-id="activeChurchId"
-      :members="members"
-      @recorded="onRecorded"
-    />
-
     <CheckinQrModal
       v-model:open="qrOpen"
       :checkin-url="checkinUrl"
@@ -804,7 +795,9 @@ function formatRecordedAt (value) {
   color: var(--warning-deep);
 }
 
-.att__grid { display: grid; grid-template-columns: 320px 1fr; gap: var(--sp-18); align-items: start; }
+.att__grid,
+.att__workspace { display: grid; grid-template-columns: 320px 1fr; gap: var(--sp-18); align-items: stretch; }
+.att__chart--wide { grid-column: 1 / -1; }
 
 .card {
   background: var(--surface);
@@ -874,7 +867,7 @@ function formatRecordedAt (value) {
 .att__split-label { font-size: var(--text-meta-sm); color: var(--ink-5); }
 .att__live.is-live .att__split-label { color: var(--accent-border); }
 
-.att__live-note { margin-top: var(--sp-14); font-size: var(--text-meta); color: var(--ink-5); }
+.att__live-note { margin-top: auto; padding-top: var(--sp-14); font-size: var(--text-meta); color: var(--ink-5); }
 .att__live.is-live .att__live-note { color: var(--accent-border); }
 
 .att__live .btn { margin-top: var(--sp-12); }
@@ -1079,7 +1072,10 @@ function formatRecordedAt (value) {
 }
 
 @media (max-width: 900px) {
-  .att__grid { grid-template-columns: 1fr; }
+  .att__grid,
+  .att__workspace { grid-template-columns: 1fr; }
+  .att__recorder { order: -1; }
+  .att__chart--wide { grid-column: auto; }
   .att__head { flex-direction: column; align-items: stretch; }
   .att__source { display: none; }
 }

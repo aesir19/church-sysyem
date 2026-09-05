@@ -38,7 +38,7 @@ vi.mock('../../../src/lib/supabase', () => ({
 const {
   listAccounts, listChurchAccounts, listChurches, linkAccount, setUserRole,
   assignSmallGroupLeader, unassignSmallGroupLeader, listGroupLeaders,
-  listPendingInvites, inviteAccount, resendInvite, ADMIN_MESSAGES
+  listPendingInvites, inviteAccount, resendInvite, cancelInvite, ADMIN_MESSAGES
 } = await import('../../../src/lib/data/admin')
 
 const rpcCalls = name => state.calls.filter(c => c[0] === 'rpc' && c[1] === name)
@@ -243,27 +243,28 @@ describe('listPendingInvites', () => {
 })
 
 describe('inviteAccount', () => {
-  it('sends the e-mail, member and role through the Edge Function in invite mode', async () => {
-    state.invoke = { data: { ok: true, full_name: 'Ana Cruz' }, error: null }
+  it('sends the member and role through the Edge Function in invite mode — never an e-mail', async () => {
+    // Member-first (ADR-0019): the address is derived server-side from the member, so
+    // the client passes only who to invite. The e-mail comes back on success.
+    state.invoke = { data: { ok: true, full_name: 'Ana Cruz', email: 'ana@example.test' }, error: null }
 
-    const res = await inviteAccount({ email: 'new@example.test', memberId: 'm1', role: 'member' })
+    const res = await inviteAccount({ memberId: 'm1', role: 'member' })
 
     expect(res.ok).toBe(true)
     expect(res.fullName).toBe('Ana Cruz')
+    expect(res.email).toBe('ana@example.test')
     expect(invokeCalls()[0][1]).toBe('invite-user')
-    expect(invokeCalls()[0][2]).toEqual({
-      email: 'new@example.test', member_id: 'm1', role: 'member', mode: 'invite'
-    })
+    expect(invokeCalls()[0][2]).toEqual({ member_id: 'm1', role: 'member', mode: 'invite' })
+    // The client must not send an address — that is the whole point of the change.
+    expect(invokeCalls()[0][2]).not.toHaveProperty('email')
   })
 
   it('passes null role through untouched (a Church Leader sets none)', async () => {
     state.invoke = { data: { ok: true }, error: null }
 
-    await inviteAccount({ email: 'new@example.test', memberId: 'm1' })
+    await inviteAccount({ memberId: 'm1' })
 
-    expect(invokeCalls()[0][2]).toEqual({
-      email: 'new@example.test', member_id: 'm1', role: null, mode: 'invite'
-    })
+    expect(invokeCalls()[0][2]).toEqual({ member_id: 'm1', role: null, mode: 'invite' })
   })
 
   it('surfaces the caller-safe message the function returned on the error body', async () => {
@@ -271,22 +272,54 @@ describe('inviteAccount', () => {
     // back off error.context (the raw Response). This is exactly that path.
     state.invoke = {
       data: null,
-      error: { context: { json: async () => ({ error: 'that email already has an account' }) } }
+      error: { context: { json: async () => ({ error: 'that member has no e-mail on file' }) } }
     }
 
-    const res = await inviteAccount({ email: 'taken@example.test', memberId: 'm1', role: 'member' })
+    const res = await inviteAccount({ memberId: 'm1', role: 'member' })
 
     expect(res.ok).toBe(false)
-    expect(res.message).toBe('that email already has an account')
+    expect(res.message).toBe('that member has no e-mail on file')
   })
 
   it('falls back to a generic message when the error body cannot be read', async () => {
     state.invoke = { data: null, error: { message: 'network' } }
 
-    const res = await inviteAccount({ email: 'x@example.test', memberId: 'm1', role: 'member' })
+    const res = await inviteAccount({ memberId: 'm1', role: 'member' })
 
     expect(res.ok).toBe(false)
     expect(res.message).toBe(ADMIN_MESSAGES.inviteFailed)
+  })
+})
+
+describe('cancelInvite', () => {
+  it('cancels by e-mail through the Edge Function in cancel mode', async () => {
+    state.invoke = { data: { ok: true, full_name: 'Ana Cruz' }, error: null }
+
+    const res = await cancelInvite({ email: 'new@example.test' })
+
+    expect(res.ok).toBe(true)
+    expect(invokeCalls()[0][2]).toEqual({ email: 'new@example.test', mode: 'cancel' })
+  })
+
+  it('reports the function refusal', async () => {
+    state.invoke = {
+      data: null,
+      error: { context: { json: async () => ({ error: 'There is no pending invitation you can cancel for that address.' }) } }
+    }
+
+    const res = await cancelInvite({ email: 'new@example.test' })
+
+    expect(res.ok).toBe(false)
+    expect(res.message).toBe('There is no pending invitation you can cancel for that address.')
+  })
+
+  it('falls back to a generic message when the error body cannot be read', async () => {
+    state.invoke = { data: null, error: { message: 'network' } }
+
+    const res = await cancelInvite({ email: 'x@example.test' })
+
+    expect(res.ok).toBe(false)
+    expect(res.message).toBe(ADMIN_MESSAGES.cancelFailed)
   })
 })
 

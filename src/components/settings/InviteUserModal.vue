@@ -1,17 +1,22 @@
 <script setup>
-// Invite a new user, and tie the sign-in to a member before it is even created.
+// Invite a member to their account, and tie the sign-in to that member before it is
+// even created. MEMBER-FIRST (ADR-0019).
 //
-// TWO GRANTS IN ONE FORM. An e-mail says who to invite; the member says who they
-// are. A Super Admin may also set a role here; a Church Leader may not — they
-// invite and link within their own church, and a Super Admin grants the role
-// afterwards (mirrors invite_member/0037). `canSetRole` is what draws or hides
-// the role row, but the SQL is the enforcement, not this flag.
+// YOU PICK THE PERSON, NOT AN ADDRESS. The invite goes to the e-mail already saved on
+// the member's record — the one source of truth — so a mistyped address is impossible.
+// This dialog never lets you type an address: it searches members by name and shows,
+// on every row, the address the invite would go to. Seeing "jane@…" before you send is
+// the cheapest guard against inviting the wrong place.
 //
-// The member lookup is driven by the e-mail above, not a name search: an invite is
-// tied to the member record that already carries that address. It needs no church
-// filter of its own — members RLS already scopes the rows to what the caller may
-// see (every church for a Super Admin, their own for a Church Leader), which is
-// exactly the set each is allowed to invite.
+// BIRTHDATE IS THE DISAMBIGUATOR. Two members can share a name (mirrors 4d /
+// LinkAccountModal); the birthdate is the thing that tells them apart, and is the only
+// reason it is on screen. members RLS already scopes the rows to what the caller may
+// invite (every church for a Super Admin, their own for a Church Leader).
+//
+// A MEMBER WITH NO E-MAIL CANNOT BE INVITED. Their row is shown but disabled, with a
+// prompt to add an address first — greyed-out-with-a-reason, not hidden, so you can see
+// why the person you want is not selectable. invite_member() enforces the same rule
+// server-side; this is only the humane surface of it.
 
 import { ref, watch, computed } from 'vue'
 import { supabase } from '../../lib/supabase'
@@ -31,87 +36,87 @@ const props = defineProps({
 
 const emit = defineEmits(['update:open', 'invite'])
 
-const email = ref('')
+const query = ref('')
 const rows = ref([])
-const looking = ref(false)
+const searching = ref(false)
 const chosen = ref(null)
 const role = ref('unassigned')
 const lookupError = ref('')
 let lookupToken = 0
 let debounce = null
 
-// Reset every time it opens — a form that remembers the last invite is how the
-// wrong member gets attached to the next e-mail.
+// Reset every time it opens — a form that remembers the last search is how the wrong
+// member gets attached to the next invite.
 watch(() => props.open, isOpen => {
   if (!isOpen) return
   clearTimeout(debounce)
-  email.value = ''
+  query.value = ''
   rows.value = []
   chosen.value = null
   role.value = 'unassigned'
   lookupError.value = ''
 })
 
-// A light client-side check so an obvious typo is caught before a round trip. The
-// server validates for real; this is only to fail fast on an empty or shapeless
-// address.
-const emailLooksValid = computed(() => /^\S+@\S+\.\S+$/.test(email.value.trim()))
-
-// The list follows the e-mail. Every edit clears the current match — the chosen
-// member must always be the one whose address is in the box, never a stale pick
-// left over from a previous address — then, once the address is well-formed, we
-// look up the member record that carries it.
-watch(email, () => {
+// The list follows the name box. Every edit clears the current pick — the chosen member
+// must always be one that is actually in the list — then, after a short pause, we search.
+watch(query, () => {
   clearTimeout(debounce)
-  rows.value = []
   chosen.value = null
   lookupError.value = ''
-  if (!emailLooksValid.value) {
-    looking.value = false
+  if (!query.value.trim()) {
+    rows.value = []
+    searching.value = false
     return
   }
-  looking.value = true
-  debounce = setTimeout(lookupByEmail, 300)
+  searching.value = true
+  debounce = setTimeout(searchMembers, 300)
 })
 
-async function lookupByEmail () {
-  const needle = email.value.trim()
+async function searchMembers () {
+  const needle = query.value.trim()
   const token = ++lookupToken
-  looking.value = true
+  searching.value = true
   lookupError.value = ''
 
-  // ilike with no wildcards is an exact, case-insensitive match — the member whose
-  // stored e-mail is this address, and no partial-name hits.
   const { data, error } = await supabase
     .from('members')
-    .select('id, first_name, last_name, birthdate, member_of')
+    .select('id, first_name, last_name, birthdate, member_of, email')
+    // Archived members are visible to RLS since 0010; filtering them is the
+    // application's job, and an archived person should not be gaining a sign-in.
     .is('archived_at', null)
-    .ilike('email', needle)
+    .or(`first_name.ilike.%${needle}%,last_name.ilike.%${needle}%`)
     .order('last_name')
     .limit(20)
 
-  // A newer keystroke already started another lookup; drop this stale result.
+  // A newer keystroke already started another search; drop this stale result.
   if (token !== lookupToken) return
-  looking.value = false
+  searching.value = false
 
   if (error) {
-    lookupError.value = 'Could not look up member records.'
+    lookupError.value = 'Could not search member records.'
     rows.value = []
     return
   }
 
   rows.value = data || []
-  // One unambiguous match is the common case — attach it without an extra click.
-  chosen.value = rows.value.length === 1 ? rows.value[0] : null
 }
-const canSend = computed(() => emailLooksValid.value && !!chosen.value && !props.sending)
+
+// Only a member with an address on file can be picked; the server enforces the same.
+const hasEmail = member => !!(member.email && member.email.trim())
+
+function choose (member) {
+  if (!hasEmail(member)) return
+  chosen.value = member
+}
+
+const canSend = computed(() => !!chosen.value && !props.sending)
 
 function confirm () {
   if (!canSend.value) return
   emit('invite', {
-    email: email.value.trim(),
     memberId: chosen.value.id,
     memberName: `${chosen.value.first_name} ${chosen.value.last_name}`,
+    email: chosen.value.email,
     role: props.canSetRole ? role.value : null
   })
 }
@@ -122,7 +127,7 @@ function confirm () {
     :open="open"
     width="lg"
     title="Invite a user"
-    description="Send an invitation e-mail and attach the member record it belongs to."
+    description="Find the member and send the invitation to the e-mail on their record."
     @update:open="emit('update:open', $event)"
   >
     <div class="iu">
@@ -136,25 +141,19 @@ function confirm () {
       <div class="iu__field">
         <label
           class="iu__label"
-          for="iu-email"
-        >E-mail address</label>
+          for="iu-search"
+        >Member</label>
         <input
-          id="iu-email"
-          v-model="email"
-          type="email"
+          id="iu-search"
+          v-model="query"
+          type="search"
           class="iu__input"
-          placeholder="name@example.com"
+          placeholder="Search members by name"
           autocomplete="off"
         >
-        <span
-          v-if="email && !emailLooksValid"
-          class="iu__hint iu__hint--warn"
-        >That does not look like an e-mail address.</span>
       </div>
 
       <div class="iu__field">
-        <span class="iu__label">Member record</span>
-
         <p
           v-if="lookupError"
           class="iu__state iu__state--error"
@@ -162,26 +161,26 @@ function confirm () {
           {{ lookupError }}
         </p>
         <p
-          v-else-if="!emailLooksValid"
+          v-else-if="!query.trim()"
           class="iu__state"
         >
-          Enter an e-mail address above to find its member record.
+          Search for the member you want to invite.
         </p>
         <p
-          v-else-if="looking"
+          v-else-if="searching"
           class="iu__state"
         >
-          <Spinner /> Looking up member records…
+          <Spinner /> Searching members…
         </p>
         <p
           v-else-if="!rows.length"
           class="iu__state iu__state--warn"
         >
-          No member record has this e-mail address.
+          No active member matches that name.
         </p>
 
         <ul
-          v-else-if="rows.length"
+          v-else
           class="iu__list"
         >
           <li
@@ -191,17 +190,28 @@ function confirm () {
             <button
               type="button"
               class="iu__row"
-              :class="{ 'is-chosen': chosen && chosen.id === member.id }"
+              :class="{ 'is-chosen': chosen && chosen.id === member.id, 'is-disabled': !hasEmail(member) }"
               :aria-pressed="!!chosen && chosen.id === member.id"
-              @click="chosen = member"
+              :disabled="!hasEmail(member)"
+              @click="choose(member)"
             >
               <Avatar
                 :name="`${member.first_name} ${member.last_name}`"
                 :size="28"
               />
-              <span class="iu__name">{{ member.first_name }} {{ member.last_name }}</span>
-              <!-- Same disambiguator as the linking dialog: two members can share a
-                   name, and the birthdate is what tells them apart. -->
+              <span class="iu__who">
+                <span class="iu__name">{{ member.first_name }} {{ member.last_name }}</span>
+                <!-- Where the invite would go, shown before you send. Or why it can't. -->
+                <span
+                  v-if="hasEmail(member)"
+                  class="iu__email"
+                >{{ member.email }}</span>
+                <span
+                  v-else
+                  class="iu__email iu__email--none"
+                >No e-mail on file — add one first</span>
+              </span>
+              <!-- The disambiguator: two members can share a name. -->
               <span class="iu__meta">b. {{ member.birthdate }}</span>
             </button>
           </li>
@@ -211,8 +221,8 @@ function confirm () {
           v-if="chosen"
           class="iu__chosen"
         >
-          Inviting <strong>{{ email || 'this address' }}</strong> as
-          <strong>{{ chosen.first_name }} {{ chosen.last_name }}</strong>.
+          Inviting <strong>{{ chosen.first_name }} {{ chosen.last_name }}</strong> at
+          <strong>{{ chosen.email }}</strong>.
         </p>
       </div>
 
@@ -270,24 +280,23 @@ function confirm () {
 </template>
 
 <style scoped>
-.iu { display: flex; flex-direction: column; gap: 16px; }
+.iu { display: flex; flex-direction: column; gap: var(--sp-16); }
 
-.iu__field { display: flex; flex-direction: column; gap: 7px; }
+.iu__field { display: flex; flex-direction: column; gap: var(--sp-7); }
 
 .iu__label { font-size: var(--text-meta); font-weight: 700; color: var(--ink-3); }
 
 .iu__input {
   flex: 1;
-  padding: 10px 12px;
+  padding: var(--sp-10) var(--sp-12);
   border: 1px solid var(--border);
   border-radius: var(--r-control);
   background: var(--surface-subtle);
   font-family: inherit;
   font-size: var(--text-field);
+  color: var(--ink);
 }
-
-.iu__hint { font-size: var(--text-meta); color: var(--ink-4); }
-.iu__hint--warn { color: var(--magenta-darkest); }
+.iu__input::placeholder { color: var(--ink-5); }
 
 .iu__state {
   display: flex;
@@ -306,15 +315,15 @@ function confirm () {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: 240px;
+  gap: var(--sp-6);
+  max-height: 280px;
   overflow-y: auto;
 }
 
 .iu__row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--sp-12);
   width: 100%;
   padding: 11px 13px;
   border: 1px solid var(--border);
@@ -327,9 +336,14 @@ function confirm () {
 .iu__row:hover { border-color: var(--accent-border); }
 .iu__row:focus-visible { outline: var(--ring-focus); outline-offset: -2px; }
 .iu__row.is-chosen { border-color: var(--accent); background: var(--accent-tint); }
+.iu__row.is-disabled { opacity: 0.55; cursor: not-allowed; }
+.iu__row.is-disabled:hover { border-color: var(--border); }
 
-.iu__name { flex: 1; font-weight: 700; font-size: var(--text-body-sm); }
-.iu__meta { font-size: var(--text-meta); color: var(--ink-4); }
+.iu__who { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.iu__name { font-weight: 700; font-size: var(--text-body-sm); }
+.iu__email { font-size: var(--text-meta); color: var(--ink-4); overflow-wrap: anywhere; }
+.iu__email--none { color: var(--magenta-darkest); }
+.iu__meta { font-size: var(--text-meta); color: var(--ink-4); flex: none; }
 
 .iu__chosen {
   margin: 0;
@@ -342,13 +356,13 @@ function confirm () {
   align-items: center;
   gap: var(--sp-8);
   flex-wrap: wrap;
-  padding-top: 14px;
+  padding-top: var(--sp-14);
   border-top: 1px solid var(--divider);
 }
 .iu__role-label { font-size: var(--text-meta); color: var(--ink-4); }
 
 .iu__select {
-  padding: 8px 11px;
+  padding: var(--sp-8) 11px;
   border: 1px solid var(--border);
   border-radius: var(--r-control);
   background: var(--surface);
@@ -359,5 +373,5 @@ function confirm () {
 }
 
 .iu__role-note { font-size: var(--text-meta); color: var(--ink-4); }
-.iu__role-note--block { margin: 0; padding-top: 14px; border-top: 1px solid var(--divider); }
+.iu__role-note--block { margin: 0; padding-top: var(--sp-14); border-top: 1px solid var(--divider); }
 </style>
