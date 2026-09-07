@@ -1,6 +1,5 @@
 <script setup>
 // The selected Overview direction on the existing `/dashboard/overview` route.
-// PROTOTYPE ONLY — the production build never mounts it until the data shape is signed off.
 import { computed, onMounted, ref, watch } from 'vue'
 import { useActiveChurch } from '../../composables/useActiveChurch'
 import { useCurrentRole } from '../../composables/useCurrentRole'
@@ -20,14 +19,17 @@ const props = defineProps({
   services: { type: Array, required: true },
   openService: { type: Object, default: null },
   loadingOverview: { type: Boolean, default: false },
+  overviewError: { type: Boolean, default: false },
 })
 
 const { activeChurchId } = useActiveChurch()
 const { canViewEvents } = useCurrentRole()
 const loadingCalendar = ref(true)
 const calendarError = ref(false)
+const rolesError = ref(false)
 const items = ref([])
 const understaffed = ref([])
+let loadGeneration = 0
 
 const lastService = computed(() => props.services[props.services.length - 1] || null)
 const linkedItems = computed(() => items.value.map((item) => ({
@@ -42,10 +44,14 @@ const linkedUnderstaffed = computed(() => understaffed.value.map((event) => ({
 })))
 
 async function loadCalendar() {
+  const generation = ++loadGeneration
   const churchId = activeChurchId.value
+  calendarError.value = false
+  rolesError.value = false
+  items.value = []
+  understaffed.value = []
   if (!churchId) { loadingCalendar.value = false; return }
   loadingCalendar.value = true
-  calendarError.value = false
   const fromDate = new Date()
   fromDate.setHours(0, 0, 0, 0)
   const toDate = addDays(fromDate, 7)
@@ -59,6 +65,7 @@ async function loadCalendar() {
       listBirthdays({ churchId, from, to }),
       listUnderstaffedEvents({ churchId, withinDays: null, includeDrafts: true }),
     ])
+    if (generation !== loadGeneration) return
     if (!events.ok) calendarError.value = true
     const merged = [
       ...(events.ok ? events.items : []),
@@ -69,13 +76,16 @@ async function loadCalendar() {
       .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
 
     items.value = merged
-    understaffed.value = gaps
+    understaffed.value = gaps.ok ? gaps.items : []
+    rolesError.value = !gaps.ok
   } catch {
+    if (generation !== loadGeneration) return
     calendarError.value = true
+    rolesError.value = true
     items.value = []
     understaffed.value = []
   } finally {
-    loadingCalendar.value = false
+    if (generation === loadGeneration) loadingCalendar.value = false
   }
 }
 
@@ -96,5 +106,7 @@ watch(activeChurchId, loadCalendar)
     :open-service="openService"
     :loading="loadingOverview || loadingCalendar"
     :calendar-error="calendarError"
+    :overview-error="overviewError"
+    :roles-error="rolesError"
   />
 </template>
