@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Review-only bug audit of the UDFC Church Dashboard, with verified findings and proposed solutions.">
+  <title>UDFC App Bug Audit — 7 September 2026</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #020617;
+      --surface: #0e1628;
+      --surface-raised: #141f34;
+      --ink: #f8fafc;
+      --muted: #a9b7c9;
+      --line: #334155;
+      --accent: #4ade80;
+      --accent-soft: #123922;
+      --high: #fb7185;
+      --high-soft: #451a26;
+      --medium: #fbbf24;
+      --medium-soft: #422f0d;
+      --info: #7dd3fc;
+      --info-soft: #0c3448;
+      --focus: #ffffff;
+      --radius: 14px;
+      --shadow: 0 18px 48px rgba(0, 0, 0, .22);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.62 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    a { color: var(--info); text-underline-offset: 3px; }
+    a:hover { color: #bae6fd; }
+    a:focus-visible, summary:focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 4px;
+      border-radius: 4px;
+    }
+    .skip-link {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 10;
+      transform: translateY(-150%);
+      padding: 10px 14px;
+      background: var(--ink);
+      color: var(--bg);
+      border-radius: 8px;
+      font-weight: 700;
+    }
+    .skip-link:focus { transform: translateY(0); }
+    header, main, footer { width: min(1160px, calc(100% - 40px)); margin-inline: auto; }
+    header { padding: 68px 0 30px; }
+    main { padding-bottom: 48px; }
+    footer { padding: 24px 0 46px; border-top: 1px solid var(--line); color: var(--muted); font-size: .88rem; }
+    h1, h2, h3 { line-height: 1.16; text-wrap: balance; }
+    h1 { max-width: 900px; margin: 14px 0 22px; font-size: clamp(2.35rem, 6vw, 4.9rem); letter-spacing: -.055em; }
+    h2 { margin: 0 0 18px; font-size: clamp(1.6rem, 3vw, 2.35rem); letter-spacing: -.03em; }
+    h3 { margin: 10px 0 12px; font-size: 1.24rem; }
+    p { margin: 10px 0; }
+    code {
+      padding: .12em .35em;
+      background: #1e293b;
+      border-radius: 4px;
+      color: #e2e8f0;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: .9em;
+      overflow-wrap: anywhere;
+    }
+    .eyebrow {
+      color: var(--accent);
+      font-size: .76rem;
+      font-weight: 800;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+    .lead { max-width: 850px; color: #d8e2ed; font-size: 1.2rem; }
+    .muted { color: var(--muted); }
+    nav { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+    nav a {
+      min-height: 44px;
+      padding: 10px 15px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--surface);
+      color: var(--ink);
+      text-decoration: none;
+      font-size: .9rem;
+      font-weight: 700;
+    }
+    nav a:hover { border-color: #64748b; background: var(--surface-raised); }
+    section { margin: 0 0 52px; scroll-margin-top: 24px; }
+    .callout {
+      margin: 24px 0;
+      padding: 17px 20px;
+      border: 1px solid #286443;
+      border-left: 5px solid var(--accent);
+      border-radius: 10px;
+      background: var(--accent-soft);
+    }
+    .summary-grid, .scope-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .stat, .panel, .finding {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .stat { padding: 20px; }
+    .stat strong { display: block; margin-bottom: 7px; font-size: 2.1rem; line-height: 1; }
+    .stat span { color: var(--muted); font-size: .9rem; }
+    .panel { padding: 22px; }
+    .finding { margin: 15px 0; padding: 24px; border-left-width: 5px; }
+    .finding.high { border-left-color: var(--high); }
+    .finding.medium { border-left-color: var(--medium); }
+    .finding.risk { border-left-color: var(--info); }
+    .badge {
+      display: inline-block;
+      margin: 0 6px 6px 0;
+      padding: 4px 8px;
+      border-radius: 5px;
+      font-size: .7rem;
+      font-weight: 800;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .badge.high { background: var(--high-soft); color: #fecdd3; }
+    .badge.medium { background: var(--medium-soft); color: #fde68a; }
+    .badge.confirmed { background: var(--accent-soft); color: #bbf7d0; }
+    .badge.risk { background: var(--info-soft); color: #bae6fd; }
+    .finding-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+    .finding ul, .panel ul, .panel ol { margin: 8px 0; padding-left: 22px; }
+    li { margin: 7px 0; }
+    .evidence {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: 9px;
+      background: #0a1020;
+      color: #cbd5e1;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: .82rem;
+      overflow-wrap: anywhere;
+    }
+    .accept {
+      margin-top: 15px;
+      padding: 13px 15px;
+      border: 1px solid #365267;
+      border-radius: 9px;
+      background: #0c2030;
+    }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+    table { width: 100%; min-width: 720px; border-collapse: collapse; background: var(--surface); font-size: .9rem; }
+    th, td { padding: 14px 15px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { background: #18243a; color: #e2e8f0; font-size: .77rem; letter-spacing: .05em; text-transform: uppercase; }
+    tbody tr:last-child td { border-bottom: 0; }
+    .pass { color: #86efac; font-weight: 800; }
+    .fail { color: #fda4af; font-weight: 800; }
+    .sequence { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; counter-reset: plan; }
+    .sequence .panel { counter-increment: plan; }
+    .sequence .panel::before {
+      content: "0" counter(plan);
+      display: block;
+      margin-bottom: 18px;
+      color: var(--accent);
+      font: 800 1.4rem/1 ui-monospace, "Cascadia Code", Consolas, monospace;
+    }
+    details { border-top: 1px solid var(--line); padding: 14px 0; }
+    summary { min-height: 44px; padding: 8px 0; cursor: pointer; font-weight: 750; }
+    .source { color: var(--muted); font-size: .82rem; }
+    @media (max-width: 850px) {
+      .summary-grid { grid-template-columns: repeat(2, 1fr); }
+      .scope-grid, .sequence { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      html { scroll-behavior: auto; }
+      header, main, footer { width: min(100% - 28px, 1160px); }
+      header { padding-top: 40px; }
+      .summary-grid, .finding-grid { grid-template-columns: 1fr; }
+      .finding, .panel, .stat { padding: 18px; }
+      .lead { font-size: 1.06rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+    @media print {
+      :root { color-scheme: light; --bg: #fff; --surface: #fff; --surface-raised: #fff; --ink: #111827; --muted: #475569; --line: #cbd5e1; --accent: #166534; --accent-soft: #ecfdf5; --high-soft: #fff1f2; --medium-soft: #fffbeb; --info-soft: #f0f9ff; --shadow: none; }
+      body { font-size: 10.5pt; }
+      header, main, footer { width: 100%; }
+      header { padding-top: 20px; }
+      nav, .skip-link { display: none; }
+      section { margin-bottom: 28px; }
+      .finding, .panel, .stat { break-inside: avoid; }
+      .evidence { background: #f1f5f9; color: #1e293b; }
+      .accept { background: #f0f9ff; }
+      .badge.high { color: #9f1239; }
+      .badge.medium { color: #854d0e; }
+      .badge.confirmed { color: #166534; }
+      .badge.risk { color: #075985; }
+      a { color: inherit; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to report</a>
+  <header>
+    <div class="eyebrow">UDFC Church Dashboard · Engineering review · 7 September 2026</div>
+    <h1>Five defects worth fixing deliberately.</h1>
+    <p class="lead">This is a review artifact, not an incident response. It records reproducible failures, their likely causes, and proposed fixes for a later implementation pass. No application behavior was changed; no persistent audit rows were retained and no migrations were applied.</p>
+    <nav aria-label="Report sections">
+      <a href="#summary">Summary</a>
+      <a href="#findings">Confirmed findings</a>
+      <a href="#risks">Systemic risks</a>
+      <a href="#verification">Verification</a>
+      <a href="#plan">Fix sequence</a>
+      <a href="#scope">Scope</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section id="summary" aria-labelledby="summary-title">
+      <div class="eyebrow">Executive summary</div>
+      <h2 id="summary-title">The app is broadly stable, but the uncovered defects sit at important boundaries.</h2>
+      <div class="summary-grid">
+        <div class="stat"><strong>5</strong><span>confirmed defects</span></div>
+        <div class="stat"><strong>2</strong><span>high-severity integrity or authorization defects</span></div>
+        <div class="stat"><strong>144/145</strong><span>staging database checks passed</span></div>
+        <div class="stat"><strong>44/44</strong><span>existing browser tests passed</span></div>
+      </div>
+      <div class="callout"><strong>Main conclusion:</strong> the failures are not random. They cluster where independently correct pieces are composed: sequential migrations, overlapping async requests, and multi-step database mutations. The later fix pass should address those seams and add regression checks at the same boundaries.</div>
+      <div class="scope-grid">
+        <div class="panel"><h3>Authorization</h3><p>One Events Team capability is broken on staging because migration 0039 replaced policy logic introduced in 0035.</p></div>
+        <div class="panel"><h3>State consistency</h3><p>Event tabs can display stale results, and a temporary church lookup failure can be cached as a completed load.</p></div>
+        <div class="panel"><h3>Data integrity</h3><p>Series split and deletion are assembled from multiple independent requests, allowing partial completion.</p></div>
+        <div class="panel"><h3>Error truthfulness</h3><p>Event detail can turn a read failure into a virtual event or a misleading “not found” state.</p></div>
+      </div>
+    </section>
+
+    <section id="findings" aria-labelledby="findings-title">
+      <div class="eyebrow">Confirmed findings</div>
+      <h2 id="findings-title">Reproduced or proven from deterministic control flow</h2>
+
+      <article class="finding high" id="f1">
+        <span class="badge high">High · F1</span><span class="badge confirmed">Staging reproduced</span>
+        <h3>A later finance migration removed Events Team permission to add an event expense</h3>
+        <div class="finding-grid">
+          <div>
+            <p><strong>Trigger:</strong> an Events Team member adds an expense to an event they manage.</p>
+            <p><strong>Actual result:</strong> PostgreSQL rejects the insert with <code>42501</code>, “new row violates row-level security policy for table expenses.”</p>
+            <p><strong>Cause:</strong> migration 0035 widened <code>expenses_insert_own_church</code> with <code>is_own_event_expense(event_id)</code>. Migration 0039 later drops and recreates that policy with only the Finance branch, unintentionally erasing the Events Team branch.</p>
+          </div>
+          <div>
+            <p><strong>Proposed solution:</strong> add a new forward-only migration that combines the Finance and owned-event authorization branches, while applying the correction-integrity constraints to both. Do not edit migration history.</p>
+            <p><strong>Regression guard:</strong> keep the existing allowed insert test; add denials for an event-less expense, an event in another church, and a crafted reversal/correction payload.</p>
+            <div class="accept"><strong>Done when:</strong> Events Team can add a normal entry only to an event it owns; Finance retains its current permissions; all correction rules remain fail-closed.</div>
+          </div>
+        </div>
+        <div class="evidence">0035_events_stage3/migration.sql:477–500 → authorization added<br>0039_finance_corrections/migration.sql:128–134 → policy replaced<br>tests/db/events-stage3-rls.test.js:122 → deterministic failing test</div>
+      </article>
+
+      <article class="finding high" id="f2">
+        <span class="badge high">High · F2</span><span class="badge confirmed">Control flow confirmed</span>
+        <h3>Splitting or deleting an event series can leave partially applied data</h3>
+        <div class="finding-grid">
+          <div>
+            <p><strong>Trigger:</strong> a later request in a series split/delete fails because of a network interruption, RLS denial, or constraint.</p>
+            <p><strong>Actual risk:</strong> <code>splitSeries</code> first shortens the old series, then creates the new one, then moves exceptions. <code>deleteSeries</code> detaches past rows, deletes future exceptions, then deletes the series. Each step commits independently.</p>
+            <p><strong>Impact:</strong> the operation can report failure after already changing part of the schedule.</p>
+          </div>
+          <div>
+            <p><strong>Proposed solution:</strong> move each operation into a narrow PostgreSQL RPC so the complete mutation runs in one transaction. The function must authorize church and event-management scope internally.</p>
+            <p><strong>Regression guard:</strong> force a failure in the final stage and prove the original series and exceptions remain unchanged.</p>
+            <div class="accept"><strong>Done when:</strong> each series operation either completes in full or leaves the database exactly as it was before the request.</div>
+          </div>
+        </div>
+        <div class="evidence">src/lib/data/eventSeries.js:286–315 → three-step split<br>src/lib/data/eventSeries.js:321–339 → three-step delete</div>
+      </article>
+
+      <article class="finding medium" id="f3">
+        <span class="badge medium">Medium · F3</span><span class="badge confirmed">Browser reproduced</span>
+        <h3>A slow Events request can overwrite the currently selected tab</h3>
+        <div class="finding-grid">
+          <div>
+            <p><strong>Trigger:</strong> open Events, then switch from Upcoming to Drafts while the first request is still in flight.</p>
+            <p><strong>Actual result:</strong> Drafts renders correctly, then the older Upcoming response arrives and replaces the shared event list while the Drafts tab remains selected.</p>
+            <p><strong>Cause:</strong> <code>load()</code> reads reactive scope, awaits, and writes shared state without a request generation check or cancellation.</p>
+          </div>
+          <div>
+            <p><strong>Proposed solution:</strong> capture tab and church at request start, assign a monotonic request token, and discard success, error, and loading-state updates from superseded requests. An <code>AbortController</code> may reduce wasted work but should not be the only correctness guard.</p>
+            <p><strong>Regression guard:</strong> retain the delayed-response browser scenario and assert the Drafts result remains after both requests settle.</p>
+            <div class="accept"><strong>Done when:</strong> displayed rows always match the visibly selected tab and church, regardless of response order.</div>
+          </div>
+        </div>
+        <div class="evidence">src/views/EventsView.vue:41–60 → shared state with overlapping watcher loads<br>Targeted Playwright repro: Draft row appeared, then disappeared after delayed Upcoming response</div>
+      </article>
+
+      <article class="finding medium" id="f4">
+        <span class="badge medium">Medium · F4</span><span class="badge confirmed">Unit reproduced</span>
+        <h3>A transient active-church lookup failure is cached as a successful load</h3>
+        <div class="finding-grid">
+          <div>
+            <p><strong>Trigger:</strong> <code>get_my_church</code> returns a temporary error during initial application load.</p>
+            <p><strong>Actual result:</strong> the composable stores a null church, sets <code>loaded = true</code>, and subsequent <code>ensureLoaded()</code> calls do not retry. If the promise rejects outright, <code>pending</code> also lacks guaranteed cleanup.</p>
+            <p><strong>Impact:</strong> church-scoped screens can remain empty or unusable until the session is reset.</p>
+          </div>
+          <div>
+            <p><strong>Proposed solution:</strong> treat RPC errors as an unsuccessful load, set <code>loaded</code> only after required context is valid, and clear <code>pending</code> in <code>finally</code>. Expose a generic retry state without revealing backend details.</p>
+            <p><strong>Regression guard:</strong> first lookup fails, second succeeds, and the second call must reissue the RPC and populate the church.</p>
+            <div class="accept"><strong>Done when:</strong> a temporary startup failure can recover in the same signed-in session without stale rejected promises.</div>
+          </div>
+        </div>
+        <div class="evidence">src/composables/useActiveChurch.js:44–69 → RPC errors ignored and loaded state finalized<br>Targeted unit repro: expected church-1 after recovery; received null; RPC called once</div>
+      </article>
+
+      <article class="finding medium" id="f5">
+        <span class="badge medium">Medium · F5</span><span class="badge confirmed">Control flow confirmed</span>
+        <h3>Event detail can disguise a read failure as a virtual event or “not found”</h3>
+        <div class="finding-grid">
+          <div>
+            <p><strong>Trigger:</strong> the real-event lookup fails, but the series lookup succeeds—or no matching series exists.</p>
+            <p><strong>Actual result:</strong> the view checks only <code>real.event</code>, not <code>real.ok</code>. It can continue into virtual occurrence matching or show “That event could not be found.”</p>
+            <p><strong>Impact:</strong> an outage or permission problem is presented as absence. A computed occurrence can also be shown when a saved exception or cancellation could not be read.</p>
+          </div>
+          <div>
+            <p><strong>Proposed solution:</strong> stop immediately when the real-event result is not <code>ok</code>; show the generic load error and a retry action. Only attempt virtual fallback after a successful lookup returns no row. Apply the same result handling to series and link reads.</p>
+            <p><strong>Regression guard:</strong> return an events endpoint error with a valid recurring series and assert that neither the virtual detail nor “not found” is displayed.</p>
+            <div class="accept"><strong>Done when:</strong> “not found” means a successful search found nothing; operational failures are visibly recoverable errors.</div>
+          </div>
+        </div>
+        <div class="evidence">src/views/EventDetailView.vue:144–169 → error result falls through into virtual lookup and not-found state</div>
+      </article>
+    </section>
+
+    <section id="risks" aria-labelledby="risks-title">
+      <div class="eyebrow">Systemic risks and gaps</div>
+      <h2 id="risks-title">Important follow-up work, not additional confirmed defects</h2>
+      <article class="finding risk">
+        <span class="badge risk">Pattern risk</span>
+        <h3>The Events race pattern appears in other shared-state loaders</h3>
+        <p>Members, Calendar, Attendance, finance views, Funds, and Groups contain similar “watch → await → write shared refs” loaders. The Events failure proves the pattern is unsafe, but this audit did not reproduce a wrong-state outcome in every screen.</p>
+        <p><strong>Later review:</strong> introduce one small request-scope helper, then test rapid filter/church changes in each screen before rolling it out. Church-switch races deserve priority because they may affect PII visibility, even though no cross-church disclosure was observed here.</p>
+      </article>
+      <article class="finding risk">
+        <span class="badge risk">Coverage gap</span>
+        <h3>The newest event workflows sit outside the existing browser suite</h3>
+        <p>The 44 passing browser tests cover Attendance, Collections, Expenses, Funds, Groups, Login, Members, Password Reset, and RBAC. There are no equivalent end-to-end files for Overview, Calendar, Events, Event Detail/Composer, Settings administration, or public volunteering.</p>
+        <p><strong>Later review:</strong> add a compact event/calendar suite around loading, errors, response ordering, and role boundaries. To preserve the project’s $0/month constraint, keep database integration checks as a manual pre-promotion gate unless CI usage has been explicitly budgeted.</p>
+      </article>
+    </section>
+
+    <section id="verification" aria-labelledby="verification-title">
+      <div class="eyebrow">Verification record</div>
+      <h2 id="verification-title">What passed, what failed, and what that proves</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Loop</th><th>Result</th><th>Interpretation</th></tr></thead>
+          <tbody>
+            <tr><td>Vitest unit suite</td><td class="pass">817 passed · 145 skipped</td><td>The checked-out branch has a green unit baseline before temporary audit repros.</td></tr>
+            <tr><td>Production build</td><td class="pass">Passed</td><td>The application compiles successfully; these defects are runtime and contract problems, not build failures.</td></tr>
+            <tr><td>Existing Playwright suite</td><td class="pass">44 passed</td><td>Covered browser journeys remain green. The Events race is outside current coverage.</td></tr>
+            <tr><td>Staging database/RLS suite</td><td><span class="pass">144 passed</span> · <span class="fail">1 failed</span></td><td>The authorization surface is largely intact; the one failure isolates the event-expense regression.</td></tr>
+            <tr><td>Active-church recovery repro</td><td class="fail">Failed as expected</td><td>A second call did not retry after the first transient RPC error.</td></tr>
+            <tr><td>Events response-order repro</td><td class="fail">Failed as expected</td><td>A delayed obsolete response replaced the selected tab’s newer data.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="source">Database tests ran against staging inside per-test transactions with rollback. No audit row was retained. Temporary red-test harnesses were removed after evidence was captured.</p>
+    </section>
+
+    <section id="plan" aria-labelledby="plan-title">
+      <div class="eyebrow">Proposed fix sequence</div>
+      <h2 id="plan-title">Make each fix independently reviewable</h2>
+      <div class="sequence">
+        <div class="panel"><h3>Restore invariants</h3><p>First repair the event-expense policy with a forward migration, then make series mutations transactional. These are the two defects that affect authorization and durable data.</p></div>
+        <div class="panel"><h3>Make async scope explicit</h3><p>Add stale-response protection to Events, fix active-church retry semantics, and audit the same loader pattern in church-sensitive screens.</p></div>
+        <div class="panel"><h3>Tell the truth on failure</h3><p>Correct Event Detail error branching, then add the missing event/calendar browser coverage as the acceptance gate for the full pass.</p></div>
+      </div>
+      <div class="callout"><strong>Implementation discipline:</strong> each later patch should include its regression test, owner-visible UI evidence where the screen changes, and a security check against the exact role/church boundary it touches.</div>
+    </section>
+
+    <section id="scope" aria-labelledby="scope-title">
+      <div class="eyebrow">Scope and limits</div>
+      <h2 id="scope-title">A deep technical pass, not a claim of exhaustive correctness</h2>
+      <div class="panel">
+        <ul>
+          <li><strong>Reviewed baseline:</strong> branch <code>codex/promote-overview-production</code> at <code>c52ec5c</code>, including the pending Overview promotion in PR #102.</li>
+          <li><strong>Staging baseline:</strong> database migrations through 0041 were applied; local 0042 belongs to the pending Overview promotion and was not applied during this audit.</li>
+          <li><strong>Methods:</strong> repository inspection, existing unit/build/browser/database suites, and two temporary deterministic repro tests.</li>
+          <li><strong>Security outcome:</strong> no broad authorization bypass was confirmed. One legitimate Events Team action is denied. Passing checks are evidence for covered contracts, not proof that every path is secure.</li>
+          <li><strong>Not covered:</strong> every role on every page, real mobile devices, long-running offline/session-expiry behavior, load/performance limits, third-party service failures, full accessibility conformance, and production data correctness.</li>
+          <li><strong>Changes made:</strong> this report only. No application source, database migration, production deployment, or persistent test harness was changed.</li>
+        </ul>
+      </div>
+      <details>
+        <summary>Finding classification</summary>
+        <p><strong>Confirmed</strong> means the behavior was reproduced in a targeted test or follows deterministically from the executed source path. <strong>Pattern risk</strong> means the same unsafe shape exists elsewhere but its user-visible failure was not separately reproduced. <strong>Coverage gap</strong> describes missing evidence, not a product defect.</p>
+      </details>
+    </section>
+  </main>
+
+  <footer>Prepared by Sam for Jhaze · Review only · Proposed solutions are intentionally not implemented.</footer>
+</body>
+</html>

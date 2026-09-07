@@ -206,36 +206,23 @@ export async function findPersonClashes({ churchId, memberId, startsAt, endsAt, 
  * Upcoming events that are short of volunteers. The default remains the calendar's bounded,
  * published-only seven-day gaps card. A management worklist may omit the horizon and include
  * drafts; RLS remains authoritative, so callers without draft access still receive only
- * published rows. Returns [{ id, title, starts_at, status, needed, filled, gap }].
+ * published rows. The aggregate RPC returns counts without exposing assignment identities.
+ * Returns { ok, items } so callers can distinguish a failed read from a healthy empty list.
  */
 export async function listUnderstaffedEvents({ churchId, withinDays = 7, includeDrafts = false, now = new Date() }) {
-  if (!churchId) return []
+  if (!churchId) return { ok: false, items: [] }
   const from = now.toISOString()
-  let query = supabase
-    .from('events')
-    .select('id, title, starts_at, status')
-    .eq('church_id', churchId)
-    .in('status', includeDrafts ? ['draft', 'published'] : ['published'])
-    .gte('starts_at', from)
-    .order('starts_at', { ascending: true })
-
-  if (Number.isFinite(withinDays)) {
-    const to = new Date(now.getTime() + withinDays * 86400000).toISOString()
-    query = query.lt('starts_at', to)
-  }
-
-  const { data, error } = await query
-  if (error || !data?.length) return []
-  const out = []
-  for (const e of data) {
-    const { data: fill } = await supabase.rpc('event_role_fill', { p_event_id: e.id })
-    const roles = fill || []
-    if (!roles.length) continue
-    const needed = roles.reduce((s, r) => s + r.count_required, 0)
-    const filled = roles.reduce((s, r) => s + Math.min(r.filled, r.count_required), 0)
-    if (filled < needed) out.push({ ...e, needed, filled, gap: needed - filled })
-  }
-  return out
+  const to = Number.isFinite(withinDays)
+    ? new Date(now.getTime() + withinDays * 86400000).toISOString()
+    : null
+  const { data, error } = await supabase.rpc('list_understaffed_events', {
+    p_church_id: churchId,
+    p_from: from,
+    p_to: to,
+    p_include_drafts: includeDrafts,
+  })
+  if (error) return { ok: false, items: [] }
+  return { ok: true, items: data ?? [] }
 }
 
 // --- Programme --------------------------------------------------------------
