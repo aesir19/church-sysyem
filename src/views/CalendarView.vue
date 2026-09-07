@@ -300,9 +300,13 @@ async function load() {
   services.value = sv
   birthdays.value = bd
   // The "needs a decision" gaps card (6a) — only the roles that manage events see it.
-  understaffed.value = canManageEvents.value
-    ? await listUnderstaffedEvents({ churchId })
-    : []
+  if (canManageEvents.value) {
+    const gaps = await listUnderstaffedEvents({ churchId })
+    understaffed.value = gaps.ok ? gaps.items : []
+    if (!gaps.ok && !errorMsg.value) errorMsg.value = 'Could not load volunteer needs. Please try again.'
+  } else {
+    understaffed.value = []
+  }
   loading.value = false
 }
 

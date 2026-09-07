@@ -3,6 +3,7 @@ import Card from '../../components/ui/Card.vue'
 import Button from '../../components/ui/Button.vue'
 import Badge from '../../components/ui/Badge.vue'
 import Icon from '../../components/ui/icons/Icon.vue'
+import Alert from '../../components/ui/Alert.vue'
 import { RouterLink } from 'vue-router'
 
 defineProps({
@@ -15,7 +16,7 @@ defineProps({
   understaffed: { type: Array, required: true },
   lastService: { type: Object, required: true },
   openService: { type: Object, required: true },
-  loading: Boolean, calendarError: Boolean,
+  loading: Boolean, calendarError: Boolean, overviewError: Boolean, rolesError: Boolean,
 })
 
 function dateParts(iso) {
@@ -55,6 +56,12 @@ function kind(item) {
         Open calendar
       </Button>
     </header>
+    <Alert
+      v-if="overviewError"
+      tone="danger"
+    >
+      The church overview could not be loaded. Please try again.
+    </Alert>
 
     <div class="layout">
       <main class="main">
@@ -143,8 +150,20 @@ function kind(item) {
             </div>
             <span class="muted">draft and published events</span>
           </div>
+          <p
+            v-if="loading"
+            class="empty"
+          >
+            Loading volunteer needs…
+          </p>
+          <p
+            v-else-if="rolesError"
+            class="empty"
+          >
+            Volunteer needs could not be loaded. Please try again.
+          </p>
           <div
-            v-if="understaffed.length"
+            v-else-if="understaffed.length"
             class="role-list"
           >
             <RouterLink
