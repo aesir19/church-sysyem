@@ -36,6 +36,45 @@ async function groupWithCandidate (tx, label = 'a') {
   return { church, group, candidate }
 }
 
+describe.skipIf(!hasDatabase())('invite_member', () => {
+  it('records an invite for a real member without confusing the returned email with table columns', async () => {
+    await withRollback(async tx => {
+      const church = await makeChurch(tx, 'invite')
+      const person = await makeMember(tx, church, 'invitee')
+      const email = `zz-invite-${person}@example.test`
+      const admin = await makePrincipal(tx, { role: 'super_admin', churchId: church })
+
+      await tx.$executeRawUnsafe(
+        `UPDATE public.members SET email = $1 WHERE id = $2::uuid`, email, person)
+
+      await asPrincipal(tx, admin.accountId)
+      const [invited] = await call(
+        tx,
+        `SELECT email, full_name FROM public.invite_member($1::uuid, 'member')`,
+        person
+      )
+
+      expect(invited.email).toBe(email)
+      expect(invited.full_name).toContain('Test')
+
+      await asOwner(tx)
+      const [recorded] = await call(
+        tx,
+        `SELECT email, member_id, role, consumed_at
+         FROM public.account_invites
+         WHERE member_id = $1::uuid`,
+        person
+      )
+      expect(recorded).toMatchObject({
+        email,
+        member_id: person,
+        role: 'member',
+        consumed_at: null
+      })
+    })
+  })
+})
+
 describe.skipIf(!hasDatabase())('list_accounts', () => {
   it('shows a Super Admin the accounts, with the e-mail address', async () => {
     await withRollback(async tx => {
