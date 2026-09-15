@@ -207,8 +207,11 @@ includes a migration:
 6. Three more jobs run, all defined in [ci.yml](../.github/workflows/ci.yml) (single workflow file
    — a job can only `needs:` another job in the *same* file, which is why this isn't split across
    files the way an earlier draft of this had it):
-   - `migrate` — applies the migration to production, using the `PROD_DATABASE_URL` /
-     `PROD_DIRECT_URL` repository secrets.
+   - `migrate` — applies migrations, then deploys the `invite-user` Edge Function to
+     production. It uses the `PROD_DATABASE_URL`, `PROD_DIRECT_URL`, and
+     `SUPABASE_ACCESS_TOKEN` repository secrets plus the `SUPABASE_PROJECT_REF`
+     repository variable. The order is deliberate: a function may depend on the RPC
+     introduced by the migration immediately before it.
    - `deploy` — `needs: [test, lighthouse, migrate]`. Builds the app with real production
      `VITE_SUPABASE_*` values (not secrets — see the inline comment) and publishes it via the
      Netlify CLI, authenticated with the `NETLIFY_AUTH_TOKEN` / `NETLIFY_SITE_ID` repository
