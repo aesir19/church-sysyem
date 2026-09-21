@@ -126,7 +126,7 @@ jobs:
         run: npm run lighthouse
 
   migrate:
-    name: Deploy Prisma migrations to production
+    name: Deploy backend to production
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment: production
@@ -162,6 +162,15 @@ jobs:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
           DIRECT_URL: ${{ secrets.PROD_DIRECT_URL }}
 
+      # Edge Functions are a separate Supabase deployment surface: merging their
+      # source does not update the running function. Keep this after migrations so a
+      # function that depends on a new RPC can never reach production first.
+      - name: Deploy invite-user Edge Function
+        run: npx --yes supabase@2.117.0 functions deploy invite-user --project-ref "$SUPABASE_PROJECT_REF" --use-api
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+
   deploy:
     name: Deploy to Netlify (production)
     runs-on: ubuntu-latest
@@ -173,7 +182,7 @@ jobs:
     # auto-deploy is disabled entirely (Site configuration > Build & deploy >
     # Continuous deployment > Build settings > "Stopped builds"), and this job
     # is the only thing that publishes to production — only after test,
-    # lighthouse, AND the migration have all succeeded.
+    # lighthouse, AND the database/function deployment have all succeeded.
     needs: [test, lighthouse, migrate]
     environment: production
     # Overrides the workflow-level concurrency group, same reasoning as

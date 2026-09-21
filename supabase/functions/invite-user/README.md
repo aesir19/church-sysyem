@@ -1,8 +1,11 @@
 # Deploying `invite-user` — first-time setup
 
-This is the one Edge Function the app runs (ADR-0018). The website is built and shipped by
-GitHub Actions; **this function is deployed separately, by hand, once.** After that you only
-redeploy it if you change `index.ts`.
+This is the one Edge Function the app runs (ADR-0018). A push to `main` deploys it through
+GitHub Actions after production migrations and before the Netlify frontend. That ordering is
+load-bearing: merging `index.ts` does not update the running function by itself, and the function
+may depend on an RPC introduced by the same release.
+
+The manual commands below are for first-time setup and recovery only.
 
 You need the Supabase CLI installed and you need to be an owner of the Supabase project.
 
@@ -51,8 +54,10 @@ This allowlist is also what makes it safe for the function to trust the calling 
 
 ## When you change the function
 
-Only step 4 (`supabase functions deploy invite-user`) — the login, link, and secrets persist.
-If you ever rotate the service-role key, re-run step 3 for `SERVICE_ROLE_KEY` and redeploy.
+Merge the change through `staging` to `main`; the production workflow deploys it automatically.
+For manual recovery, run step 4 (`supabase functions deploy invite-user`) — the login, link, and
+secrets persist. If you ever rotate the service-role key, re-run step 3 for `SERVICE_ROLE_KEY` and
+redeploy.
 
 ## How Resend works
 
