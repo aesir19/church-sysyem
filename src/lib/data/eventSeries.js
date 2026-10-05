@@ -6,8 +6,9 @@
 // draws weekly services. A row is written to `events` only when one date genuinely diverges:
 //   - skip a date        → a cancelled exception row (a greyed "cancelled this week")
 //   - edit one date       → an exception row carrying that date's own values
-//   - "apply to the ones after" → the series is SPLIT: the old rule ends the day before, a new
-//                            rule starts from the edited date. History is never rewritten.
+//   - "apply to the ones after" → the series is SPLIT (one database call, splitSeries): the old
+//                            rule ends the day before, a new rule starts from the edited date.
+//                            History is never rewritten.
 // An exception is an ordinary events row with series_id + occurrence_date (the slot it
 // replaces). mergeSeriesOccurrences suppresses the worked-out occupant of that slot so a date
 // never shows twice.
@@ -19,7 +20,7 @@
 import { supabase } from '../supabase'
 import { write } from './write'
 import { listEvents, EVENT_COLUMNS } from './events'
-import { mergeSeriesOccurrences, nextOccurrence, describeRule, ymd, addDays } from '../recurrence'
+import { mergeSeriesOccurrences, nextOccurrence, describeRule, expandSeries, ymd, addDays } from '../recurrence'
 
 const MESSAGES = {
   loadFailed: 'Could not load the calendar. Please try again.',
@@ -184,18 +185,48 @@ export async function getSeries(id) {
   return { ok: true, series: data ? toSeries(data) : null, message: '' }
 }
 
-/** How many future dates a series has that were HAND-EDITED from `fromDate` onward — the
- *  "specially adjusted" dates a split would otherwise sweep up. A cancelled/skipped week is not
- *  a hand-edit, so it is excluded (it would wrongly trigger the keep/overwrite prompt). Drives
- *  the confirm the owner asked for. */
-export async function countFutureExceptions({ seriesId, fromDate }) {
-  const { count, error } = await supabase
+/**
+ * The saved later dates a split could move: this series' rows from `fromDate` on that have not
+ * happened yet — hand-edited, attended, planned or cancelled alike. Drives the optional "Also move
+ * already-planned future dates" choice; a failed read is `ok: false`, never "none planned".
+ * Returns { ok, dates: [{ id, occurrence_date, status, title }] }.
+ */
+export async function listPlannedDates({ seriesId, fromDate } = {}) {
+  if (!seriesId || !fromDate) return { ok: false, dates: [] }
+  const { data, error } = await supabase
     .from('events')
-    .select('id', { count: 'exact', head: true })
+    .select('id, occurrence_date, status, title, starts_at')
     .eq('series_id', seriesId)
     .gte('occurrence_date', fromDate)
-    .neq('status', 'cancelled')
-  return error ? 0 : (count ?? 0)
+    .or(`starts_at.is.null,starts_at.gt.${new Date().toISOString()}`)
+    .order('occurrence_date', { ascending: true })
+  if (error) return { ok: false, dates: [] }
+  return { ok: true, dates: data ?? [] }
+}
+
+/**
+ * Where each planned date goes when the owner chooses to move them with a split (#105): to the
+ * new schedule's date in the same Sunday-first week, never before the split date. When that week
+ * has no new date — or its date was already taken (`taken`, e.g. by the date being changed, or by
+ * an earlier planned date) — `to_date` is null and the date stays where it is, as a standalone
+ * event. Pure; the database re-checks the result. `rule` is the new schedule (engine shape).
+ * Returns [{ event_id, to_date }] in date order.
+ */
+export function mapPlannedDates({ rule, fromDate, planned, taken: alreadyTaken = [] }) {
+  const newRule = { ...rule, startsOn: fromDate }
+  const taken = new Set(alreadyTaken)
+  return [...planned]
+    .sort((a, b) => a.occurrence_date.localeCompare(b.occurrence_date))
+    .map((p) => {
+      const [y, m, d] = p.occurrence_date.split('-').map(Number)
+      const day = new Date(y, m - 1, d)
+      const weekStart = addDays(day, -day.getDay())
+      const to = expandSeries(newRule, weekStart, addDays(weekStart, 7))
+        .map((o) => ymd(o.date))
+        .find((date) => date >= fromDate && !taken.has(date)) ?? null
+      if (to) taken.add(to)
+      return { event_id: p.id, to_date: to }
+    })
 }
 
 /** Create a repeating series. `publish` decides the initial status, mirroring createEvent. */
@@ -261,44 +292,58 @@ export function editOccurrence({ series, occurrenceDate, payload }) {
   )
 }
 
+const parseDay = (date) => {
+  const [y, m, d] = date.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
+/** The new schedule's first date on or after `fromDate` (within a year), or null. The date being
+ *  changed lands here when a split is saved. */
+export function firstNewDate({ rule, fromDate }) {
+  const from = parseDay(fromDate)
+  const [first] = expandSeries({ ...rule, startsOn: fromDate }, from, addDays(from, 366))
+  return first ? ymd(first.date) : null
+}
+
+/** A date of the OLD schedule from `newDate` up to (not including) `occurrenceDate`, or null.
+ *  Moving the date being changed back past one would make the dates swap order, so a split
+ *  refuses it (#105). */
+export function previousDateBefore({ series, newDate, occurrenceDate }) {
+  if (!newDate || newDate >= occurrenceDate) return null
+  const [hit] = expandSeries(series, parseDay(newDate), parseDay(occurrenceDate))
+  return hit ? ymd(hit.date) : null
+}
+
 /**
- * "Apply to the ones after this too" (stories 10, 15). Splits the series at `fromDate`: the old
- * rule is ended the day before, a new rule starts from fromDate with the changed values. Past
- * and near dates on the old rule are untouched (never rewritten).
+ * "This date and the ones after it" (stories 10, 15; #103 bug 2, #105) — ONE database call, so the
+ * split happens completely or not at all. The old schedule ends the day before `fromDate`; a new
+ * one with `newSeriesPayload` starts on it; earlier dates are never touched.
  *
- * `newSeriesPayload` is the full column set for the new event_series row (rule + shared fields).
- * A previously hand-adjusted future date (an exception) is the "specially adjusted" case the
- * owner asked to be prompted about: `overwriteExceptions` true removes those future exceptions
- * so the new rule governs them; false re-points them to the new series so they keep their own
- * values. Returns { ok, message, rows } where rows[0] is the new series.
+ * `moves` lists the saved dates that change: the date being changed (`selected: true`, landing on
+ * the new schedule's first date), plus — when the owner ticked the box — the mapPlannedDates
+ * result for the other planned dates. Saved dates not listed stay as they are. Null when none. `key` is a one-time id the caller keeps
+ * until the split succeeds: repeating the call with it after a lost reply returns the first result
+ * (`alreadyDone`) instead of splitting twice. Returns { ok, newSeriesId, moved, standalone,
+ * alreadyDone, message }.
  */
-export async function splitSeries({ oldSeriesId, fromDate, newSeriesPayload, overwriteExceptions = false }) {
-  const dayBefore = ymd(addDays(new Date(`${fromDate}T00:00:00`), -1))
-
-  // 1. End the old series the day before the split.
-  const ended = await updateSeries(oldSeriesId, { ends_on: dayBefore })
-  if (!ended.ok) return ended
-
-  // 2. Create the new series from the split date.
-  const created = await createSeries(
-    { ...newSeriesPayload, starts_on: fromDate },
-    { publish: newSeriesPayload.status !== 'draft' }
-  )
-  if (!created.ok) return created
-  const newId = created.rows[0]?.id
-
-  // 3. Move future exception rows onto the new series, or clear them so the new rule governs.
-  // These legitimately affect ZERO rows in the common case (a series with no hand-edited future
-  // dates — occurrences are virtual), so a row count of 0 is success, not a refusal; we check
-  // .error only. The authoritative permission gate was step 1's updateSeries, through write().
-  const move = overwriteExceptions
-    ? await supabase.from('events').delete().eq('series_id', oldSeriesId).gte('occurrence_date', fromDate)
-    : (newId
-        ? await supabase.from('events').update({ series_id: newId }).eq('series_id', oldSeriesId).gte('occurrence_date', fromDate)
-        : { error: null })
-  if (move.error) return { ok: false, message: MESSAGES.updateFailed, rows: [], cause: move.error }
-
-  return created
+export async function splitSeries({ oldSeriesId, fromDate, newSeriesPayload, moves = null, key } = {}) {
+  const failed = (message = MESSAGES.updateFailed) =>
+    ({ ok: false, newSeriesId: null, moved: 0, standalone: 0, alreadyDone: false, message })
+  if (!oldSeriesId || !fromDate || !newSeriesPayload || !key) return failed()
+  const { data, error } = await supabase.rpc('split_event_series', {
+    p_series: oldSeriesId, p_from: fromDate, p_new: newSeriesPayload, p_moves: moves, p_key: key,
+  })
+  // The database's own refusals (P0001) are written for people; anything else stays generic.
+  if (error) return failed(error.code === 'P0001' && error.message ? error.message : MESSAGES.updateFailed)
+  if (!data) return failed()
+  return {
+    ok: true,
+    newSeriesId: data.new_series_id ?? null,
+    moved: data.moved ?? 0,
+    standalone: data.standalone ?? 0,
+    alreadyDone: !!data.already_done,
+    message: '',
+  }
 }
 
 /**

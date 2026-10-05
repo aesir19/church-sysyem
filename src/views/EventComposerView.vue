@@ -9,8 +9,9 @@
 //   ?series=…              → updateSeries  (edit the whole rule / shared fields)
 //   ?series=…&date=…       → edit ONE occurrence, with the scope choice the owner asked for:
 //                            "This date only" → editOccurrence (an exception row), or
-//                            "…and the ones after" → splitSeries (end the old rule, start a new
-//                            one), prompting first if a later date was specially adjusted.
+//                            "…and the ones after" → splitSeries (one database call: end the old
+//                            rule, start a new one). Already-planned later dates stay as they are
+//                            unless "Also move already-planned future dates" is ticked (#105).
 // Past dates are never rewritten — the scope choices only ever touch this date forward.
 
 import { ref, computed, onMounted, watch } from 'vue'
@@ -26,7 +27,8 @@ import EventRolesField from '../components/events/EventRolesField.vue'
 import { EVENT_KINDS, createEvent, updateEvent, getEvent, eventLocation, listServiceOccurrences, getEditState } from '../lib/data/events'
 import {
   createSeries, updateSeries, getSeries, editOccurrence, splitSeries,
-  ruleColumns, countFutureExceptions, listCalendarOccurrences, getOccurrenceRow,
+  ruleColumns, listPlannedDates, mapPlannedDates, firstNewDate, previousDateBefore,
+  listCalendarOccurrences, getOccurrenceRow,
 } from '../lib/data/eventSeries'
 import { describeRule, ymd } from '../lib/recurrence'
 import { listRooms, findRoomClashes } from '../lib/data/eventRooms'
@@ -76,9 +78,16 @@ const form = ref({
   scope: 'this',
 })
 
-// The scope-confirm for "…and the ones after" when a later date was specially adjusted.
-const splitConfirmOpen = ref(false)
-const futureExceptionCount = ref(0)
+// "This date and the ones after it" (#105). The date being changed always takes the change. The
+// OTHER saved later dates (hand-edited, cancelled, planned) stay as they are unless the owner
+// ticks the quiet "Also move already-planned future dates" box, which only shows when there are
+// some. Ticked, the save asks first.
+const occurrenceRow = ref(null) // the saved row of the date being changed, if it has one
+const plannedDates = ref([])
+const movePlanned = ref(false)
+const movePlannedConfirmOpen = ref(false)
+// One key per split, kept until it succeeds, so a retry after a lost reply cannot split twice.
+let splitKey = null
 
 // Changing ONE date (#105). The database, not the device clock, says whether the date has already
 // happened, how much attendance it carries, and whether it is locked (past + 11 or more records).
@@ -245,6 +254,11 @@ async function loadSeries() {
   if (!res.series) { errorMsg.value = res.message; loading.value = false; return }
   const s = res.series
   loadedSeries.value = s
+  // A deleted series is finished — reached by a typed or stale address, it cannot be changed.
+  if (s.deletedAt) {
+    seriesDeleted.value = true
+    errorMsg.value = 'This repeating event was deleted and can’t be changed.'
+  }
   wasPublished.value = s.status === 'published'
   form.value = { ...form.value,
     title: s.title, kind: s.kind,
@@ -275,6 +289,7 @@ async function loadOccurrenceState(s) {
     return
   }
   const e = row.event
+  occurrenceRow.value = e
   if (e?.starts_at) {
     form.value = { ...form.value,
       title: e.title || form.value.title,
@@ -302,7 +317,20 @@ const canPublish = computed(() => form.value.title.trim() && form.value.date && 
 // a split from the past would rewrite history.
 const needsEditState = computed(() => isOneOffEdit.value || isOccurrenceEdit.value)
 const editIsPast = computed(() => !!editState.value?.isPast)
-const editLocked = computed(() => needsEditState.value && (!editState.value || !editState.value.ok || editState.value.locked))
+const seriesDeleted = ref(false)
+const editLocked = computed(() => seriesDeleted.value
+  || (needsEditState.value && (!editState.value || !editState.value.ok || editState.value.locked)))
+
+// The planned later dates are looked up when "…and the ones after it" is chosen. A failed look-up
+// just hides the option: leaving planned dates alone is the safe default.
+watch(() => form.value.scope, async (scope) => {
+  movePlanned.value = false
+  if (scope !== 'after' || !isOccurrenceEdit.value) { plannedDates.value = []; return }
+  const res = await listPlannedDates({ seriesId: seriesId.value, fromDate: occDate.value })
+  if (form.value.scope === 'after') {
+    plannedDates.value = res.ok ? res.dates.filter((d) => d.id !== occurrenceRow.value?.id) : []
+  }
+})
 
 // --- rule building --------------------------------------------------------
 function nthOfDate(d) { return Math.ceil(d.getDate() / 7) }
@@ -483,10 +511,16 @@ async function submitOccurrence() {
   // A past date can only ever be changed on its own.
   if (editIsPast.value) form.value.scope = 'this'
   if (form.value.scope === 'after') {
-    // Splitting the rule from this date. Warn first if a later date was specially adjusted.
-    futureExceptionCount.value = await countFutureExceptions({ seriesId: seriesId.value, fromDate: occDate.value })
-    if (futureExceptionCount.value > 0) { splitConfirmOpen.value = true; return }
-    return doSplit(false)
+    // Splitting the rule from this date. Moving it back past an earlier date of the schedule would
+    // make the dates swap order, so that is a change to this date alone.
+    const before = previousDateBefore({ series: loadedSeries.value, newDate: form.value.date, occurrenceDate: occDate.value })
+    if (before) {
+      errorMsg.value = `The new date can’t be on or before the previous date (${longDate(before)}). Change this date on its own instead.`
+      return
+    }
+    // Moving the other planned dates too is confirmed first.
+    if (movePlanned.value && plannedDates.value.length) { movePlannedConfirmOpen.value = true; return }
+    return doSplit()
   }
   // "This date only" — a single exception row, everything else untouched.
   saving.value = true
@@ -497,17 +531,30 @@ async function submitOccurrence() {
   router.push({ name: 'Events' })
 }
 
-async function doSplit(overwriteExceptions) {
-  splitConfirmOpen.value = false
+async function doSplit() {
+  movePlannedConfirmOpen.value = false
+  // Moved earlier, the new schedule starts on the new date, so that week keeps its date.
+  const fromDate = form.value.date && form.value.date < occDate.value ? form.value.date : occDate.value
+  const rule = buildRule()
+  const moves = []
+  // The date being changed lands on the new schedule's first date.
+  const selectedTo = occurrenceRow.value ? firstNewDate({ rule, fromDate }) : null
+  if (selectedTo) moves.push({ event_id: occurrenceRow.value.id, to_date: selectedTo, selected: true })
+  if (movePlanned.value && plannedDates.value.length) {
+    moves.push(...mapPlannedDates({ rule, fromDate, planned: plannedDates.value, taken: selectedTo ? [selectedTo] : [] }))
+  }
+  splitKey = splitKey || crypto.randomUUID()
   saving.value = true
   const res = await splitSeries({
     oldSeriesId: seriesId.value,
-    fromDate: occDate.value,
+    fromDate,
     newSeriesPayload: { ...seriesPayload(), status: wasPublished.value ? 'published' : 'draft' },
-    overwriteExceptions,
+    moves: moves.length ? moves : null,
+    key: splitKey,
   })
   saving.value = false
   if (!res.ok) { errorMsg.value = res.message; return }
+  splitKey = null
   showToast('This date and the ones after were updated')
   router.push({ name: 'Events' })
 }
@@ -525,6 +572,19 @@ const heading = computed(() => {
   return 'New event'
 })
 
+// '2026-10-04' → '4 October', for messages.
+function longDate(date) {
+  const [y, m, d] = date.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })
+}
+
+// Under the heading: the draft promise only for something not yet published.
+const subtitle = computed(() => {
+  if (seriesDeleted.value) return 'This repeating event was deleted.'
+  if (wasPublished.value) return 'Members can already see this. Your changes show once you save.'
+  return 'Saved as a draft until you publish it. Members see nothing before then.'
+})
+
 function toTimeInput(iso) {
   const d = new Date(iso)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
@@ -540,7 +600,7 @@ function toTimeInput(iso) {
       {{ heading }}
     </h1>
     <p class="cmp__sub">
-      {{ isOccurrenceEdit ? (editIsPast ? 'This affects one date of a repeating event.' : 'This affects one date of a repeating event — choose how far the change reaches below.') : 'Saved as a draft until you publish it. Members see nothing before then.' }}
+      {{ isOccurrenceEdit ? (editIsPast ? 'This affects one date of a repeating event.' : 'This affects one date of a repeating event — choose how far the change reaches below.') : subtitle }}
     </p>
 
     <div
@@ -849,6 +909,22 @@ function toTimeInput(iso) {
               >
               <span><strong>This date and the ones after it.</strong> Earlier dates are left untouched.</span>
             </label>
+            <label
+              v-if="form.scope === 'after' && plannedDates.length"
+              class="cmp__radio cmp__optional"
+            >
+              <input
+                v-model="movePlanned"
+                type="checkbox"
+              >
+              <span>
+                Also move already-planned future dates
+                <span class="cmp__optional-hint">
+                  {{ plannedDates.length }} later date{{ plannedDates.length === 1 ? ' has' : 's have' }}
+                  already been planned, changed or cancelled. Left unticked, {{ plannedDates.length === 1 ? 'it stays' : 'they stay' }} as {{ plannedDates.length === 1 ? 'it is' : 'they are' }}.
+                </span>
+              </span>
+            </label>
           </div>
 
           <div class="cmp__sec">
@@ -1088,34 +1164,38 @@ function toTimeInput(iso) {
       </template>
     </Modal>
 
-    <!-- "Specially adjusted date" confirm (the owner's follow-up alert). -->
+    <!-- Moving the already-planned later dates with a split (#105). -->
     <Modal
-      v-model:open="splitConfirmOpen"
-      title="Some later dates were changed on purpose"
-      description="They will keep their own values unless you choose to overwrite them."
+      v-model:open="movePlannedConfirmOpen"
+      title="Move the planned dates too?"
+      description="Their own changes are replaced by this one."
       icon="alert"
       icon-tone="warning"
       layout="stack"
       :close-on-outside-click="false"
     >
       <p class="cmp__dialog-text">
-        <strong>{{ futureExceptionCount }}</strong> later date{{ futureExceptionCount === 1 ? ' was' : 's were' }}
-        changed by hand. Keep those as they are, or overwrite them with this change too?
+        <strong>{{ plannedDates.length }}</strong> planned date{{ plannedDates.length === 1 ? '' : 's' }}
+        will move to the new day in the same week and take this change’s name, time and place.
+        A date with no new day that week stays where it is, as a separate event.
+      </p>
+      <p class="cmp__dialog-text">
+        Cancelled dates stay cancelled. People, programme, money and attendance stay attached —
+        a date that moves to another day starts its attendance fresh.
       </p>
       <template #footer>
         <Button
           variant="secondary"
-          :loading="saving"
-          @click="doSplit(false)"
+          @click="movePlannedConfirmOpen = false"
         >
-          Keep their changes
+          Go back
         </Button>
         <Button
           variant="primary"
           :loading="saving"
-          @click="doSplit(true)"
+          @click="doSplit"
         >
-          Overwrite them too
+          Move them
         </Button>
       </template>
     </Modal>
@@ -1190,6 +1270,9 @@ function toTimeInput(iso) {
 .cmp__scope { border: 1px solid var(--border); border-radius: var(--r-control); padding: var(--sp-14); background: var(--surface-subtle); display: flex; flex-direction: column; gap: var(--sp-10); }
 .cmp__radio { display: flex; align-items: flex-start; gap: var(--sp-8); font-size: var(--text-body-sm); color: var(--ink-2); cursor: pointer; line-height: 1.45; }
 .cmp__radio input { margin-top: 3px; }
+/* Optional, not the main choice: indented under its option and quieter (owner's Q6). */
+.cmp__optional { margin-left: var(--sp-22); color: var(--ink-4); }
+.cmp__optional-hint { display: block; margin-top: 2px; font-size: var(--text-meta); color: var(--ink-5); }
 
 .cmp__dialog-text { margin: 0; font-size: var(--text-body-sm); color: var(--ink-2); line-height: 1.55; }
 
