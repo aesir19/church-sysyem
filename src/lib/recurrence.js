@@ -322,19 +322,31 @@ export function mapPlannedDates({ rule, startsOn, planned, taken = [] }) {
     })
 }
 
-/** A date of the OLD schedule from `newDate` up to (not including) `occurrenceDate`, or null.
- *  Moving the date being changed back past one would make the dates swap order, so a split
- *  refuses it. */
-export function previousDateBefore({ series, newDate, occurrenceDate }) {
-  if (!newDate || newDate >= occurrenceDate) return null
-  const [hit] = expandSeries(series, parseYmd(newDate), parseYmd(occurrenceDate))
-  return hit ? ymd(hit.date) : null
+/** The date of the OLD schedule that moving `occurrenceDate` to `newDate` would pass — the
+ *  nearest one between them, either direction, `newDate` included — or null. A split refuses a
+ *  move that passes another date, so dates never swap order. */
+export function crossedDate({ series, occurrenceDate, newDate }) {
+  if (!newDate || newDate === occurrenceDate) return null
+  const earlier = newDate < occurrenceDate
+  const from = earlier ? parseYmd(newDate) : addDays(parseYmd(occurrenceDate), 1)
+  const to = earlier ? parseYmd(occurrenceDate) : addDays(parseYmd(newDate), 1)
+  const hits = expandSeries(series, from, to)
+  const nearest = earlier ? hits[hits.length - 1] : hits[0]
+  return nearest ? ymd(nearest.date) : null
 }
 
-/** A "repeat N times" schedule split at `splitOn`: how many of the N are left for the new
- *  schedule, so splitting never adds dates. Null when the schedule has no count. */
+/** Whether `date` is one of a schedule's dates when it starts on that day. */
+export function fallsOn({ rule, date }) {
+  const day = parseYmd(date)
+  return expandSeries({ ...rule, startsOn: date }, day, addDays(day, 1)).length === 1
+}
+
+/** A "repeat N times" schedule split at `splitOn`: its count for the new schedule. Only when
+ *  the count is the old schedule's own (unchanged) are the dates already used taken off, so a
+ *  split never adds dates; a count typed for the new schedule is kept as typed. */
 export function remainingCount({ series, countN, splitOn }) {
   if (!countN) return null
+  if (countN !== series.countN) return countN
   const used = expandSeries(series, parseYmd(series.startsOn), parseYmd(splitOn)).length
   return Math.max(1, countN - used)
 }

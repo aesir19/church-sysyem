@@ -161,11 +161,11 @@ describe('splitSeries — "this date and the ones after it", one database call',
     expect(await splitSeries(base)).toMatchObject({ ok: true, newSeriesId: 'new-ser' })
   })
 
-  it('shows only the split\'s own known refusals; any other database text stays generic', async () => {
-    state.rpcResult = { data: null, error: { code: 'P0001', message: 'That date has already happened, so it can only be changed on its own.' } }
+  it('shows the words for the split\'s own refusal codes, and never database text', async () => {
+    state.rpcResult = { data: null, error: { code: 'ES002', message: 'whatever the database said' } }
     expect((await splitSeries(base)).message).toBe('That date has already happened, so it can only be changed on its own.')
 
-    // Same code, a sentence it does not know — e.g. raised by some trigger: never shown.
+    // Any other code — e.g. a plain RAISE from some trigger — stays generic.
     state.rpcResult = { data: null, error: { code: 'P0001', message: 'SECRET trigger detail' } }
     expect((await splitSeries(base)).message).toBe('That repeating event could not be saved.')
 

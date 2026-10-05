@@ -27,10 +27,10 @@ import EventRolesField from '../components/events/EventRolesField.vue'
 import { EVENT_KINDS, createEvent, updateEvent, getEvent, eventLocation, listServiceOccurrences, getEditState } from '../lib/data/events'
 import {
   createSeries, updateSeries, getSeries, editOccurrence, splitSeries,
-  ruleColumns, listPlannedDates, listCalendarOccurrences, getOccurrenceRow,
+  ruleColumns, listPlannedDates, listCalendarOccurrences, getOccurrenceRow, SERIES_DELETED,
 } from '../lib/data/eventSeries'
 import {
-  describeRule, ymd, parseYmd, mapPlannedDates, previousDateBefore, remainingCount,
+  describeRule, ymd, parseYmd, mapPlannedDates, crossedDate, fallsOn, remainingCount,
 } from '../lib/recurrence'
 import { listRooms, findRoomClashes } from '../lib/data/eventRooms'
 import { listRoster, addRole, updateRole, deleteRole } from '../lib/data/eventRoles'
@@ -259,7 +259,7 @@ async function loadSeries() {
   // A deleted series is finished — reached by a typed or stale address, it cannot be changed.
   if (s.deletedAt) {
     seriesDeleted.value = true
-    errorMsg.value = 'This repeating event was deleted and can’t be changed.'
+    errorMsg.value = SERIES_DELETED
   }
   wasPublished.value = s.status === 'published'
   form.value = { ...form.value,
@@ -515,11 +515,19 @@ async function submitOccurrence() {
   // A past date can only ever be changed on its own.
   if (editIsPast.value) form.value.scope = 'this'
   if (form.value.scope === 'after') {
-    // Splitting the rule from this date. Moving it back past an earlier date of the schedule would
-    // make the dates swap order, so that is a change to this date alone.
-    const before = previousDateBefore({ series: loadedSeries.value, newDate: form.value.date, occurrenceDate: occDate.value })
-    if (before) {
-      errorMsg.value = `The new date can’t be on or before the previous date (${longDate(before)}). Change this date on its own instead.`
+    // Splitting the rule from this date. Moving it past another date of the schedule, earlier or
+    // later, would make the dates swap order, so that is a change to this date alone.
+    const newDate = form.value.date || occDate.value
+    const crossed = crossedDate({ series: loadedSeries.value, occurrenceDate: occDate.value, newDate })
+    if (crossed) {
+      errorMsg.value = newDate < occDate.value
+        ? `The new date can’t be on or before the previous date (${longDate(crossed)}). Change this date on its own instead.`
+        : `The new date can’t be on or after the next date (${longDate(crossed)}). Change this date on its own instead.`
+      return
+    }
+    // The new schedule starts on the new date, so it must be one of its days — or it would vanish.
+    if (!fallsOn({ rule: buildRule(), date: newDate })) {
+      errorMsg.value = 'The new date doesn’t fit the new repeat pattern. Pick a date that does, or change this date on its own.'
       return
     }
     // Moving the other planned dates too is confirmed first.
@@ -545,7 +553,8 @@ async function doSplit() {
   const moves = movePlanned.value && plannedDates.value.length
     ? mapPlannedDates({ rule, startsOn, planned: plannedDates.value, taken: [startsOn] })
     : null
-  // "Repeat N times": the new schedule gets only the dates not used yet.
+  // "Repeat N times": the old schedule's own count loses the dates already used; a count typed
+  // for the new schedule is kept as typed.
   const countN = remainingCount({ series: loadedSeries.value, countN: rule.countN, splitOn })
   splitKey = splitKey || crypto.randomUUID()
   saving.value = true

@@ -195,7 +195,7 @@ export async function getSeries(id) {
 export async function listPlannedDates({ seriesId, fromDate } = {}) {
   if (!seriesId || !fromDate) return { ok: false, dates: [] }
   const { data, error } = await supabase.rpc('preview_split_event_series', { p_series: seriesId, p_from: fromDate })
-  if (error || !Array.isArray(data)) return { ok: false, dates: [] }
+  if (error || !Array.isArray(data)) return { ok: false, dates: [], message: SPLIT_REFUSALS[error?.code] ?? '' }
   return { ok: true, dates: data }
 }
 
@@ -262,17 +262,18 @@ export function editOccurrence({ series, occurrenceDate, payload }) {
   )
 }
 
-// The split's own refusals, written for people. Only these are shown as they are; any other
-// database text stays behind the generic message (docs/SECURITY.md §3.5).
-const SPLIT_REFUSALS = new Set([
-  'This repeating event was deleted and can\'t be changed.',
-  'That date has already happened, so it can only be changed on its own.',
-  'The new date can\'t be on or before an earlier date of this repeating event. Change this date on its own instead.',
-  'The planned dates have changed since this page was opened. Please reload and try again.',
-  'Two planned dates cannot move to the same day.',
-  'A planned date can only move within the same week.',
-  'This change was already saved. Please reload the page to make another.',
-])
+// The split's own refusals: the database names each with its own code (0051) and these are the
+// words shown for it. Database text itself is never shown (docs/SECURITY.md §3.5).
+export const SERIES_DELETED = 'This repeating event was deleted and can’t be changed.'
+const SPLIT_REFUSALS = {
+  ES001: SERIES_DELETED,
+  ES002: 'That date has already happened, so it can only be changed on its own.',
+  ES003: 'The new date can’t move past another date of this repeating event. Change this date on its own instead.',
+  ES004: 'The planned dates have changed since this page was opened. Please reload and try again.',
+  ES005: 'Two planned dates can’t move to the same day.',
+  ES006: 'A planned date can only move within the same week.',
+  ES007: 'This change was already saved. Please reload the page to make another.',
+}
 
 /**
  * "This date and the ones after it" (stories 10, 15; #103 bug 2, #105) — ONE database call, so the
@@ -295,7 +296,7 @@ export async function splitSeries({ oldSeriesId, occurrenceDate, startsOn, newSe
     }),
     { messages: { blocked: MESSAGES.updateFailed, denied: MESSAGES.updateFailed, conflict: MESSAGES.updateFailed, failed: MESSAGES.updateFailed } }
   )
-  if (!res.ok) return failed(SPLIT_REFUSALS.has(res.cause?.message) ? res.cause.message : res.message)
+  if (!res.ok) return failed(SPLIT_REFUSALS[res.cause?.code] ?? res.message)
   const result = res.rows[0]
   if (!result?.new_series_id) return failed()
   return { ok: true, newSeriesId: result.new_series_id, message: '' }

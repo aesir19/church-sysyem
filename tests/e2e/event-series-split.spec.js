@@ -147,7 +147,7 @@ test('the date being changed is not counted among the planned dates the box woul
   expect(calls[0]).toMatchObject({ p_occurrence: '2026-10-11', p_starts: '2026-10-13', p_moves: null })
 })
 
-test('the new day is exactly the one picked — earlier, or in a later week', async ({ page }) => {
+test('the new day is exactly the one picked — earlier, or later in the gap before the next date', async ({ page }) => {
   const calls = await open(page, { plannedRows: [] })
   await page.getByLabel('Starts on').fill('2026-10-10')
   await chooseAfter(page)
@@ -156,11 +156,21 @@ test('the new day is exactly the one picked — earlier, or in a later week', as
   expect(calls[0]).toMatchObject({ p_occurrence: '2026-10-11', p_starts: '2026-10-10' })
 
   const later = await open(page, { plannedRows: [] })
-  await page.getByLabel('Starts on').fill('2026-10-19')
+  await page.getByLabel('Starts on').fill('2026-10-17')
   await chooseAfter(page)
   await page.getByRole('button', { name: 'Save this change' }).click()
   await expect(page.getByText('This date and the ones after were updated')).toBeVisible()
-  expect(later[0]).toMatchObject({ p_occurrence: '2026-10-11', p_starts: '2026-10-19' })
+  expect(later[0]).toMatchObject({ p_occurrence: '2026-10-11', p_starts: '2026-10-17' })
+})
+
+test('moving the date later past the next date is refused', async ({ page }) => {
+  const calls = await open(page, { plannedRows: [] })
+  await page.getByLabel('Starts on').fill('2026-10-19')
+  await chooseAfter(page)
+  await page.getByRole('button', { name: 'Save this change' }).click()
+
+  await expect(page.getByText(/can.t be on or after the next date \(18 October\)/)).toBeVisible()
+  expect(calls).toHaveLength(0)
 })
 
 test('a "repeat 10 times" schedule split at its 6th date gets only the 5 left', async ({ page }) => {
