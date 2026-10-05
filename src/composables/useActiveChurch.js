@@ -24,6 +24,8 @@ function writeCachedChurchName(name) {
 const homeChurch = ref(null)   // { id, name } — the caller's own linked church
 const churches = ref([])       // [{ id, name }] for cross-church users; [] otherwise
 const activeChurchId = ref(null)
+const loadError = ref('')
+const loading = ref(false)
 let loaded = false
 let pending = null
 
@@ -45,26 +47,41 @@ async function ensureLoaded(force = false) {
   if (loaded && !force) return activeChurchId.value
   if (pending) return pending
   pending = (async () => {
-    await loadPermissions()
+    loading.value = true
+    loadError.value = ''
+    try {
+      const permissionResult = await loadPermissions()
+      if (permissionResult === null) throw new Error('permissions unavailable')
 
-    const homeRes = await supabase.rpc('get_my_church').maybeSingle()
-    homeChurch.value = homeRes?.data || null
-    if (homeChurch.value?.name) writeCachedChurchName(homeChurch.value.name)
+      const homeRes = await supabase.rpc('get_my_church').maybeSingle()
+      if (homeRes?.error) throw homeRes.error
+      const nextHome = homeRes?.data || null
 
-    if (isCrossChurch.value) {
-      const listRes = await supabase.rpc('list_churches')
-      churches.value = listRes?.data || []
-    } else {
-      churches.value = []
+      let nextChurches = []
+      if (isCrossChurch.value) {
+        const listRes = await supabase.rpc('list_churches')
+        if (listRes?.error) throw listRes.error
+        nextChurches = listRes?.data || []
+      }
+
+      homeChurch.value = nextHome
+      churches.value = nextChurches
+      if (nextHome?.name) writeCachedChurchName(nextHome.name)
+      if (!activeChurchId.value) {
+        // Default: home church first; fall back to the first listed church.
+        activeChurchId.value = nextHome?.id || nextChurches[0]?.id || null
+      }
+      loaded = true
+      return activeChurchId.value
+    } catch {
+      // A failed lookup is not a loaded result. The next call must be able to retry.
+      loaded = false
+      loadError.value = 'Could not load your church. Please try again.'
+      return null
+    } finally {
+      loading.value = false
+      pending = null
     }
-
-    if (!activeChurchId.value) {
-      // Default: home church first; fall back to the first listed church.
-      activeChurchId.value = homeChurch.value?.id || churches.value[0]?.id || null
-    }
-    loaded = true
-    pending = null
-    return activeChurchId.value
   })()
   return pending
 }
@@ -80,6 +97,8 @@ export function clearActiveChurch() {
   homeChurch.value = null
   churches.value = []
   activeChurchId.value = null
+  loadError.value = ''
+  loading.value = false
   loaded = false
   pending = null
 }
@@ -101,6 +120,8 @@ export function useActiveChurch() {
     activeChurchId,
     activeChurchName,
     showChurchSelector,
+    loadError,
+    loading,
     ensureLoaded,
     setActiveChurch,
   }
