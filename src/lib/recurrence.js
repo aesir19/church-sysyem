@@ -23,7 +23,8 @@
 //   timeStart    'HH:MM' — time of day the occurrence starts
 //   timeEnd      'HH:MM' | null — optional end time (duration; null renders as a default block)
 
-function parseYmd(ymd) {
+// 'YYYY-MM-DD' → a local Date at midnight. The one date-key parser, the inverse of ymd().
+export function parseYmd(ymd) {
   const [y, m, d] = String(ymd).split('-').map(Number)
   return new Date(y, m - 1, d)
 }
@@ -292,4 +293,60 @@ export function mergeSeriesOccurrences({ seriesList, exceptions, from, to }) {
 
   out.sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at))
   return out
+}
+
+// --- splitting a series ("this date and the ones after it", #105) ---------------------------
+
+/**
+ * Where each OTHER planned date goes when the owner chooses to move them with a split: to the new
+ * schedule's date in the Sunday-first week the date ACTUALLY sits in (`actual_date`, else its
+ * slot), never before the new schedule starts. When that week has no new date — or its date is
+ * already `taken` (by the date being changed, or an earlier planned date) — `to_date` is null and
+ * the date stays where it is, as a standalone event. The database re-checks the result.
+ * `rule` is the new schedule (engine shape) starting on `startsOn`. Returns [{ event_id, to_date }].
+ */
+export function mapPlannedDates({ rule, startsOn, planned, taken = [] }) {
+  const newRule = { ...rule, startsOn }
+  const used = new Set(taken)
+  const dayOf = (p) => p.actual_date || p.occurrence_date
+  return [...planned]
+    .sort((a, b) => dayOf(a).localeCompare(dayOf(b)))
+    .map((p) => {
+      const day = parseYmd(dayOf(p))
+      const weekStart = addDays(day, -day.getDay())
+      const to = expandSeries(newRule, weekStart, addDays(weekStart, 7))
+        .map((o) => ymd(o.date))
+        .find((date) => date >= startsOn && !used.has(date)) ?? null
+      if (to) used.add(to)
+      return { event_id: p.id, to_date: to }
+    })
+}
+
+/** The date of the OLD schedule that moving `occurrenceDate` to `newDate` would pass — the
+ *  nearest one between them, either direction, `newDate` included — or null. A split refuses a
+ *  move that passes another date, so dates never swap order. */
+export function crossedDate({ series, occurrenceDate, newDate }) {
+  if (!newDate || newDate === occurrenceDate) return null
+  const earlier = newDate < occurrenceDate
+  const from = earlier ? parseYmd(newDate) : addDays(parseYmd(occurrenceDate), 1)
+  const to = earlier ? parseYmd(occurrenceDate) : addDays(parseYmd(newDate), 1)
+  const hits = expandSeries(series, from, to)
+  const nearest = earlier ? hits[hits.length - 1] : hits[0]
+  return nearest ? ymd(nearest.date) : null
+}
+
+/** Whether `date` is one of a schedule's dates when it starts on that day. */
+export function fallsOn({ rule, date }) {
+  const day = parseYmd(date)
+  return expandSeries({ ...rule, startsOn: date }, day, addDays(day, 1)).length === 1
+}
+
+/** A "repeat N times" schedule split at `splitOn`: its count for the new schedule. Only when
+ *  the count is the old schedule's own (unchanged) are the dates already used taken off, so a
+ *  split never adds dates; a count typed for the new schedule is kept as typed. */
+export function remainingCount({ series, countN, splitOn }) {
+  if (!countN) return null
+  if (countN !== series.countN) return countN
+  const used = expandSeries(series, parseYmd(series.startsOn), parseYmd(splitOn)).length
+  return Math.max(1, countN - used)
 }

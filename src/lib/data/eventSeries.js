@@ -6,8 +6,9 @@
 // draws weekly services. A row is written to `events` only when one date genuinely diverges:
 //   - skip a date        → a cancelled exception row (a greyed "cancelled this week")
 //   - edit one date       → an exception row carrying that date's own values
-//   - "apply to the ones after" → the series is SPLIT: the old rule ends the day before, a new
-//                            rule starts from the edited date. History is never rewritten.
+//   - "apply to the ones after" → the series is SPLIT (one database call, splitSeries): the old
+//                            rule ends the day before, a new rule starts from the edited date.
+//                            History is never rewritten.
 // An exception is an ordinary events row with series_id + occurrence_date (the slot it
 // replaces). mergeSeriesOccurrences suppresses the worked-out occupant of that slot so a date
 // never shows twice.
@@ -17,9 +18,9 @@
 // as success. RLS on event_series is the same two-audience story as events (0034).
 
 import { supabase } from '../supabase'
-import { write } from './write'
+import { write, writeRpc } from './write'
 import { listEvents, EVENT_COLUMNS } from './events'
-import { mergeSeriesOccurrences, nextOccurrence, describeRule, ymd, addDays } from '../recurrence'
+import { mergeSeriesOccurrences, nextOccurrence, describeRule, ymd } from '../recurrence'
 
 const MESSAGES = {
   loadFailed: 'Could not load the calendar. Please try again.',
@@ -37,7 +38,7 @@ export const SERIES_COLUMNS =
   'id, church_id, title, kind, status, location, description, run_by, projected_budget, ' +
   'cadence, interval_n, anchor, weekday, week_of_month, day_of_month, ' +
   'weekday2, week_of_month2, day_of_month2, time_start, time_end, starts_on, ends_on, count_n, ' +
-  'created_at, created_by, updated_at, published_at'
+  'created_at, created_by, updated_at, published_at, deleted_at'
 
 // A DB row (snake_case) → the camelCase shape the recurrence engine reads, with the display
 // fields carried alongside so mergeSeriesOccurrences can decorate occurrences. One mapping,
@@ -67,6 +68,7 @@ export function toSeries(row) {
     startsOn: row.starts_on,
     endsOn: row.ends_on,
     countN: row.count_n,
+    deletedAt: row.deleted_at ?? null,
   }
 }
 
@@ -106,6 +108,7 @@ export async function listSeries({ churchId }) {
     .from('event_series')
     .select(SERIES_COLUMNS)
     .eq('church_id', churchId)
+    .is('deleted_at', null)
     .order('created_at', { ascending: false })
   if (error) return { ok: false, series: [], message: MESSAGES.seriesFailed }
   const now = new Date()
@@ -182,31 +185,18 @@ export async function getSeries(id) {
   return { ok: true, series: data ? toSeries(data) : null, message: '' }
 }
 
-/** How many future dates a series has that were HAND-EDITED from `fromDate` onward — the
- *  "specially adjusted" dates a split would otherwise sweep up. A cancelled/skipped week is not
- *  a hand-edit, so it is excluded (it would wrongly trigger the keep/overwrite prompt). Drives
- *  the confirm the owner asked for. */
-export async function countFutureExceptions({ seriesId, fromDate }) {
-  const { count, error } = await supabase
-    .from('events')
-    .select('id', { count: 'exact', head: true })
-    .eq('series_id', seriesId)
-    .gte('occurrence_date', fromDate)
-    .neq('status', 'cancelled')
-  return error ? 0 : (count ?? 0)
-}
-
-/** How many PAST dates of a series have a saved record and will therefore be kept when the
- *  series is deleted. Unmaterialised past dates are purely worked-out and leave nothing behind,
- *  so this — not the rule's occurrence count — is the honest "kept" figure for the delete
- *  confirm. `today` is injectable for testing. */
-export async function countKeptPast({ seriesId, today = new Date() }) {
-  const { count, error } = await supabase
-    .from('events')
-    .select('id', { count: 'exact', head: true })
-    .eq('series_id', seriesId)
-    .lt('occurrence_date', ymd(today))
-  return error ? 0 : (count ?? 0)
+/**
+ * The saved later dates a split could move: this series' rows from `fromDate` on that have not
+ * happened yet — hand-edited, attended, planned or cancelled alike. The database decides, by each
+ * date's actual start and its own clock (never this device's). Drives the optional "Also move
+ * already-planned future dates" choice; a failed read is `ok: false`, never "none planned".
+ * Returns { ok, dates: [{ id, occurrence_date, actual_date, status }] }.
+ */
+export async function listPlannedDates({ seriesId, fromDate } = {}) {
+  if (!seriesId || !fromDate) return { ok: false, dates: [] }
+  const { data, error } = await supabase.rpc('preview_split_event_series', { p_series: seriesId, p_from: fromDate })
+  if (error || !Array.isArray(data)) return { ok: false, dates: [], message: SPLIT_REFUSALS[error?.code] ?? '' }
+  return { ok: true, dates: data }
 }
 
 /** Create a repeating series. `publish` decides the initial status, mirroring createEvent. */
@@ -272,70 +262,96 @@ export function editOccurrence({ series, occurrenceDate, payload }) {
   )
 }
 
+// The split's own refusals: the database names each with its own code (0051) and these are the
+// words shown for it. Database text itself is never shown (docs/SECURITY.md §3.5).
+export const SERIES_DELETED = 'This repeating event was deleted and can’t be changed.'
+const SPLIT_REFUSALS = {
+  ES001: SERIES_DELETED,
+  ES002: 'That date has already happened, so it can only be changed on its own.',
+  ES003: 'The new date can’t move past another date of this repeating event. Change this date on its own instead.',
+  ES004: 'The planned dates have changed since this page was opened. Please reload and try again.',
+  ES005: 'Two planned dates can’t move to the same day.',
+  ES006: 'A planned date can only move within the same week.',
+  ES007: 'This change was already saved. Please reload the page to make another.',
+}
+
 /**
- * "Apply to the ones after this too" (stories 10, 15). Splits the series at `fromDate`: the old
- * rule is ended the day before, a new rule starts from fromDate with the changed values. Past
- * and near dates on the old rule are untouched (never rewritten).
+ * "This date and the ones after it" (stories 10, 15; #103 bug 2, #105) — ONE database call, so the
+ * split happens completely or not at all. The date being changed (`occurrenceDate`) moves to
+ * exactly `startsOn`, where the new schedule (`newSeriesPayload`) starts; the old schedule ends
+ * the day before the earlier of the two. Earlier dates are never touched.
  *
- * `newSeriesPayload` is the full column set for the new event_series row (rule + shared fields).
- * A previously hand-adjusted future date (an exception) is the "specially adjusted" case the
- * owner asked to be prompted about: `overwriteExceptions` true removes those future exceptions
- * so the new rule governs them; false re-points them to the new series so they keep their own
- * values. Returns { ok, message, rows } where rows[0] is the new series.
+ * `moves` is null to leave the other already-planned dates where they are (the default), or the
+ * mapPlannedDates result to move them too. `key` is a one-time id the caller keeps until the split
+ * succeeds and drops when the form changes: repeating the call with it after a lost reply returns
+ * the first result instead of splitting twice. Returns { ok, newSeriesId, message }.
  */
-export async function splitSeries({ oldSeriesId, fromDate, newSeriesPayload, overwriteExceptions = false }) {
-  const dayBefore = ymd(addDays(new Date(`${fromDate}T00:00:00`), -1))
-
-  // 1. End the old series the day before the split.
-  const ended = await updateSeries(oldSeriesId, { ends_on: dayBefore })
-  if (!ended.ok) return ended
-
-  // 2. Create the new series from the split date.
-  const created = await createSeries(
-    { ...newSeriesPayload, starts_on: fromDate },
-    { publish: newSeriesPayload.status !== 'draft' }
+export async function splitSeries({ oldSeriesId, occurrenceDate, startsOn, newSeriesPayload, moves = null, key } = {}) {
+  const failed = (message = MESSAGES.updateFailed) => ({ ok: false, newSeriesId: null, message })
+  if (!oldSeriesId || !occurrenceDate || !startsOn || !newSeriesPayload || !key) return failed()
+  const res = await writeRpc(
+    supabase.rpc('split_event_series', {
+      p_series: oldSeriesId, p_occurrence: occurrenceDate, p_starts: startsOn,
+      p_new: newSeriesPayload, p_moves: moves, p_key: key,
+    }),
+    { messages: { blocked: MESSAGES.updateFailed, denied: MESSAGES.updateFailed, conflict: MESSAGES.updateFailed, failed: MESSAGES.updateFailed } }
   )
-  if (!created.ok) return created
-  const newId = created.rows[0]?.id
-
-  // 3. Move future exception rows onto the new series, or clear them so the new rule governs.
-  // These legitimately affect ZERO rows in the common case (a series with no hand-edited future
-  // dates — occurrences are virtual), so a row count of 0 is success, not a refusal; we check
-  // .error only. The authoritative permission gate was step 1's updateSeries, through write().
-  const move = overwriteExceptions
-    ? await supabase.from('events').delete().eq('series_id', oldSeriesId).gte('occurrence_date', fromDate)
-    : (newId
-        ? await supabase.from('events').update({ series_id: newId }).eq('series_id', oldSeriesId).gte('occurrence_date', fromDate)
-        : { error: null })
-  if (move.error) return { ok: false, message: MESSAGES.updateFailed, rows: [], cause: move.error }
-
-  return created
+  if (!res.ok) return failed(SPLIT_REFUSALS[res.cause?.code] ?? res.message)
+  const result = res.rows[0]
+  if (!result?.new_series_id) return failed()
+  return { ok: true, newSeriesId: result.new_series_id, message: '' }
 }
 
 /**
- * Delete a whole series — story 17. Removes FUTURE dates only; every PAST date and its
- * attendance is KEPT by detaching it into a standalone event. Order matters: detach the past
- * and delete the future exception rows BEFORE the series, because the FK is NO ACTION (0034).
- * `today` is injectable for testing; defaults to now.
+ * What deleting a series would do to its upcoming dates — the two numbers in the confirm dialog.
+ * Dates with recorded work (attendance, finance, assigned people, a programme) are kept as
+ * standalone events; the rest are removed. Returns { ok, kept, removed, message }.
  */
-export async function deleteSeries({ seriesId, today = new Date() } = {}) {
-  const todayYmd = ymd(today)
-
-  // Detach past occurrences: they survive as ordinary events, attendance intact.
-  const detach = await supabase.from('events')
-    .update({ series_id: null, occurrence_date: null })
-    .eq('series_id', seriesId).lt('occurrence_date', todayYmd)
-  if (detach.error) return { ok: false, message: MESSAGES.deleteFailed, rows: [], cause: detach.error }
-
-  // Delete future exception rows — they belong to a schedule that is going away.
-  const delFuture = await supabase.from('events')
-    .delete().eq('series_id', seriesId).gte('occurrence_date', todayYmd)
-  if (delFuture.error) return { ok: false, message: MESSAGES.deleteFailed, rows: [], cause: delFuture.error }
-
-  // Finally the series row itself.
-  return write(supabase.from('event_series').delete().eq('id', seriesId), {
-    columns: 'id',
-    messages: { blocked: MESSAGES.deleteFailed, denied: MESSAGES.deleteFailed, failed: MESSAGES.deleteFailed },
-  })
+export async function previewDeleteSeries({ seriesId } = {}) {
+  if (!seriesId) return { ok: false, kept: 0, removed: 0, message: MESSAGES.deleteFailed }
+  const { data, error } = await supabase.rpc('preview_delete_event_series', { p_series: seriesId })
+  if (error || !data) return { ok: false, kept: 0, removed: 0, message: MESSAGES.deleteFailed }
+  return { ok: true, kept: data.kept ?? 0, removed: data.removed ?? 0, message: '' }
 }
 
+/**
+ * Delete a whole series — one database call, so it happens completely or not at all (#103).
+ * The series is ended and marked deleted; every past date stays on the calendar. Upcoming dates
+ * with recorded work become standalone events; the rest are removed. Repeating the call after a
+ * lost reply is harmless — the database reports `alreadyDeleted` and changes nothing.
+ * Returns { ok, kept, removed, alreadyDeleted, message }.
+ */
+export async function deleteSeries({ seriesId } = {}) {
+  const failed = { ok: false, kept: 0, removed: 0, alreadyDeleted: false, message: MESSAGES.deleteFailed }
+  if (!seriesId) return failed
+  const res = await writeRpc(
+    supabase.rpc('delete_event_series', { p_series: seriesId }),
+    { messages: { blocked: MESSAGES.deleteFailed, denied: MESSAGES.deleteFailed, conflict: MESSAGES.deleteFailed, failed: MESSAGES.deleteFailed } }
+  )
+  const data = res.rows[0]
+  if (!res.ok || !data) return failed
+  return {
+    ok: true,
+    kept: data.kept ?? 0,
+    removed: data.removed ?? 0,
+    alreadyDeleted: !!data.already_deleted,
+    message: '',
+  }
+}
+
+/**
+ * The saved row for one date of a series, if that date has one (an edited, cancelled, or
+ * attended date). `event` is null when the date is still only worked out from the rule; a failed
+ * read is `ok: false`, never mistaken for "no saved row". Returns { ok, event }.
+ */
+export async function getOccurrenceRow({ seriesId, occurrenceDate } = {}) {
+  if (!seriesId || !occurrenceDate) return { ok: false, event: null }
+  const { data, error } = await supabase
+    .from('events')
+    .select(EVENT_COLUMNS)
+    .eq('series_id', seriesId)
+    .eq('occurrence_date', occurrenceDate)
+    .maybeSingle()
+  if (error) return { ok: false, event: null }
+  return { ok: true, event: data ?? null }
+}

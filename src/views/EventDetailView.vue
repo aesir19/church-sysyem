@@ -19,10 +19,10 @@ import { useCurrentRole } from '../composables/useCurrentRole'
 import { useToast } from '../composables/useToast'
 import {
   getEventLinks, kindLabel, findEventByDateTitle, parseEventSlug, slugify,
-  publishEvent, cancelEvent, deleteEvent,
+  publishEvent, cancelEvent, deleteEvent, getEditState,
 } from '../lib/data/events'
 import {
-  getSeries, listSeries, skipOccurrence, deleteSeries, countKeptPast,
+  getSeries, listSeries, skipOccurrence, deleteSeries, previewDeleteSeries,
 } from '../lib/data/eventSeries'
 import { describeRule, expandSeries, ymd } from '../lib/recurrence'
 import { useActiveChurch } from '../composables/useActiveChurch'
@@ -92,11 +92,16 @@ function downloadIcs() {
   URL.revokeObjectURL(url)
 }
 const seriesRuleText = computed(() => series.value ? describeRule(series.value) : '')
-// The past is frozen: an occurrence that has already happened offers no change/skip actions.
-const isPastOccurrence = computed(() => {
-  if (!occurrenceDate.value) return false
-  const today = new Date(); today.setHours(0, 0, 0, 0)
-  return new Date(`${occurrenceDate.value}T00:00:00`) < today
+// Whether one date of a series can still be changed (#105) is the database's answer, not the
+// device clock's: past or not, and locked (past + 11 or more attendance records). Until it has
+// answered — or if it could not — the date offers no change actions (fail closed).
+const dateEditState = ref(null)
+watch([event, series, canManageEvents], async () => {
+  dateEditState.value = null
+  if (!canManageEvents.value || !event.value || !series.value) return
+  const asked = event.value
+  const res = await getEditState(isVirtualOccurrence.value ? { startsAt: asked.starts_at } : { eventId: asked.id })
+  if (event.value === asked) dateEditState.value = res
 })
 
 // The overflow menu items depend on what this is:
@@ -106,11 +111,17 @@ const isPastOccurrence = computed(() => {
 const menuItems = computed(() => {
   if (!canManageEvents.value || !event.value) return []
   if (isSeriesOccurrence.value) {
+    // A deleted series has nothing left to change: its past dates are history.
+    if (series.value?.deletedAt) return []
     const items = []
-    // A past date is frozen — no change/skip, only whole-series actions that reach forward.
-    if (!isPastOccurrence.value) {
+    // An upcoming date can be changed or cancelled. A past date can still be changed on its own
+    // unless it is locked; it is never cancelled after the fact.
+    const st = dateEditState.value
+    if (st?.ok && !st.isPast) {
       items.push({ key: 'edit-date', label: 'Change this date', onSelect: goEditOccurrence })
       items.push({ key: 'skip', label: 'Cancel this date', onSelect: () => (skipOpen.value = true), danger: true, dividerBefore: true })
+    } else if (st?.ok && !st.locked) {
+      items.push({ key: 'edit-date', label: 'Change this date', onSelect: goEditOccurrence })
     }
     items.push({ key: 'edit-series', label: 'Edit the whole series', onSelect: goEditSeries, dividerBefore: items.length > 0 })
     items.push({ key: 'delete-series', label: 'Delete the whole series', onSelect: openDeleteSeries, danger: true })
@@ -225,11 +236,14 @@ async function doSkip() {
   router.push({ name: 'Calendar' })
 }
 
-// The honest "kept" figure is how many PAST dates actually have a saved record — unmaterialised
-// past dates are purely worked-out and leave nothing behind. Fetched when the dialog opens.
-const keptPastCount = ref(0)
+// What a delete does to the UPCOMING dates, asked of the database when the dialog opens: dates
+// with recorded work (finance, people, a programme — or attendance from an early check-in) are kept as separate events, the
+// rest are removed. Past dates always stay.
+const keptUpcomingCount = ref(0)
 async function openDeleteSeries() {
-  keptPastCount.value = await countKeptPast({ seriesId: series.value.id })
+  const preview = await previewDeleteSeries({ seriesId: series.value.id })
+  if (!preview.ok) { errorMsg.value = preview.message; return }
+  keptUpcomingCount.value = preview.kept
   deleteConfirmText.value = ''
   deleteSeriesOpen.value = true
 }
@@ -688,21 +702,20 @@ const history = computed(() => {
     <Modal
       v-model:open="deleteSeriesOpen"
       title="Delete this repeating event?"
-      description="Upcoming dates are removed. Past dates and any attendance already taken are kept."
+      description="Past dates stay on the calendar. Upcoming dates are removed, except ones that already have recorded work."
       icon="alert"
       icon-tone="magenta"
       layout="stack"
       :close-on-outside-click="false"
     >
       <p class="det__dialog-text">
-        This stops <strong>{{ series?.title }}</strong> repeating — all its upcoming dates will no longer appear on the calendar.
-        <template v-if="keptPastCount">
-          Its <strong>{{ keptPastCount }}</strong> past date{{ keptPastCount === 1 ? '' : 's' }} with records (attendance) {{ keptPastCount === 1 ? 'is' : 'are' }} kept.
+        This stops <strong>{{ series?.title }}</strong> repeating.
+        <template v-if="keptUpcomingCount">
+          <strong>{{ keptUpcomingCount }}</strong> upcoming date{{ keptUpcomingCount === 1 ? '' : 's' }}
+          that already {{ keptUpcomingCount === 1 ? 'has' : 'have' }} finances, people or a programme
+          will be kept as {{ keptUpcomingCount === 1 ? 'a separate event' : 'separate events' }}.
         </template>
-        <template v-else>
-          No past dates have records, so nothing is left behind.
-        </template>
-        This cannot be undone.
+        All other upcoming dates are removed. This cannot be undone.
       </p>
       <label class="det__field">
         <span class="det__label">Type <strong>{{ series?.title }}</strong> to confirm</span>
