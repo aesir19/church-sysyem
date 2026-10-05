@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // right order against the NO ACTION foreign key). Results are keyed by table. The same builder
 // serves both direct awaits (`await supabase.from().update().eq()`) and the write() seam
 // (which appends `.select(columns)` then awaits) — both resolve through `then`.
-const state = vi.hoisted(() => ({ results: {}, calls: [] }))
+const state = vi.hoisted(() => ({ results: {}, calls: [], rpcResult: { data: null, error: null } }))
 
 function makeBuilder(table) {
   const record = (name, ...args) => state.calls.push({ table, name, args })
@@ -31,10 +31,13 @@ function makeBuilder(table) {
 }
 
 vi.mock('../../../src/lib/supabase', () => ({
-  supabase: { from: vi.fn((table) => { state.calls.push({ table, name: 'from' }); return makeBuilder(table) }) },
+  supabase: {
+    from: vi.fn((table) => { state.calls.push({ table, name: 'from' }); return makeBuilder(table) }),
+    rpc: vi.fn(async (name, args) => { state.calls.push({ table: 'rpc', name, args }); return state.rpcResult }),
+  },
 }))
 
-const { deleteSeries, splitSeries, skipOccurrence, countFutureExceptions, toSeries } =
+const { deleteSeries, previewDeleteSeries, listSeries, splitSeries, skipOccurrence, countFutureExceptions, toSeries } =
   await import('../../../src/lib/data/eventSeries')
 
 const seriesRow = {
@@ -45,43 +48,78 @@ const seriesRow = {
 }
 
 function calls(table, name) { return state.calls.filter((c) => c.table === table && c.name === name) }
-function indexOf(pred) { return state.calls.findIndex(pred) }
 
 beforeEach(() => {
   state.calls = []
+  state.rpcResult = { data: null, error: null }
   state.results = {
     event_series: { data: [{ id: 'new-ser' }], error: null },
     events: { data: [{ id: 'ev1' }], error: null },
   }
 })
 
-describe('deleteSeries — keep the past, drop the future', () => {
-  it('detaches past occurrences, deletes future ones, THEN deletes the series (FK order)', async () => {
-    const res = await deleteSeries({ seriesId: 'ser1', today: new Date('2026-08-25T00:00:00') })
-    expect(res.ok).toBe(true)
+describe('deleteSeries — one database call, never several', () => {
+  it('asks the database to delete the series and reports what it kept and removed', async () => {
+    state.rpcResult = { data: { already_deleted: false, kept: 2, removed: 5 }, error: null }
+    const res = await deleteSeries({ seriesId: 'ser1' })
 
-    // Detach: an UPDATE clearing series_id/occurrence_date on rows before today.
-    const [detach] = calls('events', 'update')
-    expect(detach.args[0]).toEqual({ series_id: null, occurrence_date: null })
-    expect(calls('events', 'lt').some((c) => c.args[0] === 'occurrence_date' && c.args[1] === '2026-08-25')).toBe(true)
-
-    // Delete future: a DELETE on rows from today onward.
-    expect(calls('events', 'delete').length).toBe(1)
-    expect(calls('events', 'gte').some((c) => c.args[0] === 'occurrence_date' && c.args[1] === '2026-08-25')).toBe(true)
-
-    // Order: the events update (detach) and events delete both precede the series delete.
-    const seriesDeleteAt = indexOf((c) => c.table === 'event_series' && c.name === 'delete')
-    const eventsDeleteAt = indexOf((c) => c.table === 'events' && c.name === 'delete')
-    const eventsUpdateAt = indexOf((c) => c.table === 'events' && c.name === 'update')
-    expect(eventsUpdateAt).toBeLessThan(seriesDeleteAt)
-    expect(eventsDeleteAt).toBeLessThan(seriesDeleteAt)
+    expect(res).toMatchObject({ ok: true, kept: 2, removed: 5, alreadyDeleted: false })
+    expect(calls('rpc', 'delete_event_series')).toHaveLength(1)
+    expect(calls('rpc', 'delete_event_series')[0].args).toEqual({ p_series: 'ser1' })
+    // The browser no longer touches the tables itself — that was the half-deleted-series bug.
+    expect(calls('events', 'update')).toHaveLength(0)
+    expect(calls('events', 'delete')).toHaveLength(0)
+    expect(calls('event_series', 'delete')).toHaveLength(0)
   })
 
-  it('stops and does not delete the series if detaching the past fails', async () => {
-    state.results.events = { data: null, error: { message: 'boom' } }
-    const res = await deleteSeries({ seriesId: 'ser1', today: new Date('2026-08-25T00:00:00') })
+  it('treats a repeat call as success so a lost reply can simply be retried', async () => {
+    state.rpcResult = { data: { already_deleted: true, kept: 0, removed: 0 }, error: null }
+    const res = await deleteSeries({ seriesId: 'ser1' })
+    expect(res).toMatchObject({ ok: true, alreadyDeleted: true })
+  })
+
+  it('reports a generic failure and no backend detail when the database refuses', async () => {
+    state.rpcResult = { data: null, error: { message: 'SECRET detail', code: '42501' } }
+    const res = await deleteSeries({ seriesId: 'ser1' })
     expect(res.ok).toBe(false)
-    expect(calls('event_series', 'delete').length).toBe(0)
+    expect(res.message).toBe('That repeating event could not be deleted.')
+    expect(JSON.stringify(res.message)).not.toMatch(/SECRET/)
+  })
+
+  it('does nothing without a series id', async () => {
+    const res = await deleteSeries({})
+    expect(res.ok).toBe(false)
+    expect(calls('rpc', 'delete_event_series')).toHaveLength(0)
+  })
+})
+
+describe('previewDeleteSeries — the numbers in the confirm dialog', () => {
+  it('returns how many upcoming dates would be kept and removed', async () => {
+    state.rpcResult = { data: { kept: 3, removed: 4 }, error: null }
+    const res = await previewDeleteSeries({ seriesId: 'ser1' })
+    expect(res).toEqual({ ok: true, kept: 3, removed: 4, message: '' })
+    expect(calls('rpc', 'preview_delete_event_series')[0].args).toEqual({ p_series: 'ser1' })
+  })
+
+  it('reports a failure instead of showing a made-up zero', async () => {
+    state.rpcResult = { data: null, error: { message: 'boom' } }
+    const res = await previewDeleteSeries({ seriesId: 'ser1' })
+    expect(res.ok).toBe(false)
+  })
+})
+
+describe('listSeries — deleted series are gone from the Repeating tab', () => {
+  it('only asks for series that are not deleted', async () => {
+    state.results.event_series = { data: [], error: null }
+    await listSeries({ churchId: 'c1' })
+    expect(calls('event_series', 'is').some((c) => c.args[0] === 'deleted_at' && c.args[1] === null)).toBe(true)
+  })
+})
+
+describe('toSeries', () => {
+  it('carries whether the series was deleted', () => {
+    expect(toSeries({ ...seriesRow, deleted_at: '2026-10-05T00:00:00Z' }).deletedAt).toBe('2026-10-05T00:00:00Z')
+    expect(toSeries(seriesRow).deletedAt).toBeNull()
   })
 })
 
