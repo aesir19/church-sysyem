@@ -19,7 +19,7 @@ import { useCurrentRole } from '../composables/useCurrentRole'
 import { useToast } from '../composables/useToast'
 import {
   getEventLinks, kindLabel, findEventByDateTitle, parseEventSlug, slugify,
-  publishEvent, cancelEvent, deleteEvent,
+  publishEvent, cancelEvent, deleteEvent, getEditState,
 } from '../lib/data/events'
 import {
   getSeries, listSeries, skipOccurrence, deleteSeries, previewDeleteSeries,
@@ -92,11 +92,16 @@ function downloadIcs() {
   URL.revokeObjectURL(url)
 }
 const seriesRuleText = computed(() => series.value ? describeRule(series.value) : '')
-// The past is frozen: an occurrence that has already happened offers no change/skip actions.
-const isPastOccurrence = computed(() => {
-  if (!occurrenceDate.value) return false
-  const today = new Date(); today.setHours(0, 0, 0, 0)
-  return new Date(`${occurrenceDate.value}T00:00:00`) < today
+// Whether one date of a series can still be changed (#105) is the database's answer, not the
+// device clock's: past or not, and locked (past + 11 or more attendance records). Until it has
+// answered — or if it could not — the date offers no change actions (fail closed).
+const dateEditState = ref(null)
+watch([event, series, canManageEvents], async () => {
+  dateEditState.value = null
+  if (!canManageEvents.value || !event.value || !series.value) return
+  const asked = event.value
+  const res = await getEditState(isVirtualOccurrence.value ? { startsAt: asked.starts_at } : { eventId: asked.id })
+  if (event.value === asked) dateEditState.value = res
 })
 
 // The overflow menu items depend on what this is:
@@ -109,10 +114,14 @@ const menuItems = computed(() => {
     // A deleted series has nothing left to change: its past dates are history.
     if (series.value?.deletedAt) return []
     const items = []
-    // A past date is frozen — no change/skip, only whole-series actions that reach forward.
-    if (!isPastOccurrence.value) {
+    // An upcoming date can be changed or cancelled. A past date can still be changed on its own
+    // unless it is locked; it is never cancelled after the fact.
+    const st = dateEditState.value
+    if (st?.ok && !st.isPast) {
       items.push({ key: 'edit-date', label: 'Change this date', onSelect: goEditOccurrence })
       items.push({ key: 'skip', label: 'Cancel this date', onSelect: () => (skipOpen.value = true), danger: true, dividerBefore: true })
+    } else if (st?.ok && !st.locked) {
+      items.push({ key: 'edit-date', label: 'Change this date', onSelect: goEditOccurrence })
     }
     items.push({ key: 'edit-series', label: 'Edit the whole series', onSelect: goEditSeries, dividerBefore: items.length > 0 })
     items.push({ key: 'delete-series', label: 'Delete the whole series', onSelect: openDeleteSeries, danger: true })

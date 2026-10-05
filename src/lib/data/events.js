@@ -343,3 +343,27 @@ export function deleteEvent(id) {
     messages: { blocked: MESSAGES.deleteFailed, denied: MESSAGES.deleteFailed, failed: MESSAGES.deleteFailed },
   })
 }
+
+/**
+ * What the edit screen must know before offering a change to one date (#105), answered by the
+ * database clock rather than the device's: whether the date has already happened, how much
+ * attendance it carries (current, and current + history), and whether it is locked — a past
+ * date with 11 or more records cannot be changed. Pass `eventId` for a saved event, or
+ * `startsAt` for a repeat date that has no saved row yet. Fails closed: callers must treat
+ * `ok: false` as "cannot change". Returns { ok, isPast, currentAttendance, totalAttendance,
+ * locked, message }.
+ */
+export async function getEditState({ eventId = null, startsAt = null } = {}) {
+  const { data, error } = await supabase.rpc('event_edit_state', { p_event_id: eventId, p_starts_at: startsAt })
+  if (error || !data) {
+    return { ok: false, isPast: false, currentAttendance: 0, totalAttendance: 0, locked: false, message: MESSAGES.eventFailed }
+  }
+  return {
+    ok: true,
+    isPast: !!data.is_past,
+    currentAttendance: data.current_attendance ?? 0,
+    totalAttendance: data.total_attendance ?? 0,
+    locked: !!data.locked,
+    message: '',
+  }
+}

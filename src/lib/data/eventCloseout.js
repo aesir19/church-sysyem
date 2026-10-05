@@ -60,6 +60,8 @@ export async function ensureEventService({ event }) {
     .from('services')
     .select('id, label, opens_at, closes_at, event_id, service_date')
     .eq('event_id', event.id)
+    // A service filed as history (the event moved to another day, #105) belongs to the old date.
+    .is('history_at', null)
     .order('opens_at', { ascending: true })
     .limit(1)
     .maybeSingle()

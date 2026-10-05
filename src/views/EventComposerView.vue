@@ -23,10 +23,10 @@ import { useActiveChurch } from '../composables/useActiveChurch'
 import { useToast } from '../composables/useToast'
 import Toggle from '../components/ui/Toggle.vue'
 import EventRolesField from '../components/events/EventRolesField.vue'
-import { EVENT_KINDS, createEvent, updateEvent, getEvent, eventLocation, listServiceOccurrences } from '../lib/data/events'
+import { EVENT_KINDS, createEvent, updateEvent, getEvent, eventLocation, listServiceOccurrences, getEditState } from '../lib/data/events'
 import {
   createSeries, updateSeries, getSeries, editOccurrence, splitSeries,
-  ruleColumns, countFutureExceptions, listCalendarOccurrences,
+  ruleColumns, countFutureExceptions, listCalendarOccurrences, getOccurrenceRow,
 } from '../lib/data/eventSeries'
 import { describeRule, ymd } from '../lib/recurrence'
 import { listRooms, findRoomClashes } from '../lib/data/eventRooms'
@@ -79,6 +79,17 @@ const form = ref({
 // The scope-confirm for "…and the ones after" when a later date was specially adjusted.
 const splitConfirmOpen = ref(false)
 const futureExceptionCount = ref(0)
+
+// Changing ONE date (#105). The database, not the device clock, says whether the date has already
+// happened, how much attendance it carries, and whether it is locked (past + 11 or more records).
+// `editState` stays null until asked; a failed answer locks the form (fail closed).
+const editState = ref(null)
+// The calendar day the date sits on now, so a move to another day can be spotted.
+const originalDate = ref('')
+// Moving a date that has attendance files that attendance as history — confirmed first.
+const moveConfirmOpen = ref(false)
+let moveConfirmed = false
+let pendingPublish = false
 
 // Rooms and the soft double-booking check (Q2). Rooms attach to a one-off event (the
 // series table has no room column), so the picker shows only when the event does not repeat.
@@ -220,6 +231,9 @@ async function loadOneOff() {
       description: e.description || '', projected_budget: e.projected_budget ?? '',
       room_id: e.room_id || '', attendance_tracked: !!e.attendance_tracked,
     }
+    originalDate.value = form.value.date
+    editState.value = await getEditState({ eventId: e.id })
+    if (!editState.value.ok) errorMsg.value = editState.value.message
     await loadRolesFor(e.id)
   } else { errorMsg.value = res.message }
   loading.value = false
@@ -247,7 +261,33 @@ async function loadSeries() {
     endsOn: s.endsOn || '', countN: s.countN ?? '',
     scope: 'this',
   }
+  if (isOccurrenceEdit.value) await loadOccurrenceState(s)
   loading.value = false
+}
+
+// One date of a series: if it already has a saved row (edited, cancelled, attended), the form
+// shows THAT row's values and the date it actually sits on (#105 rule 3) — not the rule's slot.
+async function loadOccurrenceState(s) {
+  const row = await getOccurrenceRow({ seriesId: s.id, occurrenceDate: occDate.value })
+  if (!row.ok) {
+    editState.value = { ok: false, isPast: false, currentAttendance: 0, totalAttendance: 0, locked: false }
+    errorMsg.value = 'Could not load this date. Please try again.'
+    return
+  }
+  const e = row.event
+  if (e?.starts_at) {
+    form.value = { ...form.value,
+      title: e.title || form.value.title,
+      date: ymd(new Date(e.starts_at)),
+      starts: toTimeInput(e.starts_at),
+      ends: e.ends_at ? toTimeInput(e.ends_at) : form.value.ends,
+      location: e.location ?? form.value.location,
+    }
+  }
+  originalDate.value = form.value.date
+  const slotStart = new Date(`${occDate.value}T${s.timeStart}:00`).toISOString()
+  editState.value = await getEditState(e ? { eventId: e.id } : { startsAt: slotStart })
+  if (!editState.value.ok) errorMsg.value = editState.value.message
 }
 
 // A DRAFT needs only a name (Q14): everything else is optional until publish. A dateless
@@ -257,13 +297,12 @@ async function loadSeries() {
 const canSaveDraft = computed(() => !!form.value.title.trim())
 const canPublish = computed(() => form.value.title.trim() && form.value.date && form.value.starts)
 
-// The past is frozen (owner's rule; #86 story 12): a date that has already happened cannot be
-// edited or split, because splitting from it would rewrite history. Blocks the occurrence editor.
-const isPastOccurrence = computed(() => {
-  if (!isOccurrenceEdit.value || !occDate.value) return false
-  const today = new Date(); today.setHours(0, 0, 0, 0)
-  return new Date(`${occDate.value}T00:00:00`) < today
-})
+// Editing an existing date waits for the database's answer, and a locked or unanswered date
+// cannot be saved. A past date that is not locked may still be changed — "this date only", since
+// a split from the past would rewrite history.
+const needsEditState = computed(() => isOneOffEdit.value || isOccurrenceEdit.value)
+const editIsPast = computed(() => !!editState.value?.isPast)
+const editLocked = computed(() => needsEditState.value && (!editState.value || !editState.value.ok || editState.value.locked))
 
 // --- rule building --------------------------------------------------------
 function nthOfDate(d) { return Math.ceil(d.getDate() / 7) }
@@ -378,7 +417,14 @@ async function persistRoles(eventId, churchId) {
 async function submit(publish) {
   if (saving.value) return
   if (publish ? !canPublish.value : !canSaveDraft.value) return
+  if (editLocked.value) return
   errorMsg.value = ''
+
+  if (!moveConfirmed && needsMoveConfirm()) {
+    pendingPublish = publish
+    moveConfirmOpen.value = true
+    return
+  }
 
   if (isOccurrenceEdit.value) return submitOccurrence()
 
@@ -419,11 +465,23 @@ async function submit(publish) {
   else router.push(saved?.id ? eventLocation(saved, activeChurchName.value) : { name: 'Events' })
 }
 
+// A move to another calendar day files the date's current attendance as history (#105 rule 5).
+// A time-only change on the same day keeps it, so it needs no warning.
+function needsMoveConfirm() {
+  if (!needsEditState.value || !(editState.value?.currentAttendance > 0)) return false
+  if (isOccurrenceEdit.value && form.value.scope !== 'this') return false
+  return !!form.value.date && form.value.date !== originalDate.value
+}
+
+function confirmMove() {
+  moveConfirmOpen.value = false
+  moveConfirmed = true
+  submit(pendingPublish).finally(() => { moveConfirmed = false })
+}
+
 async function submitOccurrence() {
-  if (isPastOccurrence.value) {
-    errorMsg.value = 'That date has already happened, so it can’t be changed.'
-    return
-  }
+  // A past date can only ever be changed on its own.
+  if (editIsPast.value) form.value.scope = 'this'
   if (form.value.scope === 'after') {
     // Splitting the rule from this date. Warn first if a later date was specially adjusted.
     futureExceptionCount.value = await countFutureExceptions({ seriesId: seriesId.value, fromDate: occDate.value })
@@ -482,7 +540,7 @@ function toTimeInput(iso) {
       {{ heading }}
     </h1>
     <p class="cmp__sub">
-      {{ isOccurrenceEdit ? 'This affects one date of a repeating event — choose how far the change reaches below.' : 'Saved as a draft until you publish it. Members see nothing before then.' }}
+      {{ isOccurrenceEdit ? (editIsPast ? 'This affects one date of a repeating event.' : 'This affects one date of a repeating event — choose how far the change reaches below.') : 'Saved as a draft until you publish it. Members see nothing before then.' }}
     </p>
 
     <div
@@ -757,15 +815,21 @@ function toTimeInput(iso) {
           </div>
 
           <Alert
-            v-if="isPastOccurrence"
+            v-if="editState?.ok && editState.locked"
             tone="warning"
           >
-            This date has already happened. Past dates are kept as they were and can’t be changed.
+            This date has already happened and has 11 or more attendance records, so it can’t be changed.
+          </Alert>
+          <Alert
+            v-else-if="editState?.ok && editIsPast && isOccurrenceEdit"
+            tone="info"
+          >
+            This date has already happened. You can still change this date on its own — later dates aren’t affected.
           </Alert>
 
-          <!-- Occurrence-edit scope (frame 7d), the owner's two-option model. -->
+          <!-- Occurrence-edit scope (frame 7d), the owner's two-option model. Past dates: this one only. -->
           <div
-            v-if="isOccurrenceEdit && !isPastOccurrence"
+            v-if="isOccurrenceEdit && !editIsPast"
             class="cmp__scope"
           >
             <span class="cmp__label">This change is for…</span>
@@ -973,7 +1037,7 @@ function toTimeInput(iso) {
           <Button
             v-if="!isOccurrenceEdit"
             variant="secondary"
-            :disabled="!canSaveDraft"
+            :disabled="!canSaveDraft || editLocked"
             :loading="saving"
             @click="submit(false)"
           >
@@ -981,7 +1045,7 @@ function toTimeInput(iso) {
           </Button>
           <Button
             variant="primary"
-            :disabled="!canPublish || isPastOccurrence"
+            :disabled="!canPublish || editLocked"
             :loading="saving"
             @click="submit(true)"
           >
@@ -990,6 +1054,39 @@ function toTimeInput(iso) {
         </div>
       </div>
     </div>
+
+    <!-- Moving a date with attendance to another day (#105 rule 5). -->
+    <Modal
+      v-model:open="moveConfirmOpen"
+      title="Move this date to another day?"
+      description="Attendance already taken stays with the old date."
+      icon="alert"
+      icon-tone="warning"
+      layout="stack"
+      :close-on-outside-click="false"
+    >
+      <p class="cmp__dialog-text">
+        This date has <strong>{{ editState?.currentAttendance }}</strong>
+        attendance record{{ editState?.currentAttendance === 1 ? '' : 's' }}.
+        {{ editState?.currentAttendance === 1 ? 'It' : 'They' }}’ll be kept as history for the old date,
+        and attendance will need to be taken again for the new date.
+      </p>
+      <template #footer>
+        <Button
+          variant="secondary"
+          @click="moveConfirmOpen = false"
+        >
+          Keep the date
+        </Button>
+        <Button
+          variant="primary"
+          :loading="saving"
+          @click="confirmMove"
+        >
+          Move it
+        </Button>
+      </template>
+    </Modal>
 
     <!-- "Specially adjusted date" confirm (the owner's follow-up alert). -->
     <Modal

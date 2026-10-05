@@ -333,3 +333,20 @@ export async function deleteSeries({ seriesId } = {}) {
     message: '',
   }
 }
+
+/**
+ * The saved row for one date of a series, if that date has one (an edited, cancelled, or
+ * attended date). `event` is null when the date is still only worked out from the rule; a failed
+ * read is `ok: false`, never mistaken for "no saved row". Returns { ok, event }.
+ */
+export async function getOccurrenceRow({ seriesId, occurrenceDate } = {}) {
+  if (!seriesId || !occurrenceDate) return { ok: false, event: null }
+  const { data, error } = await supabase
+    .from('events')
+    .select(EVENT_COLUMNS)
+    .eq('series_id', seriesId)
+    .eq('occurrence_date', occurrenceDate)
+    .maybeSingle()
+  if (error) return { ok: false, event: null }
+  return { ok: true, event: data ?? null }
+}
