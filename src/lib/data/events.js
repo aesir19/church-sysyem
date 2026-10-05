@@ -30,6 +30,7 @@ import { ymd } from '../recurrence'
 
 const MESSAGES = {
   loadFailed: 'Could not load the calendar. Please try again.',
+  managedLoadFailed: 'Could not load the events. Please try again.',
   eventFailed: 'Could not load this event. Please try again.',
   createFailed: 'That event could not be created.',
   updateFailed: 'That event could not be saved.',
@@ -92,7 +93,7 @@ export async function listEvents({ churchId, from, to }) {
  * A caller who cannot see drafts simply gets none, which the view reads as an empty tab.
  */
 export async function listManagedEvents({ churchId, scope = 'upcoming' }) {
-  if (!churchId) return { ok: false, events: [], message: MESSAGES.loadFailed }
+  if (!churchId) return { ok: false, events: [], message: MESSAGES.managedLoadFailed }
   const nowIso = new Date().toISOString()
   let q = supabase.from('events').select(EVENT_COLUMNS).eq('church_id', churchId)
 
@@ -105,7 +106,7 @@ export async function listManagedEvents({ churchId, scope = 'upcoming' }) {
   }
 
   const { data, error } = await q
-  if (error) return { ok: false, events: [], message: MESSAGES.loadFailed }
+  if (error) return { ok: false, events: [], message: MESSAGES.managedLoadFailed }
   return { ok: true, events: data ?? [], message: '' }
 }
 
@@ -186,19 +187,19 @@ export async function getEvent(id) {
  * The finance records already linked to an event (the detail's "what this touches"
  * cross-links). Stage 1 shows the links; the write flows are Stage 3 (#87). Contributor
  * identity is never selected here — only the aggregate columns the event may display, and
- * only for callers RLS already lets read finance. A caller who cannot read a table gets an
- * empty array for it, which the view renders as "nothing linked yet" rather than an error.
+ * only for callers RLS already lets read finance. Read failures stay distinct from an empty
+ * result so the detail page cannot present an outage as "nothing linked yet".
  */
 export async function getEventLinks(eventId) {
-  if (!eventId) return { expenses: [], collections: [] }
+  if (!eventId) return { ok: false, links: { expenses: [], collections: [] }, message: MESSAGES.eventFailed }
   const [ex, co] = await Promise.all([
     supabase.from('expenses').select('id, description, amount, spent_on').eq('event_id', eventId),
     supabase.from('collections').select('id, amount, collectedOn').eq('event_id', eventId),
   ])
-  return {
-    expenses: ex.error ? [] : (ex.data ?? []),
-    collections: co.error ? [] : (co.data ?? []),
+  if (ex.error || co.error) {
+    return { ok: false, links: { expenses: [], collections: [] }, message: MESSAGES.eventFailed }
   }
+  return { ok: true, links: { expenses: ex.data ?? [], collections: co.data ?? [] }, message: '' }
 }
 
 /**

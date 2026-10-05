@@ -3,6 +3,8 @@ import { ref, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import AppSidebar from '../components/AppSidebar.vue'
 import AppTabBar from '../components/AppTabBar.vue'
+import Alert from '../components/ui/Alert.vue'
+import Button from '../components/ui/Button.vue'
 import { useActiveChurch } from '../composables/useActiveChurch'
 import { useMediaQuery } from '../composables/useMediaQuery'
 
@@ -28,7 +30,7 @@ const route = useRoute()
 const isMobile = useMediaQuery('(max-width: 900px)')
 const drawerOpen = ref(false)
 
-const { ensureLoaded } = useActiveChurch()
+const { ensureLoaded, loadError, loading: churchLoading } = useActiveChurch()
 
 onMounted(() => { ensureLoaded() })
 
@@ -77,7 +79,25 @@ watch([drawerOpen, isMobile], ([open, mobile]) => {
         class="shell__content"
         :class="{ 'shell__content--framed': route.meta.framed }"
       >
-        <RouterView />
+        <div
+          v-if="loadError"
+          class="shell__load-error"
+        >
+          <Alert tone="danger">
+            {{ loadError }}
+            <template #action>
+              <Button
+                size="sm"
+                variant="secondary"
+                :loading="churchLoading"
+                @click="ensureLoaded(true)"
+              >
+                Retry
+              </Button>
+            </template>
+          </Alert>
+        </div>
+        <RouterView v-else />
       </main>
 
       <AppTabBar
@@ -140,6 +160,8 @@ watch([drawerOpen, isMobile], ([open, mobile]) => {
   overflow: hidden;
   display: flex;
 }
+
+.shell__content--framed .shell__load-error { padding: var(--page-pad); }
 
 @media (max-width: 900px) {
   .shell__content { padding: var(--sp-16); }

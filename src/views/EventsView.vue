@@ -34,22 +34,32 @@ const loading = ref(true)
 const errorMsg = ref('')
 const events = ref([])
 const series = ref([])
+let loadGeneration = 0
 
 const statusTone = { draft: 'warning', published: 'success', cancelled: 'magenta' }
 const statusLabel = { draft: 'Draft', published: 'Published', cancelled: 'Cancelled' }
 
 async function load() {
+  const generation = ++loadGeneration
   loading.value = true
   errorMsg.value = ''
+  // The label changes immediately, so rows from the previous tab/church must disappear too.
+  events.value = []
+  series.value = []
   await ensureLoaded()
-  if (!activeChurchId.value) { loading.value = false; return }
-  if (tab.value === 'series') {
-    const res = await listSeries({ churchId: activeChurchId.value })
-    if (!res.ok) { errorMsg.value = res.message; series.value = [] } else { series.value = res.series }
-  } else {
-    const res = await listManagedEvents({ churchId: activeChurchId.value, scope: tab.value })
-    if (!res.ok) { errorMsg.value = res.message; events.value = [] } else { events.value = res.events }
+  const churchId = activeChurchId.value
+  const scope = tab.value
+  if (!churchId) {
+    if (generation === loadGeneration) loading.value = false
+    return
   }
+  const res = scope === 'series'
+    ? await listSeries({ churchId })
+    : await listManagedEvents({ churchId, scope })
+  if (generation !== loadGeneration || churchId !== activeChurchId.value || scope !== tab.value) return
+  if (!res.ok) errorMsg.value = res.message
+  else if (scope === 'series') series.value = res.series
+  else events.value = res.events
   loading.value = false
 }
 
@@ -140,6 +150,15 @@ function fmtTime(iso) {
       tone="danger"
     >
       {{ errorMsg }}
+      <template #action>
+        <Button
+          size="sm"
+          variant="secondary"
+          @click="load"
+        >
+          Retry
+        </Button>
+      </template>
     </Alert>
 
     <div

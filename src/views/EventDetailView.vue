@@ -39,6 +39,7 @@ const { showToast } = useToast()
 
 const loading = ref(true)
 const errorMsg = ref('')
+const retryableError = ref(false)
 const event = ref(null)
 const links = ref({ expenses: [], collections: [] })
 // The roster panel reports its filled/needed totals up, so the draft banner can say how many
@@ -128,6 +129,7 @@ const menuItems = computed(() => {
 async function load() {
   loading.value = true
   errorMsg.value = ''
+  retryableError.value = false
   event.value = null
   series.value = null
   occurrenceDate.value = null
@@ -142,14 +144,30 @@ async function load() {
 
   // 1) A real row: a one-off event, a dateless draft, or a materialised series exception.
   const real = await findEventByDateTitle({ churchId: wantedChurch.id, date, titleSlug })
+  if (!real.ok) { errorMsg.value = real.message; retryableError.value = true; loading.value = false; return }
   if (real.event) {
     event.value = real.event
     if (real.event.series_id) {
       occurrenceDate.value = real.event.occurrence_date
       const sres = await getSeries(real.event.series_id)
-      if (sres.series) series.value = sres.series
+      if (!sres.ok || !sres.series) {
+        event.value = null
+        errorMsg.value = sres.message || 'Could not load this event. Please try again.'
+        retryableError.value = true
+        loading.value = false
+        return
+      }
+      series.value = sres.series
     }
-    links.value = await getEventLinks(real.event.id)
+    const linkRes = await getEventLinks(real.event.id)
+    if (!linkRes.ok) {
+      event.value = null
+      errorMsg.value = linkRes.message
+      retryableError.value = true
+      loading.value = false
+      return
+    }
+    links.value = linkRes.links
     loading.value = false
     return
   }
@@ -158,11 +176,12 @@ async function load() {
   // the church and confirming the rule actually lands on this date.
   if (date) {
     const sres = await listSeries({ churchId: wantedChurch.id })
+    if (!sres.ok) { errorMsg.value = sres.message; retryableError.value = true; loading.value = false; return }
     const s = (sres.series ?? []).find((x) => slugify(x.title) === titleSlug)
     if (s) {
       const dayFrom = new Date(`${date}T00:00:00`)
       const dayTo = new Date(dayFrom); dayTo.setDate(dayTo.getDate() + 1)
-      if (expandSeries(s, dayFrom, dayTo).some((d) => ymd(d) === date)) {
+      if (expandSeries(s, dayFrom, dayTo).some((occurrence) => ymd(occurrence.date) === date)) {
         return loadVirtualOccurrence({ series: s, date })
       }
     }
@@ -294,6 +313,18 @@ const history = computed(() => {
       tone="danger"
     >
       {{ errorMsg }}
+      <template
+        v-if="retryableError"
+        #action
+      >
+        <Button
+          size="sm"
+          variant="secondary"
+          @click="load"
+        >
+          Retry
+        </Button>
+      </template>
     </Alert>
 
     <template v-else>

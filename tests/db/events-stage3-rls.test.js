@@ -49,18 +49,20 @@ async function world (tx) {
   const churchLeader = await makePrincipal(tx, { role: 'church_leader', churchId: churchA })
   const plainMember = await makePrincipal(tx, { role: 'member', churchId: churchA })
 
-  const financeTarget = await makeMember(tx, churchA, 'fin')
-  await addToGroup(tx, financeMinistry, financeTarget)
+  const financeTeam = await makePrincipal(tx, { role: 'member', churchId: churchA })
+  await addToGroup(tx, financeMinistry, financeTeam.memberId)
+  const financeTarget = financeTeam.memberId
   const plainTarget = await makeMember(tx, churchA, 'plain')
   const memberB = await makeMember(tx, churchB, 'b')
 
   const eventId = await makeEvent(tx, churchA)
+  const eventB = await makeEvent(tx, churchB)
   const financeRole = await makeRole(tx, churchA, eventId, { requiresFinance: true, label: 'zz-count' })
   const openRole = await makeRole(tx, churchA, eventId, { requiresFinance: false, label: 'zz-usher' })
 
   return {
     churchA, churchB, eventsTeam, churchLeader, plainMember,
-    financeTarget, plainTarget, memberB, eventId, financeRole, openRole,
+    financeTeam, financeTarget, plainTarget, memberB, eventId, eventB, financeRole, openRole,
   }
 }
 
@@ -119,6 +121,19 @@ describe.skipIf(!hasDatabase())('Stage 3 — eligibility (a finance role is fill
 })
 
 describe.skipIf(!hasDatabase())('Stage 3 — the expense/collection boundary', () => {
+  it('keeps ordinary Finance expense inserts working', async () => {
+    await withRollback(async (tx) => {
+      const w = await world(tx)
+      await asPrincipal(tx, w.financeTeam.accountId)
+      const rows = await tx.$queryRawUnsafe(
+        `INSERT INTO public.expenses (from_church, description, amount, spent_on)
+         VALUES ($1::uuid, 'zz-general', '500', current_date) RETURNING id`,
+        w.churchA
+      )
+      expect(rows).toHaveLength(1)
+    })
+  })
+
   it('lets Events Team attach an expense to their own event', async () => {
     await withRollback(async (tx) => {
       const w = await world(tx)
@@ -142,6 +157,49 @@ describe.skipIf(!hasDatabase())('Stage 3 — the expense/collection boundary', (
         w.churchA
       ))
       expect(isAuthorizationFailure(msg)).toBe(true)
+    })
+  })
+
+  it('refuses an Events Team expense linked to an event in another church', async () => {
+    await withRollback(async (tx) => {
+      const w = await world(tx)
+      await asPrincipal(tx, w.eventsTeam.accountId)
+      const msg = await refusalMessage(tx, () => tx.$executeRawUnsafe(
+        `INSERT INTO public.expenses (event_id, from_church, description, amount, spent_on)
+         VALUES ($1::uuid, $2::uuid, 'zz-cross', '500', current_date)`,
+        w.eventB, w.churchA
+      ))
+      expect(isAuthorizationFailure(msg)).toBe(true)
+    })
+  })
+
+  it('refuses direct reversals and forged correction links from Finance and Events Team', async () => {
+    await withRollback(async (tx) => {
+      const w = await world(tx)
+      const [original] = await tx.$queryRawUnsafe(
+        `INSERT INTO public.expenses (event_id, from_church, description, amount, spent_on)
+         VALUES ($1::uuid, $2::uuid, 'zz-original', '500', current_date) RETURNING id`,
+        w.eventId, w.churchA
+      )
+
+      for (const accountId of [w.financeTeam.accountId, w.eventsTeam.accountId]) {
+        await asPrincipal(tx, accountId)
+        const reversal = await refusalMessage(tx, () => tx.$executeRawUnsafe(
+          `INSERT INTO public.expenses
+             (event_id, from_church, description, amount, spent_on, kind, corrects_id, reason)
+           VALUES ($1::uuid, $2::uuid, 'zz-reversal', '500', current_date, 'reversal', $3, 'duplicate')`,
+          w.eventId, w.churchA, original.id
+        ))
+        expect(isAuthorizationFailure(reversal)).toBe(true)
+
+        const forgedLink = await refusalMessage(tx, () => tx.$executeRawUnsafe(
+          `INSERT INTO public.expenses
+             (event_id, from_church, description, amount, spent_on, kind, corrects_id)
+           VALUES ($1::uuid, $2::uuid, 'zz-forged', '500', current_date, 'entry', $3)`,
+          w.eventId, w.churchA, original.id
+        ))
+        expect(isAuthorizationFailure(forgedLink)).toBe(true)
+      }
     })
   })
 
