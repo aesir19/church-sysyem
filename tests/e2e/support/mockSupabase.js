@@ -15,6 +15,7 @@ import { buildSession } from './session.js'
 //   user           the signed-in user GoTrue's /user endpoint returns
 //   rpc[name]      body for POST /rest/v1/rpc/<name>   — a value, or (ctx) => value
 //   tables[name]   rows for GET  /rest/v1/<name>       — an array, or (ctx) => array
+//   readErrors[name] error for GET /rest/v1/<name>     — an error, or (ctx) => error
 //   onWrite(ctx)   body for a POST/PATCH/DELETE on a table (see defaultWrite)
 //
 // Anything not configured returns an empty, successful result: the safe
@@ -56,7 +57,7 @@ function defaultWrite({ method, body }) {
 }
 
 export async function installSupabaseMock(page, config = {}) {
-  const { user = null, rpc = {}, tables = {}, onWrite } = config
+  const { user = null, rpc = {}, tables = {}, readErrors = {}, onWrite } = config
 
   // The router gates every /dashboard route on isAccountLinked() — a
   // `user_accounts` lookup by the signed-in user's id (src/router/index.js).
@@ -93,7 +94,7 @@ export async function installSupabaseMock(page, config = {}) {
     const rpcMatch = path.match(REST_RPC)
     if (rpcMatch) {
       const name = rpcMatch[1]
-      const value = resolve(rpc[name], { request, url, body: safeJson(request) })
+      const value = await resolve(rpc[name], { request, url, body: safeJson(request) })
       return route.fulfill({ json: value ?? null })
     }
 
@@ -102,7 +103,7 @@ export async function installSupabaseMock(page, config = {}) {
     // head:true count request — supabase-js reads the total from Content-Range,
     // not from a body. The `*/N` form is valid even when N is 0.
     if (method === 'HEAD') {
-      const rows = resolve(resolvedTables[table], { request, url }) || []
+      const rows = await resolve(resolvedTables[table], { request, url }) || []
       return route.fulfill({
         status: 200,
         headers: { 'content-range': `*/${rows.length}` },
@@ -111,7 +112,20 @@ export async function installSupabaseMock(page, config = {}) {
     }
 
     if (method === 'GET') {
-      const rows = resolve(resolvedTables[table], { request, url }) || []
+      const readError = await resolve(readErrors[table], { request, url })
+      if (readError) {
+        const message = typeof readError === 'string' ? readError : readError.message
+        return route.fulfill({
+          status: 500,
+          json: {
+            code: 'E2E_READ_ERROR',
+            details: null,
+            hint: null,
+            message: message || 'Test database read failed',
+          },
+        })
+      }
+      const rows = await resolve(resolvedTables[table], { request, url }) || []
       if (wantsSingleObject(request)) {
         return route.fulfill({ json: rows[0] ?? null })
       }

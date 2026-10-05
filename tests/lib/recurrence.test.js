@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { expandSeries, describeRule, nextOccurrence, mergeSeriesOccurrences } from '../../src/lib/recurrence'
+import {
+  expandSeries, describeRule, nextOccurrence, mergeSeriesOccurrences,
+  mapPlannedDates, crossedDate, fallsOn, remainingCount,
+} from '../../src/lib/recurrence'
 
 // A rule mirrors the event_series columns (migration 0034). Dates are worked out in local
 // time and anchored at the rule's time-of-day; the window [from, to) is half-open, the same
@@ -329,5 +332,99 @@ describe('mergeSeriesOccurrences — worked-out dates + saved exceptions', () =>
     expect(out.map((o) => o.starts_at.slice(0, 10))).toEqual([
       '2026-08-02', '2026-08-09', '2026-08-16', '2026-08-23',
     ])
+  })
+})
+
+describe('mapPlannedDates — each other planned date to the new schedule\'s date in its week', () => {
+  const saturdays = { cadence: 'weekly', intervalN: 1, weekday: 6, timeStart: '09:00', startsOn: '2026-01-01' }
+
+  it('moves a Sunday to the Saturday of the same Sunday-first week', () => {
+    expect(mapPlannedDates({ rule: saturdays, startsOn: '2026-09-06', planned: [{ id: 'e1', occurrence_date: '2026-09-13' }] }))
+      .toEqual([{ event_id: 'e1', to_date: '2026-09-19' }])
+  })
+
+  it('uses the week the date actually sits in, not its original slot', () => {
+    // Slot Sun 13 Sep, actually moved to Mon 21 Sep: it goes to that week's Saturday, 26 Sep.
+    const planned = [{ id: 'e1', occurrence_date: '2026-09-13', actual_date: '2026-09-21' }]
+    expect(mapPlannedDates({ rule: saturdays, startsOn: '2026-09-06', planned }))
+      .toEqual([{ event_id: 'e1', to_date: '2026-09-26' }])
+  })
+
+  it('keeps a date where it is when the new schedule has no date that week', () => {
+    const monthly = { cadence: 'monthly', intervalN: 1, anchor: 'date', dayOfMonth: 1, timeStart: '09:00', startsOn: '2026-01-01' }
+    expect(mapPlannedDates({ rule: monthly, startsOn: '2026-09-06', planned: [{ id: 'e1', occurrence_date: '2026-09-13' }] }))
+      .toEqual([{ event_id: 'e1', to_date: null }])
+  })
+
+  it('never moves a date to before the new schedule starts', () => {
+    // New schedule: Mondays from Tue 8 Sep. That week's Monday (7 Sep) is before it starts.
+    const mondays = { ...saturdays, weekday: 1 }
+    expect(mapPlannedDates({ rule: mondays, startsOn: '2026-09-08', planned: [{ id: 'e1', occurrence_date: '2026-09-08' }] }))
+      .toEqual([{ event_id: 'e1', to_date: null }])
+  })
+
+  it('skips a new date already taken by the date being changed', () => {
+    expect(mapPlannedDates({
+      rule: saturdays, startsOn: '2026-09-06', planned: [{ id: 'e1', occurrence_date: '2026-09-13' }], taken: ['2026-09-19'],
+    })).toEqual([{ event_id: 'e1', to_date: null }])
+  })
+
+  it('gives two planned dates in one week one new date, and keeps the other where it is', () => {
+    const planned = [{ id: 'late', occurrence_date: '2026-09-17' }, { id: 'early', occurrence_date: '2026-09-13' }]
+    expect(mapPlannedDates({ rule: saturdays, startsOn: '2026-09-06', planned })).toEqual([
+      { event_id: 'early', to_date: '2026-09-19' },
+      { event_id: 'late', to_date: null },
+    ])
+  })
+})
+
+describe('crossedDate — the guard against dates passing each other', () => {
+  const sundays = { cadence: 'weekly', intervalN: 1, weekday: 0, timeStart: '08:00', startsOn: '2026-01-04' }
+
+  it('moving earlier: the nearest old date passed, the new day included', () => {
+    expect(crossedDate({ series: sundays, occurrenceDate: '2026-10-11', newDate: '2026-09-26' })).toBe('2026-10-04')
+    expect(crossedDate({ series: sundays, occurrenceDate: '2026-10-11', newDate: '2026-10-04' })).toBe('2026-10-04')
+  })
+
+  it('moving later: the next old date passed, the new day included', () => {
+    expect(crossedDate({ series: sundays, occurrenceDate: '2026-10-11', newDate: '2026-10-26' })).toBe('2026-10-18')
+    expect(crossedDate({ series: sundays, occurrenceDate: '2026-10-11', newDate: '2026-10-18' })).toBe('2026-10-18')
+  })
+
+  it('is null within the gap either side, or when the day is unchanged', () => {
+    expect(crossedDate({ series: sundays, occurrenceDate: '2026-10-11', newDate: '2026-10-05' })).toBeNull()
+    expect(crossedDate({ series: sundays, occurrenceDate: '2026-10-11', newDate: '2026-10-17' })).toBeNull()
+    expect(crossedDate({ series: sundays, occurrenceDate: '2026-10-11', newDate: '2026-10-11' })).toBeNull()
+  })
+})
+
+describe('fallsOn — whether a new schedule has a date on its own start day', () => {
+  it('is true for a weekly schedule on its weekday', () => {
+    expect(fallsOn({ rule: { cadence: 'weekly', intervalN: 1, weekday: 2, timeStart: '09:00' }, date: '2026-10-13' })).toBe(true)
+  })
+
+  it('is false when the pattern skips that day — a "last Saturday" schedule started on a Friday', () => {
+    const lastSaturday = { cadence: 'monthly', intervalN: 1, anchor: 'weekday', weekday: 6, weekOfMonth: -1, timeStart: '09:00' }
+    expect(fallsOn({ rule: lastSaturday, date: '2026-10-30' })).toBe(false)
+    expect(fallsOn({ rule: lastSaturday, date: '2026-10-31' })).toBe(true)
+  })
+})
+
+describe('remainingCount — splitting a "repeat N times" schedule never adds dates', () => {
+  const tenSundays = { cadence: 'weekly', intervalN: 1, weekday: 0, timeStart: '08:00', startsOn: '2026-01-04', countN: 10 }
+
+  it('leaves only the dates not yet used before the split', () => {
+    // Dates 1–5 fall before Sun 8 Feb (the 6th), so 5 are left.
+    expect(remainingCount({ series: tenSundays, countN: 10, splitOn: '2026-02-08' })).toBe(5)
+  })
+
+  it('keeps a count typed for the new schedule as it is', () => {
+    const openEnded = { ...tenSundays, countN: null }
+    expect(remainingCount({ series: openEnded, countN: 5, splitOn: '2026-06-07' })).toBe(5)
+    expect(remainingCount({ series: tenSundays, countN: 4, splitOn: '2026-02-08' })).toBe(4)
+  })
+
+  it('is null for a schedule with no count', () => {
+    expect(remainingCount({ series: tenSundays, countN: null, splitOn: '2026-02-08' })).toBeNull()
   })
 })

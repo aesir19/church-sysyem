@@ -41,7 +41,11 @@ async function loadPermissions(force = false) {
   if (!pending) {
     pending = Promise.resolve()
       .then(() => supabase.rpc('get_my_permissions').maybeSingle())
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (error) {
+          pending = null
+          return null
+        }
         permissions.value = data || null
         pending = null
         return permissions.value
