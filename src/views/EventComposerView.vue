@@ -27,10 +27,11 @@ import EventRolesField from '../components/events/EventRolesField.vue'
 import { EVENT_KINDS, createEvent, updateEvent, getEvent, eventLocation, listServiceOccurrences, getEditState } from '../lib/data/events'
 import {
   createSeries, updateSeries, getSeries, editOccurrence, splitSeries,
-  ruleColumns, listPlannedDates, mapPlannedDates, firstNewDate, previousDateBefore,
-  listCalendarOccurrences, getOccurrenceRow,
+  ruleColumns, listPlannedDates, listCalendarOccurrences, getOccurrenceRow,
 } from '../lib/data/eventSeries'
-import { describeRule, ymd } from '../lib/recurrence'
+import {
+  describeRule, ymd, parseYmd, mapPlannedDates, previousDateBefore, remainingCount,
+} from '../lib/recurrence'
 import { listRooms, findRoomClashes } from '../lib/data/eventRooms'
 import { listRoster, addRole, updateRole, deleteRole } from '../lib/data/eventRoles'
 import { ensureEventService } from '../lib/data/eventCloseout'
@@ -87,6 +88,7 @@ const plannedDates = ref([])
 const movePlanned = ref(false)
 const movePlannedConfirmOpen = ref(false)
 // One key per split, kept until it succeeds, so a retry after a lost reply cannot split twice.
+// Any change to the form drops it: a different change is a different split, never "already done".
 let splitKey = null
 
 // Changing ONE date (#105). The database, not the device clock, says whether the date has already
@@ -321,6 +323,8 @@ const seriesDeleted = ref(false)
 const editLocked = computed(() => seriesDeleted.value
   || (needsEditState.value && (!editState.value || !editState.value.ok || editState.value.locked)))
 
+watch([form, movePlanned], () => { splitKey = null }, { deep: true })
+
 // The planned later dates are looked up when "…and the ones after it" is chosen. A failed look-up
 // just hides the option: leaving planned dates alone is the safe default.
 watch(() => form.value.scope, async (scope) => {
@@ -533,23 +537,24 @@ async function submitOccurrence() {
 
 async function doSplit() {
   movePlannedConfirmOpen.value = false
-  // Moved earlier, the new schedule starts on the new date, so that week keeps its date.
-  const fromDate = form.value.date && form.value.date < occDate.value ? form.value.date : occDate.value
+  // The date being changed lands on exactly the day picked, and the new schedule starts there
+  // (the database moves it). The old schedule ends before the earlier of the two days.
+  const startsOn = form.value.date || occDate.value
+  const splitOn = startsOn < occDate.value ? startsOn : occDate.value
   const rule = buildRule()
-  const moves = []
-  // The date being changed lands on the new schedule's first date.
-  const selectedTo = occurrenceRow.value ? firstNewDate({ rule, fromDate }) : null
-  if (selectedTo) moves.push({ event_id: occurrenceRow.value.id, to_date: selectedTo, selected: true })
-  if (movePlanned.value && plannedDates.value.length) {
-    moves.push(...mapPlannedDates({ rule, fromDate, planned: plannedDates.value, taken: selectedTo ? [selectedTo] : [] }))
-  }
+  const moves = movePlanned.value && plannedDates.value.length
+    ? mapPlannedDates({ rule, startsOn, planned: plannedDates.value, taken: [startsOn] })
+    : null
+  // "Repeat N times": the new schedule gets only the dates not used yet.
+  const countN = remainingCount({ series: loadedSeries.value, countN: rule.countN, splitOn })
   splitKey = splitKey || crypto.randomUUID()
   saving.value = true
   const res = await splitSeries({
     oldSeriesId: seriesId.value,
-    fromDate,
-    newSeriesPayload: { ...seriesPayload(), status: wasPublished.value ? 'published' : 'draft' },
-    moves: moves.length ? moves : null,
+    occurrenceDate: occDate.value,
+    startsOn,
+    newSeriesPayload: { ...seriesPayload(), count_n: countN, status: wasPublished.value ? 'published' : 'draft' },
+    moves,
     key: splitKey,
   })
   saving.value = false
@@ -574,8 +579,7 @@ const heading = computed(() => {
 
 // '2026-10-04' → '4 October', for messages.
 function longDate(date) {
-  const [y, m, d] = date.split('-').map(Number)
-  return new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })
+  return parseYmd(date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' })
 }
 
 // Under the heading: the draft promise only for something not yet published.

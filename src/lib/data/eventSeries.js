@@ -18,9 +18,9 @@
 // as success. RLS on event_series is the same two-audience story as events (0034).
 
 import { supabase } from '../supabase'
-import { write } from './write'
+import { write, writeRpc } from './write'
 import { listEvents, EVENT_COLUMNS } from './events'
-import { mergeSeriesOccurrences, nextOccurrence, describeRule, expandSeries, ymd, addDays } from '../recurrence'
+import { mergeSeriesOccurrences, nextOccurrence, describeRule, ymd } from '../recurrence'
 
 const MESSAGES = {
   loadFailed: 'Could not load the calendar. Please try again.',
@@ -187,46 +187,16 @@ export async function getSeries(id) {
 
 /**
  * The saved later dates a split could move: this series' rows from `fromDate` on that have not
- * happened yet — hand-edited, attended, planned or cancelled alike. Drives the optional "Also move
+ * happened yet — hand-edited, attended, planned or cancelled alike. The database decides, by each
+ * date's actual start and its own clock (never this device's). Drives the optional "Also move
  * already-planned future dates" choice; a failed read is `ok: false`, never "none planned".
- * Returns { ok, dates: [{ id, occurrence_date, status, title }] }.
+ * Returns { ok, dates: [{ id, occurrence_date, actual_date, status }] }.
  */
 export async function listPlannedDates({ seriesId, fromDate } = {}) {
   if (!seriesId || !fromDate) return { ok: false, dates: [] }
-  const { data, error } = await supabase
-    .from('events')
-    .select('id, occurrence_date, status, title, starts_at')
-    .eq('series_id', seriesId)
-    .gte('occurrence_date', fromDate)
-    .or(`starts_at.is.null,starts_at.gt.${new Date().toISOString()}`)
-    .order('occurrence_date', { ascending: true })
-  if (error) return { ok: false, dates: [] }
-  return { ok: true, dates: data ?? [] }
-}
-
-/**
- * Where each planned date goes when the owner chooses to move them with a split (#105): to the
- * new schedule's date in the same Sunday-first week, never before the split date. When that week
- * has no new date — or its date was already taken (`taken`, e.g. by the date being changed, or by
- * an earlier planned date) — `to_date` is null and the date stays where it is, as a standalone
- * event. Pure; the database re-checks the result. `rule` is the new schedule (engine shape).
- * Returns [{ event_id, to_date }] in date order.
- */
-export function mapPlannedDates({ rule, fromDate, planned, taken: alreadyTaken = [] }) {
-  const newRule = { ...rule, startsOn: fromDate }
-  const taken = new Set(alreadyTaken)
-  return [...planned]
-    .sort((a, b) => a.occurrence_date.localeCompare(b.occurrence_date))
-    .map((p) => {
-      const [y, m, d] = p.occurrence_date.split('-').map(Number)
-      const day = new Date(y, m - 1, d)
-      const weekStart = addDays(day, -day.getDay())
-      const to = expandSeries(newRule, weekStart, addDays(weekStart, 7))
-        .map((o) => ymd(o.date))
-        .find((date) => date >= fromDate && !taken.has(date)) ?? null
-      if (to) taken.add(to)
-      return { event_id: p.id, to_date: to }
-    })
+  const { data, error } = await supabase.rpc('preview_split_event_series', { p_series: seriesId, p_from: fromDate })
+  if (error || !Array.isArray(data)) return { ok: false, dates: [] }
+  return { ok: true, dates: data }
 }
 
 /** Create a repeating series. `publish` decides the initial status, mirroring createEvent. */
@@ -292,58 +262,43 @@ export function editOccurrence({ series, occurrenceDate, payload }) {
   )
 }
 
-const parseDay = (date) => {
-  const [y, m, d] = date.split('-').map(Number)
-  return new Date(y, m - 1, d)
-}
-
-/** The new schedule's first date on or after `fromDate` (within a year), or null. The date being
- *  changed lands here when a split is saved. */
-export function firstNewDate({ rule, fromDate }) {
-  const from = parseDay(fromDate)
-  const [first] = expandSeries({ ...rule, startsOn: fromDate }, from, addDays(from, 366))
-  return first ? ymd(first.date) : null
-}
-
-/** A date of the OLD schedule from `newDate` up to (not including) `occurrenceDate`, or null.
- *  Moving the date being changed back past one would make the dates swap order, so a split
- *  refuses it (#105). */
-export function previousDateBefore({ series, newDate, occurrenceDate }) {
-  if (!newDate || newDate >= occurrenceDate) return null
-  const [hit] = expandSeries(series, parseDay(newDate), parseDay(occurrenceDate))
-  return hit ? ymd(hit.date) : null
-}
+// The split's own refusals, written for people. Only these are shown as they are; any other
+// database text stays behind the generic message (docs/SECURITY.md §3.5).
+const SPLIT_REFUSALS = new Set([
+  'This repeating event was deleted and can\'t be changed.',
+  'That date has already happened, so it can only be changed on its own.',
+  'The new date can\'t be on or before an earlier date of this repeating event. Change this date on its own instead.',
+  'The planned dates have changed since this page was opened. Please reload and try again.',
+  'Two planned dates cannot move to the same day.',
+  'A planned date can only move within the same week.',
+  'This change was already saved. Please reload the page to make another.',
+])
 
 /**
  * "This date and the ones after it" (stories 10, 15; #103 bug 2, #105) — ONE database call, so the
- * split happens completely or not at all. The old schedule ends the day before `fromDate`; a new
- * one with `newSeriesPayload` starts on it; earlier dates are never touched.
+ * split happens completely or not at all. The date being changed (`occurrenceDate`) moves to
+ * exactly `startsOn`, where the new schedule (`newSeriesPayload`) starts; the old schedule ends
+ * the day before the earlier of the two. Earlier dates are never touched.
  *
- * `moves` lists the saved dates that change: the date being changed (`selected: true`, landing on
- * the new schedule's first date), plus — when the owner ticked the box — the mapPlannedDates
- * result for the other planned dates. Saved dates not listed stay as they are. Null when none. `key` is a one-time id the caller keeps
- * until the split succeeds: repeating the call with it after a lost reply returns the first result
- * (`alreadyDone`) instead of splitting twice. Returns { ok, newSeriesId, moved, standalone,
- * alreadyDone, message }.
+ * `moves` is null to leave the other already-planned dates where they are (the default), or the
+ * mapPlannedDates result to move them too. `key` is a one-time id the caller keeps until the split
+ * succeeds and drops when the form changes: repeating the call with it after a lost reply returns
+ * the first result instead of splitting twice. Returns { ok, newSeriesId, message }.
  */
-export async function splitSeries({ oldSeriesId, fromDate, newSeriesPayload, moves = null, key } = {}) {
-  const failed = (message = MESSAGES.updateFailed) =>
-    ({ ok: false, newSeriesId: null, moved: 0, standalone: 0, alreadyDone: false, message })
-  if (!oldSeriesId || !fromDate || !newSeriesPayload || !key) return failed()
-  const { data, error } = await supabase.rpc('split_event_series', {
-    p_series: oldSeriesId, p_from: fromDate, p_new: newSeriesPayload, p_moves: moves, p_key: key,
-  })
-  // The database's own refusals (P0001) are written for people; anything else stays generic.
-  if (error) return failed(error.code === 'P0001' && error.message ? error.message : MESSAGES.updateFailed)
-  if (!data) return failed()
-  return {
-    ok: true,
-    newSeriesId: data.new_series_id ?? null,
-    moved: data.moved ?? 0,
-    standalone: data.standalone ?? 0,
-    alreadyDone: !!data.already_done,
-    message: '',
-  }
+export async function splitSeries({ oldSeriesId, occurrenceDate, startsOn, newSeriesPayload, moves = null, key } = {}) {
+  const failed = (message = MESSAGES.updateFailed) => ({ ok: false, newSeriesId: null, message })
+  if (!oldSeriesId || !occurrenceDate || !startsOn || !newSeriesPayload || !key) return failed()
+  const res = await writeRpc(
+    supabase.rpc('split_event_series', {
+      p_series: oldSeriesId, p_occurrence: occurrenceDate, p_starts: startsOn,
+      p_new: newSeriesPayload, p_moves: moves, p_key: key,
+    }),
+    { messages: { blocked: MESSAGES.updateFailed, denied: MESSAGES.updateFailed, conflict: MESSAGES.updateFailed, failed: MESSAGES.updateFailed } }
+  )
+  if (!res.ok) return failed(SPLIT_REFUSALS.has(res.cause?.message) ? res.cause.message : res.message)
+  const result = res.rows[0]
+  if (!result?.new_series_id) return failed()
+  return { ok: true, newSeriesId: result.new_series_id, message: '' }
 }
 
 /**
@@ -368,8 +323,12 @@ export async function previewDeleteSeries({ seriesId } = {}) {
 export async function deleteSeries({ seriesId } = {}) {
   const failed = { ok: false, kept: 0, removed: 0, alreadyDeleted: false, message: MESSAGES.deleteFailed }
   if (!seriesId) return failed
-  const { data, error } = await supabase.rpc('delete_event_series', { p_series: seriesId })
-  if (error || !data) return failed
+  const res = await writeRpc(
+    supabase.rpc('delete_event_series', { p_series: seriesId }),
+    { messages: { blocked: MESSAGES.deleteFailed, denied: MESSAGES.deleteFailed, conflict: MESSAGES.deleteFailed, failed: MESSAGES.deleteFailed } }
+  )
+  const data = res.rows[0]
+  if (!res.ok || !data) return failed
   return {
     ok: true,
     kept: data.kept ?? 0,

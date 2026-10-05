@@ -40,7 +40,7 @@ vi.mock('../../../src/lib/supabase', () => ({
 
 const {
   deleteSeries, previewDeleteSeries, listSeries, splitSeries, skipOccurrence, toSeries,
-  listPlannedDates, mapPlannedDates, firstNewDate, previousDateBefore,
+  listPlannedDates,
 } = await import('../../../src/lib/data/eventSeries')
 
 const seriesRow = {
@@ -128,18 +128,19 @@ describe('toSeries', () => {
 
 describe('splitSeries — "this date and the ones after it", one database call', () => {
   const base = {
-    oldSeriesId: 'ser1', fromDate: '2026-09-06', key: 'key-1',
+    oldSeriesId: 'ser1', occurrenceDate: '2026-09-06', startsOn: '2026-09-08', key: 'key-1',
     newSeriesPayload: { title: 'Sunday Service', kind: 'service', status: 'published',
-      cadence: 'weekly', interval_n: 1, weekday: 6, time_start: '09:00' },
+      cadence: 'weekly', interval_n: 1, weekday: 2, time_start: '09:00' },
   }
 
   it('asks the database to split, with the one-time key, and touches no table itself', async () => {
     state.rpcResult = { data: { already_done: false, new_series_id: 'new-ser', moved: 0, standalone: 0 }, error: null }
     const res = await splitSeries(base)
 
-    expect(res).toMatchObject({ ok: true, newSeriesId: 'new-ser', alreadyDone: false, moved: 0, standalone: 0 })
+    expect(res).toEqual({ ok: true, newSeriesId: 'new-ser', message: '' })
     expect(calls('rpc', 'split_event_series')[0].args).toEqual({
-      p_series: 'ser1', p_from: '2026-09-06', p_new: base.newSeriesPayload, p_moves: null, p_key: 'key-1',
+      p_series: 'ser1', p_occurrence: '2026-09-06', p_starts: '2026-09-08',
+      p_new: base.newSeriesPayload, p_moves: null, p_key: 'key-1',
     })
     // The three separate browser writes were the half-split bug.
     expect(calls('event_series', 'update')).toHaveLength(0)
@@ -149,26 +150,34 @@ describe('splitSeries — "this date and the ones after it", one database call',
   })
 
   it('passes the planned-date moves when the owner chose to move them', async () => {
-    state.rpcResult = { data: { already_done: false, new_series_id: 'new-ser', moved: 1, standalone: 1 }, error: null }
-    const moves = [{ event_id: 'e1', to_date: '2026-09-19' }, { event_id: 'e2', to_date: null }]
-    const res = await splitSeries({ ...base, moves })
+    state.rpcResult = { data: { already_done: false, new_series_id: 'new-ser' }, error: null }
+    const moves = [{ event_id: 'e1', to_date: '2026-09-15' }, { event_id: 'e2', to_date: null }]
+    await splitSeries({ ...base, moves })
     expect(calls('rpc', 'split_event_series')[0].args.p_moves).toEqual(moves)
-    expect(res).toMatchObject({ moved: 1, standalone: 1 })
   })
 
   it('treats a repeat with the same key as success', async () => {
     state.rpcResult = { data: { already_done: true, new_series_id: 'new-ser' }, error: null }
-    expect(await splitSeries(base)).toMatchObject({ ok: true, alreadyDone: true, newSeriesId: 'new-ser' })
+    expect(await splitSeries(base)).toMatchObject({ ok: true, newSeriesId: 'new-ser' })
   })
 
-  it('shows the database\'s own plain-words refusal, and nothing else from a backend error', async () => {
+  it('shows only the split\'s own known refusals; any other database text stays generic', async () => {
     state.rpcResult = { data: null, error: { code: 'P0001', message: 'That date has already happened, so it can only be changed on its own.' } }
     expect((await splitSeries(base)).message).toBe('That date has already happened, so it can only be changed on its own.')
+
+    // Same code, a sentence it does not know — e.g. raised by some trigger: never shown.
+    state.rpcResult = { data: null, error: { code: 'P0001', message: 'SECRET trigger detail' } }
+    expect((await splitSeries(base)).message).toBe('That repeating event could not be saved.')
 
     state.rpcResult = { data: null, error: { code: '42501', message: 'SECRET detail' } }
     const res = await splitSeries(base)
     expect(res.ok).toBe(false)
     expect(res.message).toBe('That repeating event could not be saved.')
+  })
+
+  it('treats an empty answer as a failure, not a success', async () => {
+    state.rpcResult = { data: null, error: null }
+    expect((await splitSeries(base)).ok).toBe(false)
   })
 
   it('refuses without a key, so a retry can never split twice', async () => {
@@ -179,57 +188,18 @@ describe('splitSeries — "this date and the ones after it", one database call',
 })
 
 describe('listPlannedDates — the saved later dates a split could move', () => {
-  it('reads this series from the split date on, upcoming only, cancelled included', async () => {
-    state.results.events = { data: [{ id: 'e1', occurrence_date: '2026-09-13', status: 'cancelled' }], error: null }
+  it('asks the database, which judges them by its own clock and their actual day', async () => {
+    state.rpcResult = { data: [{ id: 'e1', occurrence_date: '2026-09-13', actual_date: '2026-09-14', status: 'cancelled' }], error: null }
     const res = await listPlannedDates({ seriesId: 'ser1', fromDate: '2026-09-06' })
 
-    expect(res).toMatchObject({ ok: true, dates: [{ id: 'e1' }] })
-    expect(calls('events', 'eq').some((c) => c.args[0] === 'series_id' && c.args[1] === 'ser1')).toBe(true)
-    expect(calls('events', 'gte').some((c) => c.args[0] === 'occurrence_date' && c.args[1] === '2026-09-06')).toBe(true)
-    expect(calls('events', 'or')[0].args[0]).toMatch(/^starts_at\.is\.null,starts_at\.gt\./)
-    expect(calls('events', 'neq')).toHaveLength(0)
+    expect(res).toMatchObject({ ok: true, dates: [{ id: 'e1', actual_date: '2026-09-14' }] })
+    expect(calls('rpc', 'preview_split_event_series')[0].args).toEqual({ p_series: 'ser1', p_from: '2026-09-06' })
+    expect(calls('events', 'select')).toHaveLength(0)
   })
 
   it('reports a failed read instead of "none planned"', async () => {
-    state.results.events = { data: null, error: { message: 'boom' } }
+    state.rpcResult = { data: null, error: { message: 'boom' } }
     expect((await listPlannedDates({ seriesId: 'ser1', fromDate: '2026-09-06' })).ok).toBe(false)
-  })
-})
-
-describe('mapPlannedDates — each planned date to the new schedule\'s date in the same week', () => {
-  const saturdays = { cadence: 'weekly', intervalN: 1, weekday: 6, timeStart: '09:00', startsOn: '2026-01-01' }
-
-  it('moves a Sunday to the Saturday of the same Sunday-first week', () => {
-    expect(mapPlannedDates({ rule: saturdays, fromDate: '2026-09-06', planned: [{ id: 'e1', occurrence_date: '2026-09-13' }] }))
-      .toEqual([{ event_id: 'e1', to_date: '2026-09-19' }])
-  })
-
-  it('keeps a date where it is when the new schedule has no date that week', () => {
-    const monthly = { cadence: 'monthly', intervalN: 1, anchor: 'date', dayOfMonth: 1, timeStart: '09:00', startsOn: '2026-01-01' }
-    expect(mapPlannedDates({ rule: monthly, fromDate: '2026-09-06', planned: [{ id: 'e1', occurrence_date: '2026-09-13' }] }))
-      .toEqual([{ event_id: 'e1', to_date: null }])
-  })
-
-  it('never moves a date to before the split', () => {
-    // Split from Tue 8 Sep to Mondays: that week's Monday (7 Sep) is before the split, so the
-    // planned Tuesday has nowhere to go and stays put.
-    const mondays = { ...saturdays, weekday: 1 }
-    expect(mapPlannedDates({ rule: mondays, fromDate: '2026-09-08', planned: [{ id: 'e1', occurrence_date: '2026-09-08' }] }))
-      .toEqual([{ event_id: 'e1', to_date: null }])
-  })
-
-  it('skips a new date already taken by the date being changed', () => {
-    expect(mapPlannedDates({
-      rule: saturdays, fromDate: '2026-09-06', planned: [{ id: 'e1', occurrence_date: '2026-09-13' }], taken: ['2026-09-19'],
-    })).toEqual([{ event_id: 'e1', to_date: null }])
-  })
-
-  it('gives two planned dates in one week one new date, and keeps the other where it is', () => {
-    const planned = [{ id: 'late', occurrence_date: '2026-09-17' }, { id: 'early', occurrence_date: '2026-09-13' }]
-    expect(mapPlannedDates({ rule: saturdays, fromDate: '2026-09-06', planned })).toEqual([
-      { event_id: 'early', to_date: '2026-09-19' },
-      { event_id: 'late', to_date: null },
-    ])
   })
 })
 
@@ -242,30 +212,5 @@ describe('skipOccurrence — cancel one date', () => {
     expect(up.args[0].occurrence_date).toBe('2026-08-16')
     expect(up.args[0].cancel_reason).toBe('Typhoon')
     expect(up.args[1]).toEqual({ onConflict: 'series_id,occurrence_date' })
-  })
-})
-
-describe('firstNewDate — where the new schedule first lands', () => {
-  const tuesdays = { cadence: 'weekly', intervalN: 1, weekday: 2, timeStart: '09:00', startsOn: '2026-01-01' }
-
-  it('is the new schedule\'s first date on or after the split', () => {
-    expect(firstNewDate({ rule: tuesdays, fromDate: '2026-10-11' })).toBe('2026-10-13')
-    expect(firstNewDate({ rule: tuesdays, fromDate: '2026-10-13' })).toBe('2026-10-13')
-  })
-
-  it('is null when the schedule ends before it lands', () => {
-    expect(firstNewDate({ rule: { ...tuesdays, endsOn: '2026-10-12' }, fromDate: '2026-10-11' })).toBeNull()
-  })
-})
-
-describe('previousDateBefore — the guard against dates swapping order', () => {
-  const sundays = { cadence: 'weekly', intervalN: 1, weekday: 0, timeStart: '08:00', startsOn: '2026-01-04' }
-
-  it('finds an old date from the new date up to (not including) the date being changed', () => {
-    expect(previousDateBefore({ series: sundays, newDate: '2026-10-03', occurrenceDate: '2026-10-11' })).toBe('2026-10-04')
-  })
-
-  it('is null when nothing sits in between', () => {
-    expect(previousDateBefore({ series: sundays, newDate: '2026-10-10', occurrenceDate: '2026-10-11' })).toBeNull()
   })
 })

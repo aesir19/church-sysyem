@@ -1,16 +1,20 @@
 // Changing "this date and the ones after it" (#103 bug 2 + #105): one all-or-nothing split.
 //
-// The rules under test were agreed with the owner on 2026-10-05 (see the comment on #105):
-//   * the old schedule ends the day before the chosen date; a new one starts on it; earlier
-//     dates are never touched. A date that has already started cannot be the split point
+// The rules under test were agreed with the owner on 2026-10-05 (see the comment on #105) and
+// reworked after code review (0050):
+//   * the date being changed lands on exactly the day picked, and the new schedule starts there;
+//     the old schedule ends the day before the earlier of the two days. Earlier dates are never
+//     touched. A date that has already started cannot be changed this way; moving earlier may not
+//     jump back over a saved date
 //   * already-planned later dates (saved rows) STAY where they are by default, keeping their own
-//     details — except the date being changed, which always takes the change (0049). Only when
-//     the owner ticks "Also move already-planned future dates" does each one move to the new
-//     schedule's date in the same Sunday-first week and take its details; with
-//     no new date that week it stays put as a standalone event
+//     details. Only when the owner ticks "Also move already-planned future dates" does each one
+//     move to the new schedule's date in the Sunday-first week it actually sits in, and take its
+//     details; with no new date that week it stays put as a standalone event
+//   * "planned" and "past" are judged on each date's actual start, by the database clock
 //   * cancelled dates stay cancelled; people, programme, money and attendance stay attached, and
 //     a date that changes day files its attendance as history (0047)
-//   * a one-time key makes a retry after a lost reply return the first result
+//   * a one-time key makes a retry after a lost reply return the first result; the same key with
+//     a different change is refused
 //   * Events Team / SuperAdmin of the series' own church only; a deleted series cannot change
 //
 // Runs against a real database inside a rolled-back transaction (`npm run test:db`).
@@ -115,10 +119,11 @@ const NEW_RULE = {
   cadence: 'weekly', interval_n: 1, weekday: 6, time_start: '09:00', time_end: '10:30',
 }
 
-const split = (tx, { series, from, rule = NEW_RULE, moves = null, key = randomUUID() }) =>
+// `from` is the date being changed; `starts` the day it moves to (default: stays on its day).
+const split = (tx, { series, from, starts = from, rule = NEW_RULE, moves = null, key = randomUUID() }) =>
   tx.$queryRawUnsafe(
-    `SELECT public.split_event_series($1::uuid, $2::date, $3::jsonb, $4::jsonb, $5::uuid) AS r`,
-    series, from, JSON.stringify(rule), moves == null ? null : JSON.stringify(moves), key
+    `SELECT public.split_event_series($1::uuid, $2::date, $3::date, $4::jsonb, $5::jsonb, $6::uuid) AS r`,
+    series, from, starts, JSON.stringify(rule), moves == null ? null : JSON.stringify(moves), key
   ).then((rows) => rows[0].r)
 
 const eventRow = async (tx, id) =>
@@ -157,7 +162,7 @@ describe.skipIf(!hasDatabase())('split_event_series — the schedule itself', ()
       const w = await world(tx)
       const from = await dayAfter(tx, 14, 0)
       const series = await makeSeries(tx, w.churchA, { startsOn: from })
-      const planned = await makeDate(tx, w.churchA, series, from, { title: 'zz-planned' })
+      const planned = await makeDate(tx, w.churchA, series, shift(from, 7), { title: 'zz-planned' })
       await asPrincipal(tx, w.eventsTeam.accountId)
 
       const r = await split(tx, { series, from })
@@ -261,6 +266,26 @@ describe.skipIf(!hasDatabase())('split_event_series — already-planned later da
     })
   })
 
+  it('moves a planned date within the week it actually sits in, not its original slot', async () => {
+    await withRollback(async (tx) => {
+      const w = await world(tx)
+      const series = await makeSeries(tx, w.churchA)
+      const from = await dayAfter(tx, 14, 0)
+      // Slot: the Sunday a week on. Actually moved to the Monday after that (the next week).
+      const [moved] = await tx.$queryRawUnsafe(
+        `INSERT INTO public.events (church_id, title, kind, status, starts_at, published_at, series_id, occurrence_date)
+         VALUES ($1::uuid, 'zz-moved', 'service', 'published', (($2::date + time '08:00') AT TIME ZONE 'Asia/Manila'),
+                 now(), $3::uuid, $4::date) RETURNING id`,
+        w.churchA, shift(from, 15), series, shift(from, 7)
+      )
+      await asPrincipal(tx, w.eventsTeam.accountId)
+
+      await split(tx, { series, from, moves: [{ event_id: moved.id, to_date: shift(from, 20) }] })
+
+      expect(iso((await eventRow(tx, moved.id)).occurrence_date)).toBe(shift(from, 20))
+    })
+  })
+
   it('refuses a move to another week', async () => {
     await withRollback(async (tx) => {
       const w = await world(tx)
@@ -303,15 +328,29 @@ describe.skipIf(!hasDatabase())('split_event_series — the date being changed',
       await asPrincipal(tx, w.eventsTeam.accountId)
 
       // Sundays become Tuesdays from this date.
-      const r = await split(tx, {
-        series, from, rule: { ...NEW_RULE, weekday: 2 },
-        moves: [{ event_id: selected, to_date: shift(from, 2), selected: true }],
-      })
+      const r = await split(tx, { series, from, starts: shift(from, 2), rule: { ...NEW_RULE, weekday: 2 } })
 
       expect(await eventRow(tx, selected)).toMatchObject({
         series_id: r.new_series_id, title: 'zz-new', local_start: `${shift(from, 2)} 09:00`,
       })
       expect(await eventRow(tx, other)).toMatchObject({ series_id: r.new_series_id, title: 'zz-special' })
+    })
+  })
+
+  it('lands on exactly the day picked in a later week, and the new schedule starts there', async () => {
+    await withRollback(async (tx) => {
+      const w = await world(tx)
+      const series = await makeSeries(tx, w.churchA)
+      const from = await dayAfter(tx, 14, 0)
+      const monday = shift(from, 8) // the Monday of the NEXT week
+      const selected = await makeDate(tx, w.churchA, series, from)
+      await asPrincipal(tx, w.eventsTeam.accountId)
+
+      const r = await split(tx, { series, from, starts: monday, rule: { ...NEW_RULE, weekday: 1 } })
+
+      expect(iso((await eventRow(tx, selected)).occurrence_date)).toBe(monday)
+      expect(iso((await seriesRow(tx, r.new_series_id)).starts_on)).toBe(monday)
+      expect(iso((await seriesRow(tx, series)).ends_on)).toBe(shift(from, -1))
     })
   })
 
@@ -324,9 +363,7 @@ describe.skipIf(!hasDatabase())('split_event_series — the date being changed',
       const selected = await makeDate(tx, w.churchA, series, sunday)
       await asPrincipal(tx, w.eventsTeam.accountId)
 
-      const r = await split(tx, {
-        series, from: saturday, moves: [{ event_id: selected, to_date: saturday, selected: true }],
-      })
+      const r = await split(tx, { series, from: sunday, starts: saturday })
 
       expect(iso((await seriesRow(tx, r.new_series_id)).starts_on)).toBe(saturday)
       expect(iso((await seriesRow(tx, series)).ends_on)).toBe(shift(saturday, -1))
@@ -334,18 +371,81 @@ describe.skipIf(!hasDatabase())('split_event_series — the date being changed',
     })
   })
 
-  it('refuses to treat a later planned date as the one being changed', async () => {
+  it('refuses moving earlier past a saved earlier date, so dates cannot swap order', async () => {
     await withRollback(async (tx) => {
       const w = await world(tx)
       const series = await makeSeries(tx, w.churchA)
       const from = await dayAfter(tx, 14, 0)
       await makeDate(tx, w.churchA, series, from)
-      const later = await makeDate(tx, w.churchA, series, shift(from, 7))
       await asPrincipal(tx, w.eventsTeam.accountId)
 
+      const msg = await refusalMessage(tx, () => split(tx, { series, from: shift(from, 7), starts: shift(from, -1) }))
+      expect(msg).toMatch(/earlier date of this repeating event/)
+    })
+  })
+
+  it('judges the date being changed where it actually sits: moved into the past, it is past', async () => {
+    await withRollback(async (tx) => {
+      const w = await world(tx)
+      const series = await makeSeries(tx, w.churchA)
+      const from = await dayAfter(tx, 14, 0)
+      await tx.$executeRawUnsafe(
+        `INSERT INTO public.events (church_id, title, kind, status, starts_at, published_at, series_id, occurrence_date)
+         VALUES ($1::uuid, 'zz-moved', 'service', 'published', now() - interval '1 day', now(), $2::uuid, $3::date)`,
+        w.churchA, series, from
+      )
+      await asPrincipal(tx, w.eventsTeam.accountId)
+
+      expect(await refusalMessage(tx, () => split(tx, { series, from }))).toMatch(/already happened/)
+    })
+  })
+
+  it('stands a planned date on its own when the changed date takes its day', async () => {
+    await withRollback(async (tx) => {
+      const w = await world(tx)
+      const series = await makeSeries(tx, w.churchA)
+      const from = await dayAfter(tx, 14, 0)
+      const selected = await makeDate(tx, w.churchA, series, from)
+      const next = await makeDate(tx, w.churchA, series, shift(from, 7), { title: 'zz-special' })
+      await asPrincipal(tx, w.eventsTeam.accountId)
+
+      // The changed date moves a week on, onto the next planned Sunday.
+      const r = await split(tx, { series, from, starts: shift(from, 7), rule: { ...NEW_RULE, weekday: 0 } })
+
+      expect(iso((await eventRow(tx, selected)).occurrence_date)).toBe(shift(from, 7))
+      expect(await eventRow(tx, next)).toMatchObject({ series_id: null, title: 'zz-special' })
+      expect(r.standalone).toBe(1)
+    })
+  })
+})
+
+describe.skipIf(!hasDatabase())('preview_split_event_series — the planned dates the screen offers', () => {
+  it('lists upcoming saved dates by their actual day, and leaves out ones already past', async () => {
+    await withRollback(async (tx) => {
+      const w = await world(tx)
+      const series = await makeSeries(tx, w.churchA)
+      const from = await dayAfter(tx, 14, 0)
+      const upcoming = await makeDate(tx, w.churchA, series, shift(from, 7), { status: 'cancelled' })
+      await tx.$executeRawUnsafe(
+        `INSERT INTO public.events (church_id, title, kind, status, starts_at, published_at, series_id, occurrence_date)
+         VALUES ($1::uuid, 'zz-past', 'service', 'published', now() - interval '1 day', now(), $2::uuid, $3::date)`,
+        w.churchA, series, shift(from, 14)
+      )
+      await asPrincipal(tx, w.eventsTeam.accountId)
+
+      const [{ r }] = await tx.$queryRawUnsafe(`SELECT public.preview_split_event_series($1::uuid, $2::date) AS r`, series, from)
+      expect(r).toEqual([{ id: upcoming, occurrence_date: shift(from, 7), actual_date: shift(from, 7), status: 'cancelled' }])
+    })
+  })
+
+  it('refuses a caller who cannot manage this church\'s events', async () => {
+    await withRollback(async (tx) => {
+      const w = await world(tx)
+      const series = await makeSeries(tx, w.churchA)
+      await asPrincipal(tx, w.eventsTeamB.accountId)
       const msg = await refusalMessage(tx, () =>
-        split(tx, { series, from, moves: [{ event_id: later, to_date: from, selected: true }] }))
-      expect(msg).toMatch(/date being changed/)
+        tx.$queryRawUnsafe(`SELECT public.preview_split_event_series($1::uuid, current_date)`, series))
+      expect(isAuthorizationFailure(msg)).toBe(true)
     })
   })
 })
@@ -405,6 +505,9 @@ describe.skipIf(!hasDatabase())('split_event_series — who may, when, and safe 
       const second = await split(tx, { series, from, key })
 
       expect(second).toMatchObject({ already_done: true, new_series_id: first.new_series_id })
+      // The same key with a DIFFERENT change is refused, not silently dropped.
+      expect(await refusalMessage(tx, () => split(tx, { series, from, starts: shift(from, 1), key })))
+        .toMatch(/already saved/)
       const [{ n }] = await tx.$queryRawUnsafe(
         `SELECT count(*)::int AS n FROM public.event_series WHERE church_id = $1::uuid`, w.churchA)
       expect(n).toBe(2)
