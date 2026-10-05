@@ -161,7 +161,7 @@ watch([drawerOpen, isMobile], ([open, mobile]) => {
   display: flex;
 }
 
-.shell__load-error { padding: var(--page-pad); }
+.shell__content--framed .shell__load-error { padding: var(--page-pad); }
 
 @media (max-width: 900px) {
   .shell__content { padding: var(--sp-16); }

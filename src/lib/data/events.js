@@ -30,6 +30,7 @@ import { ymd } from '../recurrence'
 
 const MESSAGES = {
   loadFailed: 'Could not load the calendar. Please try again.',
+  managedLoadFailed: 'Could not load the events. Please try again.',
   eventFailed: 'Could not load this event. Please try again.',
   createFailed: 'That event could not be created.',
   updateFailed: 'That event could not be saved.',
@@ -92,7 +93,7 @@ export async function listEvents({ churchId, from, to }) {
  * A caller who cannot see drafts simply gets none, which the view reads as an empty tab.
  */
 export async function listManagedEvents({ churchId, scope = 'upcoming' }) {
-  if (!churchId) return { ok: false, events: [], message: MESSAGES.loadFailed }
+  if (!churchId) return { ok: false, events: [], message: MESSAGES.managedLoadFailed }
   const nowIso = new Date().toISOString()
   let q = supabase.from('events').select(EVENT_COLUMNS).eq('church_id', churchId)
 
@@ -105,7 +106,7 @@ export async function listManagedEvents({ churchId, scope = 'upcoming' }) {
   }
 
   const { data, error } = await q
-  if (error) return { ok: false, events: [], message: MESSAGES.loadFailed }
+  if (error) return { ok: false, events: [], message: MESSAGES.managedLoadFailed }
   return { ok: true, events: data ?? [], message: '' }
 }
 
