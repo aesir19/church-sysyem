@@ -17,7 +17,8 @@ import { safeFacebookUrl } from '../utils/memberLink'
 const props = defineProps({
   member: { type: Object, default: null },
   churchName: { type: String, default: '' },
-  canWrite: { type: Boolean, default: false }
+  canWrite: { type: Boolean, default: false },
+  canArchive: { type: Boolean, default: false }
 })
 
 defineEmits(['edit', 'archive', 'add-to-group'])
@@ -111,10 +112,11 @@ function fmtDate (iso) {
     </header>
 
     <div
-      v-if="canWrite"
+      v-if="canWrite || canArchive"
       class="mdp__actions"
     >
       <Button
+        v-if="canWrite"
         size="sm"
         @click="$emit('edit', member)"
       >
@@ -125,6 +127,7 @@ function fmtDate (iso) {
            that is not there, so it arrives with that dialog rather than ahead
            of it. The emit stays declared for that. -->
       <Button
+        v-if="canArchive"
         size="sm"
         variant="dangerQuiet"
         @click="$emit('archive', member)"

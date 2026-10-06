@@ -87,7 +87,7 @@ const { displayName, load: loadUser } = useCurrentUser()
 // because sign out lives inside the menu. Everyone else keeps the plain button: a gear
 // whose only entry is "Sign out" is a worse affordance than a sign-out button, and the
 // dashboard must always be signable-out-of on a shared church computer.
-const canOpenSettings = computed(() => caps.value.isSuperAdmin || caps.value.isHeadPastor)
+const canOpenSettings = computed(() => caps.value.isSuperAdmin || caps.value.isHeadPastor || caps.value.canSeeMemberDetail)
 
 onMounted(loadUser)
 
