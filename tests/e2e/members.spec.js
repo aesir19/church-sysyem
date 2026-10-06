@@ -35,6 +35,7 @@ function memberRow(page, name) {
 async function gotoMembers(page) {
   await authedGoto(page, '/dashboard/members', {
     tables: { members: MEMBERS },
+    rpc: { archive_member: { id: 'm-1' } },
   })
   await expect(page.locator('.who__name', { hasText: 'Cora Aquino' })).toBeVisible()
 }

@@ -157,6 +157,7 @@ const routes = [
       // list_church_accounts() return zero rows to anyone who should not have them.
       { path: 'settings/roles', name: 'SettingsRoles', component: () => import('../views/settings/RolesLinkingView.vue') },
       { path: 'settings/pastors', name: 'SettingsPastors', component: () => import('../views/settings/PastorAssignmentView.vue') },
+      { path: 'settings/archived-members', name: 'ArchivedMembers', component: () => import('../views/settings/ArchivedMembersView.vue') },
       { path: 'settings', redirect: '/dashboard/settings/roles' },
 
       // The old paths, kept as redirects. Someone has these bookmarked, and a

@@ -105,6 +105,7 @@ export function useCurrentRole() {
     canBrowseDirectory: c('canBrowseDirectory'),
     canRecordJourney: c('canRecordJourney'),
     canWriteMembers: c('canWriteMembers'),
+    canManageMemberArchive: c('canManageMemberArchive'),
     canViewFinance: c('canViewFinance'),
     canWriteFinance: c('canWriteFinance'),
     canSeeContributorIdentity: c('canSeeContributorIdentity'),

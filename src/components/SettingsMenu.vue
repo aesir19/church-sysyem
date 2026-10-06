@@ -64,6 +64,10 @@ const canInvite = computed(() => !!caps.value.canInvite)
 const entries = computed(() => {
   const list = []
 
+  if (caps.value.canSeeMemberDetail) {
+    list.push({ key: 'archive', label: 'Archived members', hint: caps.value.canManageMemberArchive ? 'Read archived records and restore members' : 'Read archived records', to: '/dashboard/settings/archived-members' })
+  }
+
   if (canInvite.value) {
     list.push({
       key: 'roles',
