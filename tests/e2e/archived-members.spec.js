@@ -70,6 +70,8 @@ test('SuperAdmin confirms retained assignments before re-enabling access', async
     },
   })
   await page.getByRole('button', { name: /Awaiting access/ }).click()
+  await expect(page.getByRole('button', { name: /View Ana Lucero/ })).toContainText('Sep 30, 2026')
+  await expect(page.getByRole('button', { name: /View Ana Lucero/ })).toContainText('Returned')
   await page.getByRole('button', { name: /View Ana Lucero/ }).click()
   await expect(page.getByRole('button', { name: 'Re-enable access' })).toBeDisabled()
   await page.getByRole('checkbox', { name: /Member.*Role/ }).check()

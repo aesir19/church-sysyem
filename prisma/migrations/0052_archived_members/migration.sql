@@ -23,7 +23,8 @@ CREATE TABLE public.member_archive_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   member_id uuid NOT NULL REFERENCES public.members(id),
   church_id uuid NOT NULL REFERENCES public.churches(id),
-  actor_id uuid REFERENCES public.user_accounts(id),
+  -- SET NULL, as in 0023: history must not prevent deleting the account it names.
+  actor_id uuid REFERENCES public.user_accounts(id) ON DELETE SET NULL,
   action text NOT NULL CHECK (action IN ('archive', 'restore', 'disable_at_rollout', 'enable_access')),
   reason text,
   occurred_at timestamptz NOT NULL DEFAULT clock_timestamp()
@@ -142,6 +143,15 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION 'disable failed' USING ERRCODE = 'AR004'; END IF;
     DELETE FROM auth.sessions WHERE user_id = a.id;
   END IF;
+  -- A pending invite links only on acceptance (0038/0043), so the account lookup
+  -- above cannot see it. Retire it the way Cancel invite does: release the invite
+  -- row and remove the unaccepted login, so acceptance cannot leave a stray account.
+  DELETE FROM auth.users u USING public.account_invites ai
+    WHERE ai.member_id = m.id AND ai.consumed_at IS NULL AND lower(u.email) = ai.email
+      AND u.invited_at IS NOT NULL AND u.email_confirmed_at IS NULL
+      AND NOT EXISTS (SELECT 1 FROM public.user_accounts ua WHERE ua.id = u.id AND ua.member_id IS NOT NULL);
+  UPDATE public.account_invites SET consumed_at = clock_timestamp()
+    WHERE member_id = m.id AND consumed_at IS NULL;
   UPDATE public.members SET archived_at = clock_timestamp(), archived_reason = nullif(btrim(p_reason), '') WHERE id = m.id;
   INSERT INTO public.member_archive_events(member_id, church_id, actor_id, action, reason)
     VALUES (m.id, m.member_of, auth.uid(), 'archive', nullif(btrim(p_reason), ''));
@@ -359,6 +369,24 @@ CREATE TRIGGER guard_archived_account_link BEFORE INSERT OR UPDATE ON public.use
 
 -- Existing archived accounts follow the same rule on rollout. All of this is in
 -- the migration transaction; a failed Auth update rolls back the entire rollout.
+-- The live path refuses to disable the last active SuperAdmin (AR003); the rollout
+-- must too, or deploying could lock every administrator out.
+DO $$
+DECLARE affected text;
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.user_accounts WHERE role = 'super_admin') AND NOT EXISTS (
+    SELECT 1 FROM public.user_accounts ua JOIN auth.users au ON au.id = ua.id
+    LEFT JOIN public.members m ON m.id = ua.member_id
+    WHERE ua.role = 'super_admin' AND m.archived_at IS NULL
+      AND (au.banned_until IS NULL OR au.banned_until <= now())
+  ) THEN
+    RAISE EXCEPTION 'Rollout would disable every active SuperAdmin. Restore a SuperAdmin member first.' USING ERRCODE = 'AR003';
+  END IF;
+  SELECT string_agg(format('%s: %s', role, n), ', ' ORDER BY role) INTO affected
+    FROM (SELECT a.role, count(*) AS n FROM public.user_accounts a
+          JOIN public.members m ON m.id = a.member_id WHERE m.archived_at IS NOT NULL GROUP BY a.role) r;
+  RAISE NOTICE 'Rollout disables accounts linked to archived members — %', coalesce(affected, 'none');
+END $$;
 INSERT INTO public.member_archive_events(member_id, church_id, action, reason)
   SELECT m.id, m.member_of, 'disable_at_rollout', 'Linked account disabled when the archive access rule was introduced.'
   FROM public.members m JOIN public.user_accounts a ON a.member_id = m.id WHERE m.archived_at IS NOT NULL;

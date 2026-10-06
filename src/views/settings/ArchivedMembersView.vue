@@ -65,6 +65,11 @@ async function load() {
   if (version !== listVersion) return
   loading.value = false
   if (!result.ok) { error.value = result.message; return }
+  // Restoring the only record on the last page empties it; step back to the new last page.
+  if (!result.rows.length && page.value > 1 && result.total > 0) {
+    page.value = Math.ceil(result.total / 25)
+    return load()
+  }
   rows.value = result.rows
   total.value = result.total
   archivedCount.value = result.archivedCount
@@ -258,7 +263,7 @@ onBeforeUnmount(() => { clearTimeout(timer); listVersion++; detailVersion++ })
               class="archive-list__head"
               aria-hidden="true"
             >
-              <span>Member</span><span>Archived</span><span>Reason</span><span>Account</span>
+              <span>Member</span><span>{{ awaiting ? 'Restored' : 'Archived' }}</span><span>{{ awaiting ? 'Restore reason' : 'Reason' }}</span><span>Account</span>
             </div>
             <button
               v-for="member in rows"
@@ -274,8 +279,8 @@ onBeforeUnmount(() => { clearTimeout(timer); listVersion++; detailVersion++ })
                 :name="fullName(member)"
                 :size="30"
               /><span><strong>{{ fullName(member) }}</strong><small>Record {{ member.id.slice(0, 8) }}</small></span></span>
-              <span class="archive-row__date">{{ awaiting ? 'Restored' : date(member.archived_at) }}</span>
-              <span class="archive-row__reason">{{ awaiting ? 'Awaiting access' : member.archived_reason || 'No reason recorded' }}</span>
+              <span class="archive-row__date">{{ date(awaiting ? member.restored_at : member.archived_at) }}</span>
+              <span class="archive-row__reason">{{ (awaiting ? member.restored_reason : member.archived_reason) || 'No reason recorded' }}</span>
               <span><Badge :tone="member.account_id ? 'magenta' : 'neutral'">{{ member.account_id ? 'Sign-in disabled' : 'No account' }}</Badge></span>
             </button>
           </template>

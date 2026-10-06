@@ -1,18 +1,38 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { hasDatabase, withRollback, asPrincipal, asOwner, refusalMessage, disconnect } from './helpers/database.js'
-import { makeChurch, makePrincipal, addToGroup, findSystemMinistry } from './helpers/fixtures.js'
+import { makeChurch, makeMember, makePrincipal, addToGroup, findSystemMinistry } from './helpers/fixtures.js'
 
 afterAll(disconnect)
 
 // Exercise the candidate migration without deploying it. DDL, fixtures, bans, and
 // backfill all roll back together; no persistent account access changes occur.
+// A migration the target database has already applied is skipped, so the suite runs both
+// before and after deployment.
+const CANDIDATES = ['0052_archived_members', '0053_awaiting_access_restore_details']
 async function candidate(tx) {
-  const path = new URL('../../prisma/migrations/0052_archived_members/migration.sql', import.meta.url)
-  if (existsSync(path)) {
+  for (const name of CANDIDATES) {
+    const path = new URL(`../../prisma/migrations/${name}/migration.sql`, import.meta.url)
+    if (!existsSync(path)) continue
+    const [applied] = await tx.$queryRawUnsafe(
+      'SELECT EXISTS (SELECT 1 FROM public._prisma_migrations WHERE migration_name = $1 AND finished_at IS NOT NULL) AS done', name)
+    if (applied.done) continue
     const sql = readFileSync(path, 'utf8').replace(/^BEGIN;\s*/m, '').replace(/^COMMIT;\s*/m, '')
     await tx.$executeRawUnsafe(`DO $candidate$ BEGIN EXECUTE $migration$${sql}$migration$; END $candidate$;`)
   }
+}
+
+// The one-time rollout at the end of 0052. Where 0052 is already deployed, run just that
+// section against the fixtures; otherwise the whole candidate runs it.
+async function rollout(tx) {
+  const sql = readFileSync(new URL('../../prisma/migrations/0052_archived_members/migration.sql', import.meta.url), 'utf8')
+  const [applied] = await tx.$queryRawUnsafe(
+    "SELECT EXISTS (SELECT 1 FROM public._prisma_migrations WHERE migration_name = '0052_archived_members' AND finished_at IS NOT NULL) AS done")
+  if (!applied.done) return candidate(tx)
+  const section = sql.slice(sql.indexOf('-- Existing archived accounts follow'), sql.indexOf("NOTIFY pgrst, 'reload config'"))
+  await tx.$executeRawUnsafe(`DO $rollout$ BEGIN EXECUTE $migration$${section}$migration$; END $rollout$;`)
+  await candidate(tx)
 }
 
 describe.skipIf(!hasDatabase())('archived members — database/API contract', () => {
@@ -87,7 +107,7 @@ describe.skipIf(!hasDatabase())('archived members — database/API contract', ()
       const church = await makeChurch(tx)
       const member = await makePrincipal(tx, { role: 'member', churchId: church })
       await tx.$executeRawUnsafe("UPDATE public.members SET archived_at = now() - interval '1 year', archived_reason = 'Legacy reason' WHERE id = $1::uuid", member.memberId)
-      await candidate(tx)
+      await rollout(tx)
       await asPrincipal(tx, member.accountId)
       expect(await refusalMessage(tx, () => tx.$queryRawUnsafe('SELECT public.check_archive_access()'))).toContain('account_disabled')
       await asOwner(tx)
@@ -95,6 +115,49 @@ describe.skipIf(!hasDatabase())('archived members — database/API contract', ()
       expect(account.banned).toBe(true)
       const events = await tx.$queryRawUnsafe('SELECT actor_id, action FROM public.member_archive_events WHERE member_id = $1::uuid', member.memberId)
       expect(events).toEqual([{ actor_id: null, action: 'disable_at_rollout' }])
+    })
+  })
+  it('refuses a rollout that would disable every active SuperAdmin', async () => {
+    await withRollback(async tx => {
+      await tx.$executeRawUnsafe(`UPDATE public.members SET archived_at = now()
+        WHERE id IN (SELECT member_id FROM public.user_accounts WHERE role = 'super_admin' AND member_id IS NOT NULL)`)
+      await tx.$executeRawUnsafe(`UPDATE auth.users SET banned_until = '9999-12-31'
+        WHERE id IN (SELECT id FROM public.user_accounts WHERE role = 'super_admin' AND member_id IS NULL)`)
+      await makePrincipal(tx, { role: 'super_admin', churchId: await makeChurch(tx) })
+        .then(sa => tx.$executeRawUnsafe('UPDATE public.members SET archived_at = now() WHERE id = $1::uuid', sa.memberId))
+      expect(await refusalMessage(tx, () => rollout(tx))).toContain('every active SuperAdmin')
+    })
+  })
+  it('lets an account that recorded archive history be deleted later', async () => {
+    await withRollback(async tx => {
+      await candidate(tx)
+      const church = await makeChurch(tx)
+      const admin = await makePrincipal(tx, { role: 'super_admin', churchId: church })
+      const member = await makePrincipal(tx, { role: 'member', churchId: church })
+      await asPrincipal(tx, admin.accountId)
+      await tx.$queryRawUnsafe('SELECT public.archive_member($1::uuid, $2)', member.memberId, 'Moved')
+      await asOwner(tx)
+      await tx.$executeRawUnsafe('DELETE FROM auth.users WHERE id = $1::uuid', admin.accountId)
+      const events = await tx.$queryRawUnsafe('SELECT actor_id, action FROM public.member_archive_events WHERE member_id = $1::uuid', member.memberId)
+      expect(events).toEqual([{ actor_id: null, action: 'archive' }])
+    })
+  })
+  it('cancels a pending invite and its unaccepted login when the member is archived', async () => {
+    await withRollback(async tx => {
+      await candidate(tx)
+      const church = await makeChurch(tx)
+      const admin = await makePrincipal(tx, { role: 'super_admin', churchId: church })
+      const memberId = await makeMember(tx, church, 'invitee')
+      const invitedId = randomUUID()
+      const email = `invitee-${invitedId}@example.test`
+      await tx.$executeRawUnsafe('INSERT INTO auth.users (id, email, invited_at) VALUES ($1::uuid, $2, now())', invitedId, email)
+      await tx.$executeRawUnsafe('INSERT INTO public.account_invites (email, member_id, role) VALUES ($1, $2::uuid, $3)', email, memberId, 'church_leader')
+      await asPrincipal(tx, admin.accountId)
+      await tx.$queryRawUnsafe('SELECT public.archive_member($1::uuid, $2)', memberId, 'Moved')
+      await asOwner(tx)
+      const [invite] = await tx.$queryRawUnsafe('SELECT consumed_at FROM public.account_invites WHERE member_id = $1::uuid', memberId)
+      expect(invite.consumed_at).not.toBeNull()
+      expect(await tx.$queryRawUnsafe('SELECT id FROM auth.users WHERE id = $1::uuid', invitedId)).toEqual([])
     })
   })
   it('cannot bypass account disabling or restoration history through a direct member update', async () => {
@@ -152,7 +215,11 @@ describe.skipIf(!hasDatabase())('archived members — database/API contract', ()
       expect(detail.r.restored_reason).toBe('Returned to church')
       expect(detail.r.assignments.some(a => a.label === 'Secretariat')).toBe(true)
       const [list] = await tx.$queryRawUnsafe('SELECT public.list_archived_members($1::uuid, $2, 1, true) AS r', church, '')
-      expect(list.r.rows.map(r => r.id)).toContain(member.memberId)
+      const row = list.r.rows.find(r => r.id === member.memberId)
+      expect(row.restored_reason).toBe('Returned to church')
+      expect(row.restored_at).not.toBeNull()
+      const [byReason] = await tx.$queryRawUnsafe('SELECT public.list_archived_members($1::uuid, $2, 1, true) AS r', church, 'returned to')
+      expect(byReason.r.rows.map(r => r.id)).toContain(member.memberId)
       await asOwner(tx)
       const events = await tx.$queryRawUnsafe('SELECT action, reason FROM public.member_archive_events WHERE member_id = $1::uuid ORDER BY occurred_at', member.memberId)
       expect(events).toEqual([{ action: 'archive', reason: 'Moved away' }, { action: 'restore', reason: 'Returned to church' }])
