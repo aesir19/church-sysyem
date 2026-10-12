@@ -20,6 +20,7 @@
 // different job from stopping the database returning it.
 
 import { supabase } from '../supabase'
+import { archiveMember } from './archives'
 import { write } from './write'
 import { rangeFor } from '../../utils/pagination'
 import { buildMemberNameOrFilter, sanitizeMemberSearchTerm } from '../../utils/searchFilters'
@@ -306,16 +307,7 @@ export async function update({ id, payload }) {
  * @param {{ id: string, reason?: string }} params
  */
 export async function archive({ id, reason }) {
-  return write(
-    supabase
-      .from('members')
-      .update({
-        archived_at: new Date().toISOString(),
-        archived_reason: reason?.trim() || null,
-      })
-      .eq('id', id),
-    { columns: 'id', messages: { blocked: MESSAGES.archiveBlocked } }
-  )
+  return archiveMember({ id, reason })
 }
 
 export const MEMBER_MESSAGES = MESSAGES

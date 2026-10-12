@@ -385,35 +385,29 @@ describe('update', () => {
 })
 
 describe('archive', () => {
-  it('sets archived_at and the trimmed reason', async () => {
+  it('sends the trimmed reason to the atomic archive operation', async () => {
     resolvesTo({ data: [{ id: 'm1' }], error: null })
     await archive({ id: 'm1', reason: '  moved away  ' })
-    const payload = calledWith('update')[0][1]
-    expect(payload.archived_reason).toBe('moved away')
-    expect(typeof payload.archived_at).toBe('string')
+    expect(calledWith('rpc')[0]).toEqual(['rpc', 'archive_member', { p_member_id: 'm1', p_reason: 'moved away' }])
   })
 
-  it('stores a null reason when none was given', async () => {
+  it('sends a null reason when none was given', async () => {
     resolvesTo({ data: [{ id: 'm1' }], error: null })
     await archive({ id: 'm1', reason: '   ' })
-    expect(calledWith('update')[0][1].archived_reason).toBeNull()
+    expect(calledWith('rpc')[0][2].p_reason).toBeNull()
     await archive({ id: 'm1' })
-    expect(calledWith('update')[1][1].archived_reason).toBeNull()
+    expect(calledWith('rpc')[1][2].p_reason).toBeNull()
   })
 
-  // The live defect. The old call issued this UPDATE with no .select(), so a
-  // refused archive returned { error: null, data: null } and the view showed
-  // "Member archived successfully." then removed the row locally.
-  it('reports an archive that RLS refused as a failure, not as success', async () => {
+  it('does not treat an empty backend reply as a completed archive', async () => {
     resolvesTo({ data: [], error: null })
     const result = await archive({ id: 'm1', reason: 'x' })
     expect(result.ok).toBe(false)
-    expect(result.message).toBe(MEMBER_MESSAGES.archiveBlocked)
   })
 
-  it('asks only for the id back — an archive does not need the PII columns', async () => {
+  it('does not fetch member PII to archive a record', async () => {
     resolvesTo({ data: [{ id: 'm1' }], error: null })
     await archive({ id: 'm1' })
-    expect(calledWith('select')[0][1]).toBe('id')
+    expect(calledWith('select')).toHaveLength(0)
   })
 })

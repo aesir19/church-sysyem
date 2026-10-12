@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import Modal from '../ui/Modal.vue'
 import Button from '../ui/Button.vue'
 import Input from '../ui/Input.vue'
-import { archive as archiveMember } from '../../lib/data/members'
+import { archiveMember } from '../../lib/data/archives'
 import { showToast } from '../../composables/useToast'
 
 // Dialog 03 — archive member, the destructive confirm.
@@ -58,11 +58,8 @@ async function confirm () {
   const result = await archiveMember({ id: props.member.id, reason: reason.value })
   saving.value = false
 
-  // RLS refuses an archive by FILTERING, so a refusal used to arrive as
-  // `{ error: null, data: null }` and read as success — the row vanished from
-  // the list until a reload brought it back. `archive()` selects the row it
-  // wrote precisely so a refusal is a refusal; never patch the list from
-  // anything but an accepted write.
+  // The RPC archives the member and disables linked sign-in in one transaction.
+  // The view changes only after both succeed.
   if (!result.ok) {
     errorMessage.value = result.message
     showToast('Could not archive that member.', 'error')
@@ -79,7 +76,7 @@ async function confirm () {
   <Modal
     :open="open"
     :title="`Archive ${fullName}?`"
-    description="The record leaves the active roll and stops appearing in attendance and follow-up lists. Giving history and attendance already recorded are kept. A pastor can restore it at any time."
+    description="The record leaves the active roll; giving and attendance stay attached. Group assignments are kept. A linked account loses sign-in and current sessions stop on their next request. Pastor, Secretariat or SuperAdmin can restore the member later."
     width="sm"
     layout="stack"
     footer-layout="even"

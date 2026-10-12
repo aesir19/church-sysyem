@@ -32,7 +32,7 @@ import { journeyProgress } from '../utils/journey'
 // discovered later.
 
 const { activeChurchId, activeChurchName } = useActiveChurch()
-const { canSeeMemberDetail, canBrowseDirectory, canWriteMembers } = useCurrentRole()
+const { canSeeMemberDetail, canBrowseDirectory, canWriteMembers, canManageMemberArchive } = useCurrentRole()
 
 // Three ways this screen reads the roll:
 //   'full'      — canSeeMemberDetail: the base members table, PII, the detail rail.
@@ -633,6 +633,7 @@ watch(page, load)
           :member="selected"
           :church-name="activeChurchName"
           :can-write="canWriteMembers"
+          :can-archive="canManageMemberArchive"
           @edit="openEdit"
           @archive="openArchive"
         />
@@ -660,6 +661,7 @@ watch(page, load)
         :member="selected"
         :church-name="activeChurchName"
         :can-write="canWriteMembers"
+        :can-archive="canManageMemberArchive"
         @edit="openEdit"
         @archive="openArchive"
       />
@@ -682,7 +684,7 @@ watch(page, load)
     />
 
     <ArchiveMemberModal
-      v-if="canWriteMembers"
+      v-if="canManageMemberArchive"
       v-model:open="archiveOpen"
       :member="selected"
       @archived="onArchived"

@@ -62,6 +62,9 @@ export function deriveCapabilities(perm) {
 
     // WRITE capabilities — ministry-governed (+ SuperAdmin). Pastor is see-only.
     canWriteMembers: isSuperAdmin || isSecretariat,
+    // Archive/restore has a narrower RPC than general member editing. Pastor
+    // may recover records without gaining write access to their PII fields.
+    canManageMemberArchive: isSuperAdmin || isPastor || isSecretariat,
     // A small-group leader may record the one-to-one and turning-point milestones
     // (only) for members of a group they lead; SuperAdmin holds it too. The per-group
     // row scope and the two-column restriction live in set_member_journey() (0028) —
