@@ -50,6 +50,7 @@ export async function fetchDGroupDashboard () {
 const DAY = 86_400_000
 const MANILA_OFFSET = 8 * 3_600_000
 const NEW_JOINER_DAYS = 30
+const STALE_AFTER_DAYS = 14
 
 // The Manila calendar date of an instant, as YYYY-MM-DD.
 function manilaDate (instant) {
@@ -148,7 +149,13 @@ export function summarizeDGroup (dashboard, { now = new Date(), groupId = null }
   const joined = [...latestJoin.values()].map(r => ({ kind: 'joined', id: r.id, name: r.name, groupName: r.groupName, date: r.joinedAt }))
   const byDate = (a, b) => a.date.localeCompare(b.date)
 
+  // Attendance is only as fresh as the last service someone recorded. Past two weeks,
+  // say so, rather than let "Check on" send a leader after months-old absences.
+  const newestService = dashboard.services.map(s => s.serviceDate).sort().at(-1)
+  const staleSince = newestService && newestService < shiftDate(today, -STALE_AFTER_DAYS) ? newestService : null
+
   return {
+    staleSince,
     rows,
     lastSunday,
     checkOn,

@@ -194,6 +194,14 @@ describe('summarizeDGroup', () => {
     expect(v.thisWeek.map(i => i.date)).toEqual(['2026-08-05T11:00:00Z', '2026-08-09T01:00:00Z'])
   })
 
+  it('flags attendance as stale when the newest recorded service is over two weeks old', async () => {
+    const d = await load([member('a')])
+    // Newest service 2 Aug. Sunday 16 Aug is exactly two weeks on: still current.
+    expect(summarizeDGroup(d, { now: new Date('2026-08-16T02:00:00Z') }).staleSince).toBeNull()
+    expect(summarizeDGroup(d, { now: new Date('2026-08-17T02:00:00Z') }).staleSince).toBe('2026-08-02')
+    expect(summarizeDGroup(d, { now: NOW }).staleSince).toBeNull()
+  })
+
   it('names the next Sunday in Manila, today when today is Sunday', async () => {
     const d = await load([member('a')])
     expect(summarizeDGroup(d, { now: NOW }).nextSunday).toBe('2026-08-09')

@@ -251,7 +251,13 @@ watch(activeChurchId, load)
                   {{ view.lastSunday.present }} of {{ view.lastSunday.of }}
                 </p>
                 <p class="muted">
-                  at last Sunday's service · {{ dayMonth(view.lastSunday.date) }}
+                  at the last recorded service · {{ dayMonth(view.lastSunday.date) }}
+                </p>
+                <p
+                  v-if="view.staleSince"
+                  class="stale"
+                >
+                  No attendance recorded since {{ dayMonth(view.staleSince) }}.
                 </p>
                 <template v-if="view.lastSunday.notThere.length">
                   <p class="label">
@@ -282,6 +288,12 @@ watch(activeChurchId, load)
               <h2>Check on</h2>
               <p class="muted">
                 Missed 2 or more of the last 4 Sunday services since joining.
+              </p>
+              <p
+                v-if="view.staleSince && view.checkOn.length"
+                class="stale"
+              >
+                No attendance recorded since {{ dayMonth(view.staleSince) }}, so these absences may be out of date.
               </p>
               <ul
                 v-if="view.checkOn.length"
@@ -467,13 +479,15 @@ watch(activeChurchId, load)
 .dg-head h1 { font-size:var(--text-h1); font-weight:800; letter-spacing:var(--tracking-h1); }
 .dg-head p:last-child { color:var(--ink-4); }
 .eyebrow { color:var(--accent-text); font-size:var(--text-eyebrow); font-weight:800; letter-spacing:var(--tracking-eyebrow); text-transform:uppercase; }
-.layout { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(260px,.7fr); gap:var(--sp-16); align-items:start; }
+.layout { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(260px,.7fr); gap:var(--sp-16); }
 .main,.aside { display:flex; flex-direction:column; gap:var(--sp-16); }
-.pair { display:grid; grid-template-columns:1fr 1fr; gap:var(--sp-16); }
+/* Side by side only when each card gets 240px; the main column is narrow beside the sidebar and the rail. */
+.pair { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:var(--sp-16); }
 h2 { font-size:var(--text-h3); font-weight:800; color:var(--ink); }
 .section-head { display:flex; align-items:baseline; justify-content:space-between; gap:var(--sp-12); flex-wrap:wrap; }
 .muted { color:var(--ink-5); font-size:var(--text-meta); }
 .note { margin-top:var(--sp-10); }
+.stale { margin-top:var(--sp-8); padding:6px 10px; border:1px solid var(--warning-border); border-radius:var(--r-tag); background:var(--warning-tint); color:var(--warning-deep); font-size:var(--text-meta); font-weight:600; }
 .foot { margin-top:var(--sp-8); }
 .label { display:block; color:var(--ink-5); font-size:var(--text-meta); margin-top:var(--sp-12); }
 .big { margin-top:var(--sp-10); color:var(--ink); font-size:2rem; font-weight:800; line-height:1; font-variant-numeric:tabular-nums; }
@@ -532,8 +546,12 @@ h2 { font-size:var(--text-h3); font-weight:800; color:var(--ink); }
 @media (max-width:900px) { .layout { grid-template-columns:1fr; } }
 @media (max-width:640px) {
   .dg-head h1 { font-size:var(--text-h2); }
-  .pair { grid-template-columns:1fr; }
-  .progress { gap:var(--sp-10); }
+}
+/* Keyed to the main column's own width, not the window's: beside the sidebar and the
+   rail it can be phone-narrow on a laptop. */
+.main { container-type:inline-size; }
+@container (max-width:560px) {
+  .progress { column-gap:var(--sp-10); }
   .member { grid-template-columns:1fr auto; }
   .member__served { grid-column:1 / -1; }
   .badges { grid-column:1 / -1; }

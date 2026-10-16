@@ -107,7 +107,7 @@ test.describe('D-Group leader Overview', () => {
     await expect(page.getByRole('tab', { name: 'Church' })).toHaveCount(0)
 
     await expect(page.locator('.big')).toHaveText('6 of 9')
-    await expect(page.getByText("at last Sunday's service · 2 Aug")).toBeVisible()
+    await expect(page.getByText("at the last recorded service · 2 Aug")).toBeVisible()
 
     const checkOn = page.locator('.check__list li')
     await expect(checkOn).toHaveText([
