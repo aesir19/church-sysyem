@@ -68,8 +68,8 @@ vi.mock('../../src/composables/useActiveChurch', () => ({
 vi.mock('../../src/composables/useCurrentRole', () => ({
   useCurrentRole: () => ({
     canSeeMemberDetail: { value: state.caps.canSeeMemberDetail ?? true },
-    canManageSmallGroups: { value: state.caps.canManageSmallGroups ?? true },
-    isSmallGroupLeader: { value: state.caps.isSmallGroupLeader ?? false },
+    canManageDGroups: { value: state.caps.canManageDGroups ?? true },
+    isDGroupLeader: { value: state.caps.isDGroupLeader ?? false },
     isSuperAdmin: { value: state.caps.isSuperAdmin ?? true },
     isHeadPastor: { value: state.caps.isHeadPastor ?? false },
     isPastor: { value: state.caps.isPastor ?? false },
@@ -87,7 +87,7 @@ vi.mock('vue-router', () => ({
 const GroupDetailView = (await import('../../src/views/GroupDetailView.vue')).default
 
 const MINISTRY = { id: 'g1', name: 'Worship Team', type: 'Ministry', church_id: null, ministry_key: null }
-const SMALL_GROUP = { id: 'g2', name: 'Thursday Group', type: 'Small Group', church_id: 'church-1', ministry_key: null }
+const D_GROUP = { id: 'g2', name: 'Thursday Group', type: 'D-Group', church_id: 'church-1', ministry_key: null }
 
 function member (over = {}) {
   return {
@@ -114,7 +114,7 @@ async function renderLoaded () {
 const render = renderLoaded
 
 beforeEach(() => {
-  state.group = SMALL_GROUP
+  state.group = D_GROUP
   state.roster = { ok: true, rows: [], count: 0, detail: 'full', message: '' }
   state.leader = { ok: true, leader: null }
   state.caps = {}
@@ -125,7 +125,7 @@ beforeEach(() => {
 })
 
 describe('the page renders without raising', () => {
-  it('renders for a small group', async () => {
+  it('renders for a D-Group', async () => {
     const html = await render()
     expect(typeof html).toBe('string')
   })
@@ -171,13 +171,13 @@ describe('the group-meeting surfaces are removed, not merely emptied', () => {
 })
 
 describe('the leader line', () => {
-  it('names the leader of a small group', async () => {
+  it('names the leader of a D-Group', async () => {
     state.leader = { ok: true, leader: { accountId: 'a1', memberId: '1', name: 'Anna Escuadro' } }
     const html = await renderLoaded()
     expect(html).toContain('Led by Anna Escuadro')
   })
 
-  it('says plainly when a small group has none', async () => {
+  it('says plainly when a D-Group has none', async () => {
     const html = await renderLoaded()
     expect(html).toContain('No leader assigned')
   })
@@ -200,7 +200,7 @@ describe('the leader line', () => {
 })
 
 describe('the roster marks the leader', () => {
-  // No small group on staging has a leader, so this is the only place the marked row is
+  // No D-Group on staging has a leader, so this is the only place the marked row is
   // exercised. The leader is stored account-side and the roster is member-side; the row
   // is matched on member id, and getting that wrong marks nobody or marks everybody.
   it('marks the leader’s row and leaves the rest as members', async () => {
@@ -214,7 +214,7 @@ describe('the roster marks the leader', () => {
 
     // Exactly one row is marked — not zero (matched on the wrong id) and not every row
     // (matched on nothing). Counted on the badge's closing tag so the header's own
-    // "Small group" badge and the "Members" tile label cannot be mistaken for a match.
+    // "D-Group" badge and the "Members" tile label cannot be mistaken for a match.
     expect((html.match(/Leader</g) || []).length).toBe(1)
     expect((html.match(/Member</g) || []).length).toBe(1)
   })
@@ -256,13 +256,13 @@ describe('what a caller without member detail sees', () => {
     expect(html).not.toContain('Journey across the group')
   })
 
-  // 0028: a small-group leader viewing a group THEY lead may record the one-to-one and
+  // 0028: a D-Group leader viewing a group THEY lead may record the one-to-one and
   // turning-point milestones inline. The chips appear only when the caller leads this
   // very group — set_member_journey() is the real gate, but a control that would bounce
   // is not offered.
   it('offers the journey toggles to a leader of THIS group', async () => {
-    state.caps = { canSeeMemberDetail: false, isSmallGroupLeader: true, canRecordJourney: true, isSuperAdmin: false, canManageSmallGroups: false, canManageGroupMembers: false }
-    state.ledGroupIds = ['g2'] // SMALL_GROUP.id
+    state.caps = { canSeeMemberDetail: false, isDGroupLeader: true, canRecordJourney: true, isSuperAdmin: false, canManageDGroups: false, canManageGroupMembers: false }
+    state.ledGroupIds = ['g2'] // D_GROUP.id
     state.roster = {
       ok: true,
       rows: [member({ memberId: '1', name: 'Juan Cruz', age: null, joined: null })],
@@ -275,7 +275,7 @@ describe('what a caller without member detail sees', () => {
   })
 
   it('withholds the journey toggles on a group the caller does NOT lead', async () => {
-    state.caps = { canSeeMemberDetail: false, isSmallGroupLeader: true, canRecordJourney: true, isSuperAdmin: false, canManageSmallGroups: false, canManageGroupMembers: false }
+    state.caps = { canSeeMemberDetail: false, isDGroupLeader: true, canRecordJourney: true, isSuperAdmin: false, canManageDGroups: false, canManageGroupMembers: false }
     state.ledGroupIds = ['some-other-group']
     state.roster = {
       ok: true,
@@ -308,7 +308,7 @@ describe('church resolution from the URL', () => {
   // The view must fall back to their home church.
   it('resolves the group for a single-church user (churches empty, homeChurch set)', async () => {
     state.churches = [] // single-church user
-    state.group = SMALL_GROUP
+    state.group = D_GROUP
     const html = await renderLoaded()
     expect(html).not.toContain('Group not found')
     expect(html).toContain('Thursday Group')
@@ -345,7 +345,7 @@ describe('management controls follow capability', () => {
 
   // Absent rather than disabled: an action bar should offer only what will work.
   it('hides them from a caller who may not manage this group', async () => {
-    state.caps = { canManageGroupMembers: false, canManageSmallGroups: false }
+    state.caps = { canManageGroupMembers: false, canManageDGroups: false }
     const html = await renderLoaded()
     expect(html).not.toContain('Add members')
     expect(html).not.toContain('Edit group')

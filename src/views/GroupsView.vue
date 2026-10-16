@@ -10,7 +10,7 @@ import { useCurrentRole } from '../composables/useCurrentRole'
 import { listGroups, countMembersInNoGroup } from '../lib/data/groups'
 import { slugify } from '../lib/data/group'
 
-// Ministries & groups — a wall of cards, one per group.
+// Ministries & Discipleship Groups — a wall of cards, one per group.
 //
 // Replaces MinistrySmallGroupView, which held its own queries, its own toast
 // implementation, four hand-rolled modals and 1,400 lines of CSS. The queries
@@ -19,13 +19,13 @@ import { slugify } from '../lib/data/group'
 //
 // THE TABS AND THE SEARCH ARE KEPT even though the mockup draws neither. They
 // exist today and this is a redesign: a church with four ministries and a dozen
-// small groups needs to be able to say "just the small groups". They are
+// D-Groups needs to be able to say "just the D-Groups". They are
 // restyled as the same pills the members roll uses rather than the old tab bar,
 // so the two screens filter the same way.
 
 const router = useRouter()
 const { activeChurchId, activeChurchName, ensureLoaded } = useActiveChurch()
-const { canManageSmallGroups, canSeeMemberDetail } = useCurrentRole()
+const { canManageDGroups, canSeeMemberDetail } = useCurrentRole()
 
 const groups = ref([])
 const assignments = ref(0)
@@ -43,7 +43,7 @@ const selectedGroup = ref(null)
 const FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'Ministry', label: 'Ministries' },
-  { key: 'Small Group', label: 'Small groups' }
+  { key: 'D-Group', label: 'D-Groups' }
 ]
 
 const visible = computed(() => {
@@ -55,7 +55,7 @@ const visible = computed(() => {
 
 // Every bar in the grid is drawn against the same reference, so the cards can
 // be compared with each other. Taken across ALL groups rather than the filtered
-// set, so switching to "Small groups" does not silently rescale every bar.
+// set, so switching to "D-Groups" does not silently rescale every bar.
 const maxCount = computed(() =>
   groups.value.reduce((max, g) => Math.max(max, g.member_count), 0)
 )
@@ -154,19 +154,19 @@ watch(activeChurchId, () => {
     >
       <div class="grp__title-block">
         <h1 class="grp__title">
-          Ministries &amp; groups
+          Ministries &amp; Discipleship Groups
         </h1>
         <p class="grp__sub">
           {{ subtitle }}
         </p>
       </div>
       <Button
-        v-if="canManageSmallGroups"
+        v-if="canManageDGroups"
         variant="primary"
         size="lg"
         @click="openCreate"
       >
-        + New small group
+        + New D-Group
       </Button>
     </header>
 
@@ -239,22 +239,22 @@ watch(activeChurchId, () => {
           Nothing matches “{{ search }}”
         </template>
         <template v-else-if="activeFilter !== 'all'">
-          No {{ activeFilter === 'Ministry' ? 'ministries' : 'small groups' }} yet
+          No {{ activeFilter === 'Ministry' ? 'ministries' : 'Discipleship Groups' }} yet
         </template>
         <template v-else>
           No groups yet
         </template>
       </h2>
       <p class="empty__body">
-        Small groups meet midweek, in homes. Ministries serve at services and are
+        Discipleship Groups meet midweek, in homes. Ministries serve at services and are
         shared across every church.
       </p>
       <Button
-        v-if="canManageSmallGroups"
+        v-if="canManageDGroups"
         variant="primary"
         @click="openCreate"
       >
-        + New small group
+        + New D-Group
       </Button>
     </div>
 
@@ -276,7 +276,7 @@ watch(activeChurchId, () => {
          roster, add-members, rename and delete all live there. What is left here is
          creating a group, which belongs to the grid rather than to any one group. -->
     <GroupFormModal
-      v-if="canManageSmallGroups"
+      v-if="canManageDGroups"
       v-model:open="formOpen"
       :mode="formMode"
       :group="selectedGroup"

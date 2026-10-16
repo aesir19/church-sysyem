@@ -119,7 +119,7 @@ describe('reka Dialog aria-describedby contract', () => {
 describe('Modal', () => {
 
   it('mounts clean, with no unresolved component', async () => {
-    const { errors, warnings } = await renderModal({ title: 'Delete Small Group' })
+    const { errors, warnings } = await renderModal({ title: 'Delete D-Group' })
     expect(errors).toEqual([])
     expect(warnings).toEqual([])
   })

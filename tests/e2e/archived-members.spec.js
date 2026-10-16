@@ -6,7 +6,7 @@ const ANA = {
   birthdate: '1992-08-03', date_joined: '2019-01-14', address: 'Example address', contact_number: '09170000000',
   archived_at: '2026-09-12T02:14:00Z', archived_reason: 'Moved away for work.', archived_by: 'Grace Example',
   account_id: 'account-ana', account_email: 'ana@example.test', disabled_at: '2026-09-12T02:14:00Z',
-  assignments: [{ key: 'role:member', label: 'Member', kind: 'Role' }, { key: 'ministry:youth', label: 'Youth Ministry', kind: 'Ministry' }, { key: 'group:cell4', label: 'Cell 4 · Tuesday', kind: 'Small group' }],
+  assignments: [{ key: 'role:member', label: 'Member', kind: 'Role' }, { key: 'ministry:youth', label: 'Youth Ministry', kind: 'Ministry' }, { key: 'group:cell4', label: 'Cell 4 · Tuesday', kind: 'D-Group' }],
 }
 
 test('opens a searchable read-only archive from Settings', async ({ page }) => {

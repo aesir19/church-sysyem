@@ -37,7 +37,7 @@ vi.mock('../../../src/lib/supabase', () => ({
 
 const {
   listAccounts, listChurchAccounts, listChurches, linkAccount, setUserRole,
-  assignSmallGroupLeader, unassignSmallGroupLeader, listGroupLeaders,
+  assignDGroupLeader, unassignDGroupLeader, listGroupLeaders,
   listPendingInvites, inviteAccount, resendInvite, cancelInvite, ADMIN_MESSAGES
 } = await import('../../../src/lib/data/admin')
 
@@ -172,7 +172,7 @@ describe('the writes', () => {
   it('surfaces the leader guard as a failure', async () => {
     state.rpc.link_account_to_member = {
       data: null,
-      error: { code: '23503', message: 'that account leads a small group — unassign them as leader first' }
+      error: { code: '23503', message: 'that account leads a D-Group — unassign them as leader first' }
     }
 
     const res = await linkAccount({ accountId: 'a1', memberId: null })
@@ -189,12 +189,12 @@ describe('the writes', () => {
     expect(rpcCalls('set_user_role')[0][2]).toEqual({ p_target: 'a1', p_role: 'pastor' })
   })
 
-  it('assigns and unassigns a small group leader', async () => {
+  it('assigns and unassigns a D-Group leader', async () => {
     state.rpc.assign_small_group_leader = { data: null, error: null }
     state.rpc.unassign_small_group_leader = { data: null, error: null }
 
-    expect((await assignSmallGroupLeader({ accountId: 'a1', groupId: 'g1' })).ok).toBe(true)
-    expect((await unassignSmallGroupLeader({ accountId: 'a1', groupId: 'g1' })).ok).toBe(true)
+    expect((await assignDGroupLeader({ accountId: 'a1', groupId: 'g1' })).ok).toBe(true)
+    expect((await unassignDGroupLeader({ accountId: 'a1', groupId: 'g1' })).ok).toBe(true)
 
     expect(rpcCalls('assign_small_group_leader')[0][2]).toEqual({ p_account: 'a1', p_group: 'g1' })
     expect(rpcCalls('unassign_small_group_leader')[0][2]).toEqual({ p_account: 'a1', p_group: 'g1' })
@@ -203,7 +203,7 @@ describe('the writes', () => {
   it('reports a refused assignment', async () => {
     state.rpc.assign_small_group_leader = { data: null, error: { code: '42501', message: 'not authorized' } }
 
-    const res = await assignSmallGroupLeader({ accountId: 'a1', groupId: 'g1' })
+    const res = await assignDGroupLeader({ accountId: 'a1', groupId: 'g1' })
 
     expect(res.ok).toBe(false)
   })
