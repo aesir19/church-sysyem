@@ -134,8 +134,9 @@ async function load () {
   if (groupId.value && !dashboard.value.groups.some(x => x.id === groupId.value)) groupId.value = null
   churchFailed.value = !events.ok
   churchItems.value = [...(events.ok ? events.items : []), ...services]
-    // Toned down: what the church has published, never another team's drafts.
-    .filter(item => item.isService || item.status === 'published')
+    // Toned down: what the church has published, never another team's drafts — and never
+    // a Group meeting, which the leader can see (0056) but is not a church event.
+    .filter(item => (item.isService || item.status === 'published') && item.kind !== 'group_meeting')
     .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
   loading.value = false
 }

@@ -46,6 +46,8 @@ const MESSAGES = {
 export const EVENT_COLUMNS =
   'id, church_id, title, kind, status, starts_at, ends_at, location, description, ' +
   'run_by, projected_budget, cancel_reason, series_id, occurrence_date, ' +
+  // 0056: the D-Group a Group meeting belongs to (NULL for every other event).
+  'small_group_id, ' +
   // Stage 3 (0035): the room link, the attendance switch, the closeout stamp, and the review.
   'room_id, attendance_tracked, closed_at, review_went_well, review_went_wrong, review_followups, ' +
   'created_at, created_by, updated_at, published_at'

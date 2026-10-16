@@ -64,7 +64,9 @@ const MEMBERS_9 = [
 const CHURCH_EVENTS = [
   { id: 'e-prayer', church_id: CHURCH.id, title: 'Prayer meeting', kind: 'special_service', status: 'published', starts_at: '2026-08-05T11:00:00Z', series_id: null },
   { id: 'e-outreach', church_id: CHURCH.id, title: 'Outreach — Cogon', kind: 'outreach', status: 'published', starts_at: '2026-08-07T07:00:00Z', series_id: null },
-  { id: 'e-draft', church_id: CHURCH.id, title: 'Unannounced planning draft', kind: 'administrative', status: 'draft', starts_at: '2026-08-06T07:00:00Z', series_id: null }
+  { id: 'e-draft', church_id: CHURCH.id, title: 'Unannounced planning draft', kind: 'administrative', status: 'draft', starts_at: '2026-08-06T07:00:00Z', series_id: null },
+  // The leader's own group meeting: theirs to see (0056), but not a church event.
+  { id: 'e-meeting', church_id: CHURCH.id, title: 'Weekly D-Group night', kind: 'group_meeting', status: 'published', starts_at: '2026-08-06T11:30:00Z', series_id: null, small_group_id: 'g4' }
 ]
 const SCHEDULES = [{ id: 'sched-sun', label: 'Sunday Service', weekday: 0, starts_at: '09:00:00', ends_at: '12:00:00' }]
 
