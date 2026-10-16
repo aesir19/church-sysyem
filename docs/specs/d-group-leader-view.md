@@ -104,6 +104,32 @@ and SuperAdmin. The form says "Only this group sees it on the Calendar" (replace
 mockup's "Not shown on the church Calendar"). Enforce in the database, including direct
 API calls.
 
+### Decided while building (owner, 16 October 2026)
+
+- **Repeat** (D1–D4): weekly and every 2 weeks count from the first date; monthly is the
+  same weekday each month (the 1st Thursday), and a fifth weekday becomes "the last".
+  A repeat ends after N meetings (the form defaults to 8) or never.
+- **The Group meetings card** shows each repeating meeting once, at its next date, then
+  upcoming one-offs, then meetings from the last 14 days. A later date of a repeating
+  meeting is changed from the Calendar.
+- **The form** (S1, S2): an "Ends: after [N] meetings / never" control under Repeat.
+  "Edit…" changes this meeting only; "Change from here on…" changes this date and every
+  one after it (the split), restarting the count from that date.
+- **Cancel** (S3) asks for confirmation and takes an optional reason, which group members
+  see beside the cancelled meeting on the Calendar.
+- **"Delete → This meeting"** on a repeating meeting marks that date cancelled (the repeat
+  engine cannot leave a date out without a saved row); "This and following" ends the
+  series the day before; "The whole series" deletes it, keeping its past.
+- **On a phone** (S4) the Group meetings card sits right after This week.
+- **On the Calendar** a meeting's preview names its group and offers no "I can serve".
+  A leader of that group gets the meeting's actions there; the Events Team and SuperAdmin
+  keep "Go to event" instead (C1).
+- **Deleting a D-Group deletes its meetings** — rather than leaving them without a group,
+  which would make a member's home address visible to the whole church.
+- **0057** fixes a bug found during the live check that also affected the Events team:
+  saving one date of any repeating event ("Skip this date", "This date only") was refused
+  by the database, because its uniqueness rule was a partial index the save could not use.
+
 ## Mockup corrections
 
 - 13e: Check on rows read "· undefined"; show the group name.
