@@ -27,7 +27,7 @@ vi.mock('../../../src/lib/supabase', () => ({
 }))
 
 const {
-  myLedGroupIds, meetingFromCalendarItem, meetingActions, groupNamesFor, meetingRule, repeatSummary, formSummary, cardMeetings, pastLabel, editMeeting, changeFromHere, createGroupMeeting, listGroupMeetings, meetingMenu, cancelMeeting, moveMeeting, deleteMeeting
+  myLedGroupIds, meetingFromCalendarItem, actionOpensForm, meetingActions, groupNamesFor, meetingRule, repeatSummary, formSummary, cardMeetings, pastLabel, editMeeting, changeFromHere, createGroupMeeting, listGroupMeetings, meetingMenu, cancelMeeting, moveMeeting, deleteMeeting
 } = await import('../../../src/lib/data/groupMeetings')
 
 const calls = (table, name) => state.calls.filter(c => c.table === table && c.name === name)
@@ -229,7 +229,7 @@ describe('meetingMenu — the ⋯ menu (13i)', () => {
 })
 
 describe('cancel, move and delete pick the right path', () => {
-  const series = { id: 'ser1', church_id: 'c1', title: 'Weekly D-Group night', kind: 'group_meeting', timeStart: '19:30', timeEnd: '21:00' }
+  const series = { id: 'ser1', church_id: 'c1', title: 'Weekly D-Group night', kind: 'group_meeting', timeStart: '19:30', timeEnd: '21:00', startsOn: '2026-07-30' }
   const worked = { id: 'series-ser1-2026-08-13', seriesId: 'ser1', series, occurrenceDate: '2026-08-13', startsAt: '2026-08-13T11:30:00.000Z' }
   const single = { id: 'ev1', seriesId: null, startsAt: '2026-08-15T10:00:00Z' }
 
@@ -270,6 +270,39 @@ describe('cancel, move and delete pick the right path', () => {
     const r = await deleteMeeting(worked, 'series')
     expect(r.ok).toBe(true)
     expect(calls('rpc', 'delete_event_series')[0].args).toEqual({ p_series: 'ser1' })
+  })
+})
+
+describe('deleteMeeting — "This and following"', () => {
+  const series = { id: 'ser1', church_id: 'c1', title: 'Weekly D-Group night', kind: 'group_meeting', timeStart: '19:30', startsOn: '2026-07-30' }
+  const date = d => ({ id: `series-ser1-${d}`, seriesId: 'ser1', series, occurrenceDate: d, startsAt: `${d}T11:30:00.000Z` })
+
+  it('from the first date is the whole series — an end before the start would be refused', async () => {
+    state.rpcResult = { data: { already_deleted: false, kept: 0, removed: 2 }, error: null }
+    const r = await deleteMeeting(date('2026-07-30'), 'following')
+    expect(r.ok).toBe(true)
+    expect(calls('rpc', 'delete_event_series')).toHaveLength(1)
+    expect(calls('event_series', 'update')).toHaveLength(0)
+  })
+
+  it('from a later date removes the saved dates from there on, then ends the series the day before', async () => {
+    state.results.events = { data: [], error: null }
+    const r = await deleteMeeting(date('2026-08-13'), 'following')
+    expect(r.ok).toBe(true)
+    const del = state.calls.filter(c => c.table === 'events')
+    expect(del.map(c => c.name)).toEqual(['from', 'delete', 'eq', 'gte'])
+    expect(del[2].args).toEqual(['series_id', 'ser1'])
+    expect(del[3].args).toEqual(['occurrence_date', '2026-08-13'])
+    expect(calls('event_series', 'update')[0].args[0]).toMatchObject({ ends_on: '2026-08-12' })
+    // Saved dates go first: if that fails, the series is left as it was.
+    expect(state.calls.findIndex(c => c.name === 'delete')).toBeLessThan(state.calls.findIndex(c => c.table === 'event_series'))
+  })
+
+  it('stops, changing nothing else, when the saved dates cannot be removed', async () => {
+    state.results.events = { data: null, error: { message: 'refused' } }
+    const r = await deleteMeeting(date('2026-08-13'), 'following')
+    expect(r.ok).toBe(false)
+    expect(calls('event_series', 'update')).toHaveLength(0)
   })
 })
 
@@ -385,5 +418,11 @@ describe('groupNamesFor', () => {
   it('answers nothing, rather than failing the Calendar, when it cannot read them', async () => {
     state.results.small_groups = { data: null, error: { message: 'x' } }
     expect(await groupNamesFor('c1')).toEqual({})
+  })
+})
+
+describe('actionOpensForm — where a ⋯ action goes', () => {
+  it('opens the form for Edit and Change from here on, a dialog for the rest', () => {
+    expect(['edit', 'from-here', 'move', 'cancel', 'delete'].map(actionOpensForm)).toEqual([true, true, false, false, false])
   })
 })

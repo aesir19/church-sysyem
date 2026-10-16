@@ -143,7 +143,7 @@ export async function listGroupMeetings ({ groupIds, now = new Date() }) {
   if (eventsRes.error || seriesRes.error) return { ok: false, meetings: [], message: MESSAGES.loadFailed }
 
   const rows = eventsRes.data ?? []
-  const seriesById = new Map((seriesRes.data ?? []).map(row => [row.id, { ...toSeries(row), groupId: row.small_group_id }]))
+  const seriesById = new Map((seriesRes.data ?? []).map(row => [row.id, toSeries(row)]))
   const merged = mergeSeriesOccurrences({
     seriesList: [...seriesById.values()],
     exceptions: rows.filter(r => r.series_id),
@@ -154,26 +154,7 @@ export async function listGroupMeetings ({ groupIds, now = new Date() }) {
   const items = [...merged, ...rows.filter(r => !r.series_id && inWindow(r))]
 
   const meetings = items
-    .map(item => {
-      const series = seriesById.get(item.seriesId ?? item.series_id) ?? null
-      return {
-        id: item.id,
-        groupId: item.small_group_id ?? series?.groupId ?? null,
-        title: item.title,
-        startsAt: item.starts_at,
-        endsAt: item.ends_at ?? null,
-        location: item.location ?? null,
-        notes: item.description ?? null,
-        status: item.status,
-        cancelReason: item.cancel_reason ?? null,
-        seriesId: series?.id ?? null,
-        occurrenceDate: item.occurrence_date ?? null,
-        series,
-        repeatText: series ? repeatSummary(series) : null,
-        countN: series?.countN ?? null,
-        virtual: !!item.virtual
-      }
-    })
+    .map(item => toMeeting(item, seriesById.get(seriesIdOf(item)) ?? null))
     .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt))
   return { ok: true, meetings, message: '' }
 }
@@ -219,8 +200,21 @@ export function moveMeeting (meeting, { date, startTime, endTime = null }) {
 export function deleteMeeting (meeting, scope = 'this') {
   if (!meeting.seriesId) return deleteEvent(meeting.id)
   if (scope === 'series') return deleteSeries({ seriesId: meeting.seriesId })
-  if (scope === 'following') return updateSeries(meeting.seriesId, { ends_on: dayBefore(meeting.occurrenceDate) })
+  if (scope === 'following') return deleteFollowing(meeting)
   return skipOccurrence({ series: meeting.series, occurrenceDate: meeting.occurrenceDate })
+}
+
+// "This and following". From the first date that is the whole series — ending it the day
+// before would put its end before its start, which the database refuses. Otherwise the
+// saved dates from there on (moved, edited or cancelled ones, which stand as their own rows)
+// go first, then the series ends the day before; if the first step fails nothing else
+// changes. A Group meeting carries no attendance or finance, so its saved dates can go.
+async function deleteFollowing (meeting) {
+  const { seriesId, occurrenceDate, series } = meeting
+  if (!series?.startsOn || occurrenceDate <= series.startsOn) return deleteSeries({ seriesId })
+  const { error } = await supabase.from('events').delete().eq('series_id', seriesId).gte('occurrence_date', occurrenceDate)
+  if (error) return { ok: false, message: 'Those meetings could not be deleted. Please try again.', rows: [] }
+  return updateSeries(seriesId, { ends_on: dayBefore(occurrenceDate) })
 }
 
 /**
@@ -316,35 +310,14 @@ export async function myLedGroupIds () {
  * so it is read here; a one-off needs nothing more. Returns { ok, meeting }.
  */
 export async function meetingFromCalendarItem (item) {
-  const seriesId = item.seriesId ?? item.series_id ?? null
+  const seriesId = seriesIdOf(item)
   let series = null
-  let groupId = item.small_group_id ?? null
   if (seriesId) {
     const r = await getSeries(seriesId)
     if (!r.ok || !r.series) return { ok: false, meeting: null }
     series = r.series
-    groupId = groupId ?? r.series.smallGroupId ?? null
   }
-  return {
-    ok: true,
-    meeting: {
-      id: item.id,
-      groupId,
-      title: item.title,
-      startsAt: item.starts_at,
-      endsAt: item.ends_at ?? null,
-      location: item.location ?? null,
-      notes: item.description ?? null,
-      status: item.status,
-      cancelReason: item.cancel_reason ?? null,
-      seriesId,
-      occurrenceDate: item.occurrence_date ?? null,
-      series,
-      repeatText: series ? repeatSummary(series) : null,
-      countN: series?.countN ?? null,
-      virtual: !!item.virtual
-    }
-  }
+  return { ok: true, meeting: toMeeting(item, series) }
 }
 
 /**
@@ -381,4 +354,37 @@ export async function groupNamesFor (churchId) {
   const { data, error } = await supabase.from('small_groups').select('id, name').eq('church_id', churchId)
   if (error || !data) return {}
   return Object.fromEntries(data.map(g => [g.id, g.name]))
+}
+
+// A Calendar or events row's series: worked-out dates carry seriesId, saved rows series_id.
+export function seriesIdOf (item) {
+  return item?.seriesId ?? item?.series_id ?? null
+}
+
+// The one meeting shape every screen uses — from an events row or a worked-out date, with
+// its series (engine shape) when it repeats. Built in one place so the D-Group card and the
+// Calendar can never describe the same meeting differently.
+function toMeeting (item, series) {
+  return {
+    id: item.id,
+    groupId: item.small_group_id ?? series?.smallGroupId ?? null,
+    title: item.title,
+    startsAt: item.starts_at,
+    endsAt: item.ends_at ?? null,
+    location: item.location ?? null,
+    notes: item.description ?? null,
+    status: item.status,
+    cancelReason: item.cancel_reason ?? null,
+    seriesId: series?.id ?? seriesIdOf(item),
+    occurrenceDate: item.occurrence_date ?? null,
+    series,
+    repeatText: series ? repeatSummary(series) : null,
+    countN: series?.countN ?? null,
+    virtual: !!item.virtual
+  }
+}
+
+/** Edit… and Change from here on… open the form; the other actions open a dialog. */
+export function actionOpensForm (kind) {
+  return kind === 'edit' || kind === 'from-here'
 }

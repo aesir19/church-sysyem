@@ -14,7 +14,7 @@ import GroupMeetingForm from '../../components/groups/GroupMeetingForm.vue'
 import GroupMeetingDialogs from '../../components/groups/GroupMeetingDialogs.vue'
 import { useActiveChurch } from '../../composables/useActiveChurch'
 import { showToast } from '../../composables/useToast'
-import { listGroupMeetings } from '../../lib/data/groupMeetings'
+import { listGroupMeetings, actionOpensForm } from '../../lib/data/groupMeetings'
 import { fetchDGroupDashboard, summarizeDGroup } from '../../lib/data/dGroup'
 import { listServiceOccurrences } from '../../lib/data/events'
 import { listCalendarOccurrences } from '../../lib/data/eventSeries'
@@ -170,7 +170,7 @@ function openForm (mode = 'create', meeting = null) {
   form.value = { open: true, mode, meeting }
 }
 function onMeetingAction ({ kind, meeting }) {
-  if (kind === 'edit' || kind === 'from-here') openForm(kind, meeting)
+  if (actionOpensForm(kind)) openForm(kind, meeting)
   else action.value = { kind, meeting }
 }
 function onMeetingSaved (message) {

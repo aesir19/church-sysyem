@@ -20,15 +20,18 @@ import { makeChurch, makePrincipal, makeDGroup, addToGroup, findSystemMinistry }
 
 afterAll(disconnect)
 
-const CANDIDATE = '0056_d_group_meetings'
+// 0056 (the rules) and 0058 (the two summaries that read events past them).
+const CANDIDATES = ['0056_d_group_meetings', '0058_group_meetings_out_of_summaries']
 async function candidate (tx) {
-  const path = new URL(`../../prisma/migrations/${CANDIDATE}/migration.sql`, import.meta.url)
-  if (!existsSync(path)) return
-  const [applied] = await tx.$queryRawUnsafe(
-    'SELECT EXISTS (SELECT 1 FROM public._prisma_migrations WHERE migration_name = $1 AND finished_at IS NOT NULL) AS done', CANDIDATE)
-  if (applied.done) return
-  const sql = readFileSync(path, 'utf8').replace(/^BEGIN;\s*/m, '').replace(/^COMMIT;\s*/m, '')
-  await tx.$executeRawUnsafe(`DO $candidate$ BEGIN EXECUTE $migration$${sql}$migration$; END $candidate$;`)
+  for (const name of CANDIDATES) {
+    const path = new URL(`../../prisma/migrations/${name}/migration.sql`, import.meta.url)
+    if (!existsSync(path)) continue
+    const [applied] = await tx.$queryRawUnsafe(
+      'SELECT EXISTS (SELECT 1 FROM public._prisma_migrations WHERE migration_name = $1 AND finished_at IS NOT NULL) AS done', name)
+    if (applied.done) continue
+    const sql = readFileSync(path, 'utf8').replace(/^BEGIN;\s*/m, '').replace(/^COMMIT;\s*/m, '')
+    await tx.$executeRawUnsafe(`DO $candidate$ BEGIN EXECUTE $migration$${sql}$migration$; END $candidate$;`)
+  }
 }
 
 // One church, two D-Groups, and everyone whose access differs.
@@ -245,6 +248,34 @@ describe.skipIf(!hasDatabase())('Group meetings — database contract', () => {
       await asOwner(tx)
       for (const who of [w.outsider, w.pastor, w.leader]) expect(await sees(tx, who, 'events', id)).toBe(true)
       expect(await affected(tx, w.leader, `UPDATE public.events SET title = 'zz-x' WHERE id = $1::uuid`, id)).toBe(0)
+    })
+  })
+
+  // The two summaries that read events with definer rights (0042, 0055) must not carry a
+  // Group meeting past its rules — even one the Events team gave serving roles in the full
+  // composer, since a leader's own form has none.
+  it('keeps Group meetings out of the "needs people" list and "serving this week"', async () => {
+    await withRollback(async tx => {
+      const w = await world(tx)
+      const meeting = await seedMeeting(tx, { ...w, when: "now() + interval '1 day'" })
+      const [role] = await tx.$queryRawUnsafe(
+        `INSERT INTO public.event_roles (church_id, event_id, label, count_required) VALUES ($1::uuid, $2::uuid, 'zz-snacks', 3) RETURNING id`,
+        w.church, meeting)
+      // Someone from the OTHER group serves at it, so the other group's leader would see it.
+      await tx.$executeRawUnsafe(
+        `INSERT INTO public.event_assignments (church_id, event_id, role_id, member_id, status) VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, 'confirmed')`,
+        w.church, meeting, role.id, w.outsider.memberId)
+
+      await asPrincipal(tx, w.pastor.accountId)
+      const gaps = await tx.$queryRawUnsafe(
+        `SELECT id FROM public.list_understaffed_events($1::uuid, now() - interval '1 day', NULL, true)`, w.church)
+      await asOwner(tx)
+      expect(gaps.map(g => g.id)).not.toContain(meeting)
+
+      await asPrincipal(tx, w.otherLeader.accountId)
+      const [{ d }] = await tx.$queryRawUnsafe('SELECT public.d_group_dashboard() AS d')
+      await asOwner(tx)
+      expect(JSON.stringify(d)).not.toContain('zz-meeting')
     })
   })
 })

@@ -32,7 +32,7 @@ import EventPeekCard from '../components/events/EventPeekCard.vue'
 import GroupMeetingForm from '../components/groups/GroupMeetingForm.vue'
 import GroupMeetingDialogs from '../components/groups/GroupMeetingDialogs.vue'
 import { showToast } from '../composables/useToast'
-import { myLedGroupIds, groupNamesFor, meetingActions, meetingFromCalendarItem } from '../lib/data/groupMeetings'
+import { myLedGroupIds, groupNamesFor, meetingActions, meetingFromCalendarItem, seriesIdOf, actionOpensForm } from '../lib/data/groupMeetings'
 
 const router = useRouter()
 const { activeChurchId, churches, ensureLoaded } = useActiveChurch()
@@ -297,7 +297,7 @@ const peekGroupName = computed(() => groupNames.value[peekItem.value?.small_grou
 const peekActions = computed(() => {
   const it = peekItem.value
   if (!it || it.kind !== 'group_meeting' || !ledGroupIds.value.includes(it.small_group_id)) return []
-  return meetingActions({ startsAt: it.starts_at, status: it.status, seriesId: it.seriesId ?? it.series_id ?? null })
+  return meetingActions({ startsAt: it.starts_at, status: it.status, seriesId: seriesIdOf(it) })
 })
 
 async function onPeekAction(kind) {
@@ -305,7 +305,7 @@ async function onPeekAction(kind) {
   peekOpen.value = false
   const r = await meetingFromCalendarItem(item)
   if (!r.ok) { showToast('That meeting could not be opened. Please try again.', 'error'); return }
-  if (kind === 'edit' || kind === 'from-here') meetingForm.value = { open: true, mode: kind, meeting: r.meeting }
+  if (actionOpensForm(kind)) meetingForm.value = { open: true, mode: kind, meeting: r.meeting }
   else meetingAction.value = { kind, meeting: r.meeting }
 }
 function onMeetingSaved(message) {
