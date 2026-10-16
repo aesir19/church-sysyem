@@ -87,7 +87,7 @@ export const iconPaths = {
     ['path', { d: 'M10 21v-5a2 2 0 1 1 4 0v5' }],
     ['line', { x1: 2, y1: 21, x2: 22, y2: 21 }]
   ],
-  // DRAWN. Marks the leader on a small group card and in its roster — deliberately
+  // DRAWN. Marks the leader on a D-Group card and in its roster — deliberately
   // not the plain member avatar, because a leader is a different kind of thing.
   star: [
     ['path', { d: 'M12 3.5l2.6 5.3 5.9.9-4.2 4.1 1 5.8-5.3-2.8-5.3 2.8 1-5.8L3.5 9.7l5.9-.9z' }]

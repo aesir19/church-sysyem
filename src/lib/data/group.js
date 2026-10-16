@@ -9,7 +9,7 @@
 // once already when the queries lived inline.
 //
 // 1. WHICH TABLE DEPENDS ON WHAT KIND OF GROUP IT IS. Since 0026 there is no `groups`
-//    table: a ministry is a row in `ministries`, a small group one in `small_groups`,
+//    table: a ministry is a row in `ministries`, a D-Group one in `small_groups`,
 //    and their memberships live in two more. A group id alone does not say which, so
 //    fetchGroup() probes both and every later call takes the resolved group, not an id.
 //
@@ -71,15 +71,15 @@ export function slugify (name) {
 /**
  * Find a group from the church and group names in the URL.
  *
- * WHY THE CHURCH IS IN THE PATH. A small group's name is unique only within its church,
+ * WHY THE CHURCH IS IN THE PATH. A D-Group's name is unique only within its church,
  * so two churches may both have a "Thursday Group" and `/groups/thursday-group` cannot
  * say which. Naming the church resolves it without appending characters nobody can
  * read. It is also honest about what the page shows: a ministry is global, but its
  * ROSTER here is scoped to one church, so `/groups/cogon/worship-team` really does mean
  * "the Worship Team as Cogon sees it" rather than a claim that Cogon owns it.
  *
- * A ministry and a small group in one church could still share a name. That is rare and
- * has to resolve somehow, so the small group wins: it is the one that actually belongs
+ * A ministry and a D-Group in one church could still share a name. That is rare and
+ * has to resolve somehow, so the D-Group wins: it is the one that actually belongs
  * to the church in the path, and the ministry is reachable from every other church.
  *
  * Both name lists are small — the Groups page already fetches all of them on every
@@ -92,19 +92,19 @@ export async function fetchGroupBySlug ({ churchId, groupSlug }) {
 
   const wanted = slugify(groupSlug)
 
-  const [ministriesRes, smallGroupsRes] = await Promise.all([
+  const [ministriesRes, dGroupsRes] = await Promise.all([
     supabase.from(GROUP_TABLES.Ministry).select('id, name, ministry_key'),
-    supabase.from(GROUP_TABLES['Small Group']).select('id, name, church_id').eq('church_id', churchId)
+    supabase.from(GROUP_TABLES['D-Group']).select('id, name, church_id').eq('church_id', churchId)
   ])
 
-  const failure = ministriesRes.error || smallGroupsRes.error
+  const failure = ministriesRes.error || dGroupsRes.error
   if (failure) {
     return { ok: false, message: MESSAGES.loadFailed, group: null, cause: failure }
   }
 
-  const smallGroup = (smallGroupsRes.data || []).find(row => slugify(row.name) === wanted)
-  if (smallGroup) {
-    return { ok: true, message: '', group: asGroup(smallGroup, 'Small Group'), cause: null }
+  const dGroup = (dGroupsRes.data || []).find(row => slugify(row.name) === wanted)
+  if (dGroup) {
+    return { ok: true, message: '', group: asGroup(dGroup, 'D-Group'), cause: null }
   }
 
   const ministry = (ministriesRes.data || []).find(row => slugify(row.name) === wanted)
@@ -122,33 +122,33 @@ export async function fetchGroupBySlug ({ churchId, groupSlug }) {
  *
  * Returns `{ ok: true, group: null }` for an id that resolves to nothing — which is
  * both "no such group" and "a group you may not see", because RLS returns no row for
- * either and the page must not distinguish them. Telling a Pastor that a small group
+ * either and the page must not distinguish them. Telling a Pastor that a D-Group
  * exists in a church that is not theirs is the leak this prevents.
  */
 export async function fetchGroup ({ groupId }) {
   if (!groupId) return { ok: true, message: '', group: null, cause: null }
 
-  const [ministryRes, smallGroupRes] = await Promise.all([
+  const [ministryRes, dGroupRes] = await Promise.all([
     supabase.from(GROUP_TABLES.Ministry)
       .select('id, name, ministry_key').eq('id', groupId).maybeSingle(),
-    supabase.from(GROUP_TABLES['Small Group'])
+    supabase.from(GROUP_TABLES['D-Group'])
       .select('id, name, church_id').eq('id', groupId).maybeSingle()
   ])
 
   // A failure is not an absence. Reporting "not found" when the query actually errored
   // would tell the user their group was deleted.
-  const failure = ministryRes.error || smallGroupRes.error
+  const failure = ministryRes.error || dGroupRes.error
   if (failure) {
     return { ok: false, message: MESSAGES.loadFailed, group: null, cause: failure }
   }
 
-  const row = ministryRes.data || smallGroupRes.data
+  const row = ministryRes.data || dGroupRes.data
   if (!row) return { ok: true, message: '', group: null, cause: null }
 
   return {
     ok: true,
     message: '',
-    group: asGroup(row, ministryRes.data ? 'Ministry' : 'Small Group'),
+    group: asGroup(row, ministryRes.data ? 'Ministry' : 'D-Group'),
     cause: null
   }
 }
@@ -184,7 +184,7 @@ export async function fetchRoster ({ group, churchId, canSeeMemberDetail }) {
   // It is church-scoped (its own `scope` CTE: the caller's church, or every church for a
   // global role, narrowed here to the active one by p_church_id), which is exactly
   // Rule 2 for a ministry roster. And because ministry names are globally unique and
-  // small-group names unique per church, a returned row can be matched to THIS group by
+  // D-Group names unique per church, a returned row can be matched to THIS group by
   // name with no collision — so no group id needs to cross into directory_search.
   if (!canSeeMemberDetail) {
     const { data, error } = await supabase.rpc('directory_search', {
@@ -198,7 +198,7 @@ export async function fetchRoster ({ group, churchId, canSeeMemberDetail }) {
       return { ok: false, message: MESSAGES.rosterFailed, rows: [], count: 0, detail: 'names', cause: error }
     }
 
-    const membershipKey = group.type === 'Small Group' ? 'small_groups' : 'ministries'
+    const membershipKey = group.type === 'D-Group' ? 'small_groups' : 'ministries'
     const rows = (data || [])
       // directory_search already orders by last name, first name — the same order the
       // full roster uses — so the filter preserves it rather than re-sorting on a
@@ -213,7 +213,7 @@ export async function fetchRoster ({ group, churchId, canSeeMemberDetail }) {
         age: null,
         joined: null,
         // Journey rides along on directory_search() since 0028 — it is ministry-
-        // operational, not PII — so a names-only roster (a small-group leader's view of
+        // operational, not PII — so a names-only roster (a D-Group leader's view of
         // their own group) can show and, for the two allowed milestones, record it.
         isBaptized: !!r.is_baptized,
         isOneToOneCompleted: !!r.is_one_to_one_completed,
@@ -258,7 +258,7 @@ export async function fetchRoster ({ group, churchId, canSeeMemberDetail }) {
 }
 
 /**
- * Who leads this small group, as a member rather than an account.
+ * Who leads this D-Group, as a member rather than an account.
  *
  * The leader is stored account-side — `small_group_leaders.account_id` — because the
  * powers follow the sign-in (0022). The roster is member-side. Resolving one to the
@@ -269,7 +269,7 @@ export async function fetchRoster ({ group, churchId, canSeeMemberDetail }) {
  * rather than an error, since "no leader" is the truthful answer either way.
  */
 export async function fetchLeader ({ group }) {
-  if (!group || group.type !== 'Small Group') {
+  if (!group || group.type !== 'D-Group') {
     return { ok: true, message: '', leader: null, cause: null }
   }
 
@@ -326,7 +326,7 @@ export async function fetchLeader ({ group }) {
  * leader, and zero rows to a caller who could not assign one anyway.
  */
 export async function fetchLeaderCandidates ({ group } = {}) {
-  if (!group || group.type !== 'Small Group') {
+  if (!group || group.type !== 'D-Group') {
     return { ok: true, message: '', candidates: [], cause: null }
   }
 
@@ -383,7 +383,7 @@ export function journeyFor ({ rows, detail }) {
 /**
  * Record the one-to-one and turning-point milestones for a roster member.
  *
- * A small-group leader may write ONLY these two flags, and only for a member of a
+ * A D-Group leader may write ONLY these two flags, and only for a member of a
  * group they lead; SuperAdmin may too. The rule and the two-column restriction live
  * in set_member_journey() (0028) — this is the app-side seam, not the enforcement.
  * Baptism and membership certification are not writable here; they stay a
@@ -406,7 +406,7 @@ export async function recordJourney ({ memberId, oneToOne, turningPoint }) {
 }
 
 /**
- * The small groups the signed-in caller leads, as an array of ids. Empty for
+ * The D-Groups the signed-in caller leads, as an array of ids. Empty for
  * everyone who leads none. Used to decide whether to offer the journey toggles on
  * THIS group — set_member_journey() is the real gate, but a control that would
  * bounce should not be shown (the roster-is-the-candidate-list rule, applied to

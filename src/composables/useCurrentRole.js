@@ -97,9 +97,9 @@ export function useCurrentRole() {
     isWelcome: c('isWelcome'),
     isEventsTeam: c('isEventsTeam'),
     // Derived by capabilities.js since 0022 but never surfaced here until the group
-    // page needed it: a Small Group Leader gets no click-through from a roster row to
+    // page needed it: a D-Group Leader gets no click-through from a roster row to
     // member detail, so the restriction on their account holds there too.
-    isSmallGroupLeader: c('isSmallGroupLeader'),
+    isDGroupLeader: c('isDGroupLeader'),
     // capabilities
     canSeeMemberDetail: c('canSeeMemberDetail'),
     canBrowseDirectory: c('canBrowseDirectory'),
@@ -111,7 +111,7 @@ export function useCurrentRole() {
     canSeeContributorIdentity: c('canSeeContributorIdentity'),
     canViewAttendance: c('canViewAttendance'),
     canManageAttendance: c('canManageAttendance'),
-    canManageSmallGroups: c('canManageSmallGroups'),
+    canManageDGroups: c('canManageDGroups'),
     canInvite: c('canInvite'),
     canViewEvents: c('canViewEvents'),
     canManageEvents: c('canManageEvents'),

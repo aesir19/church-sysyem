@@ -13,7 +13,7 @@ import {
 } from './helpers/database.js'
 import {
   makeChurch, makeMember, makePrincipal, makeMinistry, makeKeyedMinistry,
-  makeSmallGroup, addToGroup, findSystemMinistry
+  makeDGroup, addToGroup, findSystemMinistry
 } from './helpers/fixtures.js'
 
 afterAll(disconnect)
@@ -98,14 +98,14 @@ describe.skipIf(!hasDatabase())('ministry membership decides ministry roles', ()
       const church = await makeChurch(tx)
       const finance = await findSystemMinistry(tx, 'finance')
       const otherMinistry = await makeMinistry(tx, { label: 'not-finance' })
-      const smallGroup = await makeSmallGroup(tx, church)
+      const dGroup = await makeDGroup(tx, church)
       const { accountId } = await makePrincipal(tx, { role: 'super_admin', churchId: church })
 
       await asPrincipal(tx, accountId)
 
       expect(await predicate(tx, 'is_finance_group', finance)).toBe(true)
       expect(await predicate(tx, 'is_finance_group', otherMinistry)).toBe(false)
-      expect(await predicate(tx, 'is_finance_group', smallGroup)).toBe(false)
+      expect(await predicate(tx, 'is_finance_group', dGroup)).toBe(false)
     })
   })
 })
@@ -258,7 +258,7 @@ describe.skipIf(!hasDatabase())('the two paths to member data', () => {
     await withRollback(async tx => {
       const church = await makeChurch(tx)
       const subject = await makeMember(tx, church, 'findable')
-      const group = await makeSmallGroup(tx, church)
+      const group = await makeDGroup(tx, church)
       await addToGroup(tx, group, subject)
       const { accountId } = await makePrincipal(tx, { role: 'head_pastor', churchId: church })
 

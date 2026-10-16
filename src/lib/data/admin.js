@@ -99,7 +99,7 @@ export async function listChurches ({ canAssignPastors }) {
 /**
  * Tie a sign-in to a member record. Passing `memberId: null` unlinks.
  *
- * Refused if the account leads a small group and the member is changing (0023) — the
+ * Refused if the account leads a D-Group and the member is changing (0023) — the
  * group would end up led by someone who was never on its roster.
  */
 export function linkAccount ({ accountId, memberId }) {
@@ -117,15 +117,15 @@ export function setUserRole ({ accountId, role }) {
   )
 }
 
-/** Make this account the leader of this small group. */
-export function assignSmallGroupLeader ({ accountId, groupId }) {
+/** Make this account the leader of this D-Group. */
+export function assignDGroupLeader ({ accountId, groupId }) {
   return writeRpc(
     supabase.rpc('assign_small_group_leader', { p_account: accountId, p_group: groupId }),
     { messages: { failed: MESSAGES.assignFailed } }
   )
 }
 
-export function unassignSmallGroupLeader ({ accountId, groupId }) {
+export function unassignDGroupLeader ({ accountId, groupId }) {
   return writeRpc(
     supabase.rpc('unassign_small_group_leader', { p_account: accountId, p_group: groupId }),
     { messages: { failed: MESSAGES.unassignFailed } }

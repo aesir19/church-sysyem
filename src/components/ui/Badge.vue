@@ -1,6 +1,6 @@
 <script setup>
 // Tags and pills. One component covers the whole vocabulary in the mockups:
-// group type tags (MINISTRY / SMALL GROUP), contribution types (Tithes /
+// group type tags (MINISTRY / D-GROUP), contribution types (Tithes /
 // Offering), attendance sources (Member / Guest / QR / By usher), roles
 // (Pastor / Finance / Secretariat), nav badges (Soon / New), journey states,
 // and the count chips.

@@ -86,7 +86,7 @@ export const MEMBER_COLUMNS = `
 // join over 250 rows; a PostgREST embed rides along on the one request that is
 // already being made.
 //
-// `type` comes along because a ministry and a small group are tagged
+// `type` comes along because a ministry and a D-Group are tagged
 // differently wherever they are listed.
 //
 // TWO EMBEDS SINCE 0026, WHERE THERE USED TO BE ONE NESTED ONE. This was
@@ -113,10 +113,10 @@ function normaliseGroups (row) {
     .filter(Boolean)
     .map(g => ({ groups: { id: g.id, name: g.name, type: 'Ministry' } }))
 
-  const smallGroups = (row.small_group_members || [])
+  const dGroups = (row.small_group_members || [])
     .map(m => m.small_groups)
     .filter(Boolean)
-    .map(g => ({ groups: { id: g.id, name: g.name, type: 'Small Group' } }))
+    .map(g => ({ groups: { id: g.id, name: g.name, type: 'D-Group' } }))
 
   // The two embed keys are dropped rather than left alongside the folded result,
   // so no caller can start depending on the storage shape by accident.
@@ -124,7 +124,7 @@ function normaliseGroups (row) {
   delete rest.ministry_members
   delete rest.small_group_members
 
-  return { ...rest, group_members: [...ministries, ...smallGroups] }
+  return { ...rest, group_members: [...ministries, ...dGroups] }
 }
 
 const MESSAGES = {
@@ -171,7 +171,7 @@ export async function listDirectory(churchId, { query = '', limit = DIRECTORY_LI
 
   // directory_search returns the safe fields only (0028): names, gender, group
   // membership and the four journey flags — never birthdate/address/contact PII.
-  // group_members is synthesised from the ministry/small-group name arrays so the
+  // group_members is synthesised from the ministry/D-Group name arrays so the
   // members table's Groups column renders unchanged, without a second round-trip.
   const rows = (data || []).map((row) => ({
     id: row.member_id,
@@ -183,7 +183,7 @@ export async function listDirectory(churchId, { query = '', limit = DIRECTORY_LI
     small_groups: row.small_groups || [],
     group_members: [
       ...(row.ministries || []).map((name) => ({ groups: { name, type: 'Ministry' } })),
-      ...(row.small_groups || []).map((name) => ({ groups: { name, type: 'Small Group' } })),
+      ...(row.small_groups || []).map((name) => ({ groups: { name, type: 'D-Group' } })),
     ],
     is_one_to_one_completed: !!row.is_one_to_one_completed,
     is_turning_point_completed: !!row.is_turning_point_completed,

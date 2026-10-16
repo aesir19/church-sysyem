@@ -127,7 +127,7 @@ describe('listDirectory', () => {
         id: 'm1', first_name: 'Juan', middle_name: 'D', last_name: 'Cruz', gender: 'Male',
         ministries: [], small_groups: ['Youth'],
         // Synthesised so the members table's Groups column renders unchanged.
-        group_members: [{ groups: { name: 'Youth', type: 'Small Group' } }],
+        group_members: [{ groups: { name: 'Youth', type: 'D-Group' } }],
         is_one_to_one_completed: true, is_turning_point_completed: false,
         is_baptized: true, has_submitted_membership_form: false,
       },
@@ -229,7 +229,7 @@ describe('listRecords', () => {
     const result = await listRecords({ churchId: CHURCH, canSeeDetail: true })
     expect(result.rows[0].group_members).toEqual([
       { groups: { id: 'g1', name: 'Worship Team', type: 'Ministry' } },
-      { groups: { id: 'g2', name: 'Thursday Group', type: 'Small Group' } },
+      { groups: { id: 'g2', name: 'Thursday Group', type: 'D-Group' } },
     ])
     // The storage-shaped keys do not survive, so nothing downstream can start
     // depending on them.

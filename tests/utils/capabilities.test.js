@@ -29,8 +29,8 @@ describe('deriveCapabilities', () => {
     for (const key of [
       'canSeeMemberDetail', 'canWriteMembers', 'canViewFinance', 'canWriteFinance',
       'canSeeContributorIdentity',
-      'canViewAttendance', 'canManageAttendance', 'canManageSmallGroups', 'isCrossChurch',
-      'isSmallGroupLeader', 'canBrowseDirectory', 'canRecordJourney', 'canInvite',
+      'canViewAttendance', 'canManageAttendance', 'canManageDGroups', 'isCrossChurch',
+      'isDGroupLeader', 'canBrowseDirectory', 'canRecordJourney', 'canInvite',
     ]) {
       expect(c[key]).toBe(false)
     }
@@ -72,12 +72,12 @@ describe('deriveCapabilities', () => {
     })
   })
 
-  // 0028. Small-group leaders may record the one-to-one and turning-point milestones
+  // 0028. D-Group leaders may record the one-to-one and turning-point milestones
   // (only) for members of groups they lead; the per-group scope is enforced in SQL by
   // set_member_journey(). SuperAdmin also holds it. Nobody else gets it here —
   // Secretariat records journey through the full member form (canWriteMembers).
   describe('canRecordJourney', () => {
-    it('is held by SuperAdmin and small-group leaders', () => {
+    it('is held by SuperAdmin and D-Group leaders', () => {
       expect(deriveCapabilities(perm('super_admin', { is_super_admin: true })).canRecordJourney).toBe(true)
       expect(deriveCapabilities(perm('member', { is_small_group_leader: true })).canRecordJourney).toBe(true)
     })
@@ -90,15 +90,15 @@ describe('deriveCapabilities', () => {
     })
   })
 
-  // 0022. Leading a small group is not an account role — it comes from a row in
+  // 0022. Leading a D-Group is not an account role — it comes from a row in
   // small_group_leaders — so `role` stays 'member' throughout this block. Anything that
   // keys on the role string alone will miss this user entirely.
-  describe('Small Group Leader', () => {
+  describe('D-Group Leader', () => {
     const leader = deriveCapabilities(perm('member', { is_small_group_leader: true }))
 
     it('is derived from leading a group, not from the account role', () => {
       expect(leader.role).toBe('member')
-      expect(leader.isSmallGroupLeader).toBe(true)
+      expect(leader.isDGroupLeader).toBe(true)
     })
 
     it('gains attendance, which is its only widening', () => {
@@ -114,7 +114,7 @@ describe('deriveCapabilities', () => {
       expect(leader.canSeeMemberDetail).toBe(false)
       expect(leader.canWriteMembers).toBe(false)
       expect(leader.canManageAttendance).toBe(false)
-      expect(leader.canManageSmallGroups).toBe(false)
+      expect(leader.canManageDGroups).toBe(false)
       expect(leader.isCrossChurch).toBe(false)
     })
 
@@ -132,7 +132,7 @@ describe('deriveCapabilities', () => {
     expect(c.canWriteFinance).toBe(true)
     expect(c.canViewAttendance).toBe(true)
     expect(c.canManageAttendance).toBe(true)
-    expect(c.canManageSmallGroups).toBe(true)
+    expect(c.canManageDGroups).toBe(true)
     expect(c.isCrossChurch).toBe(true)
   })
 
@@ -145,7 +145,7 @@ describe('deriveCapabilities', () => {
     expect(c.canWriteMembers).toBe(false)
     expect(c.canWriteFinance).toBe(false)
     expect(c.canManageAttendance).toBe(false)
-    expect(c.canManageSmallGroups).toBe(false)
+    expect(c.canManageDGroups).toBe(false)
   })
 
   it('Pastor is see-only: sees detail/finance/attendance, writes nothing, own church', () => {
@@ -156,14 +156,14 @@ describe('deriveCapabilities', () => {
     expect(c.canWriteMembers).toBe(false)
     expect(c.canWriteFinance).toBe(false)
     expect(c.canManageAttendance).toBe(false)
-    expect(c.canManageSmallGroups).toBe(false)
+    expect(c.canManageDGroups).toBe(false)
     expect(c.isCrossChurch).toBe(false)
   })
 
-  it('Church Leader can manage small groups but not member/finance/attendance writes', () => {
+  it('Church Leader can manage D-Groups but not member/finance/attendance writes', () => {
     const c = deriveCapabilities(perm('church_leader', { is_church_leader: true }))
     expect(c.canSeeMemberDetail).toBe(true)
-    expect(c.canManageSmallGroups).toBe(true)
+    expect(c.canManageDGroups).toBe(true)
     expect(c.canWriteMembers).toBe(false)
     expect(c.canWriteFinance).toBe(false)
     expect(c.canManageAttendance).toBe(false)
@@ -270,7 +270,7 @@ describe('roleLabel', () => {
     expect(label('member', { is_welcome: true })).toBe('Welcome Team')
     expect(label('member', { is_finance: true })).toBe('Finance')
     expect(label('unassigned', { is_secretariat: true })).toBe('Secretariat')
-    expect(label('member', { is_small_group_leader: true })).toBe('Small Group Leader')
+    expect(label('member', { is_small_group_leader: true })).toBe('D-Group Leader')
   })
 
   it('labels the senior account roles', () => {

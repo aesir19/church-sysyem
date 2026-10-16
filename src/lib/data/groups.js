@@ -20,7 +20,7 @@
 //
 // THREE THINGS THIS MODULE EXISTS TO STOP CALLERS GETTING WRONG:
 //
-// 1. A MINISTRY IS GLOBAL; A SMALL GROUP IS CHURCH-SCOPED. Since 0026 that is
+// 1. A MINISTRY IS GLOBAL; A D-GROUP IS CHURCH-SCOPED. Since 0026 that is
 //    structural — `ministries` has no church_id column at all and
 //    `small_groups.church_id` is NOT NULL — rather than a CHECK constraint over a
 //    `type` varchar. "The groups for this church" is therefore two queries, not
@@ -49,36 +49,36 @@ const MESSAGES = {
  * The two kinds of group. Since 0026 these are table names in disguise rather
  * than values of a column, and `type` is synthesised on the way out of here.
  */
-export const GROUP_TYPES = Object.freeze(['Ministry', 'Small Group'])
+export const GROUP_TYPES = Object.freeze(['Ministry', 'D-Group'])
 
 /** Which table a group of each type actually lives in. */
 export const GROUP_TABLES = Object.freeze({
   Ministry: 'ministries',
-  'Small Group': 'small_groups'
+  'D-Group': 'small_groups'
 })
 
 /** And which table its memberships live in, keyed the same way. */
 export const MEMBERSHIP_TABLES = Object.freeze({
   Ministry: 'ministry_members',
-  'Small Group': 'small_group_members'
+  'D-Group': 'small_group_members'
 })
 
 /** The foreign key naming the parent, which differs per membership table. */
 export const MEMBERSHIP_PARENT_KEY = Object.freeze({
   Ministry: 'ministry_id',
-  'Small Group': 'small_group_id'
+  'D-Group': 'small_group_id'
 })
 
 // Columns are now per-table: `ministries` has no church_id and `small_groups` has
 // no ministry_key, so there is no single list that fits both. Neither names `*`.
 export const MINISTRY_COLUMNS = 'id, name, ministry_key'
-export const SMALL_GROUP_COLUMNS = 'id, name, church_id'
+export const D_GROUP_COLUMNS = 'id, name, church_id'
 
 /**
  * Give a row from either table the shape the rest of the app still expects:
  * `{ id, name, type, church_id, ministry_key }`. The two absent columns are
  * filled with the constants the old CHECK constraint guaranteed — a ministry's
- * church_id was always NULL, a small group's ministry_key always NULL — so this
+ * church_id was always NULL, a D-Group's ministry_key always NULL — so this
  * is a rename, not an invention.
  */
 export function asGroup (row, type) {
@@ -115,7 +115,7 @@ export async function listGroups ({ churchId, canSeeMembers }) {
   let ministryAssignmentQuery = supabase
     .from('ministry_members')
     .select(canSeeMembers ? `ministry_id, ${faces}` : 'ministry_id')
-  let smallGroupAssignmentQuery = supabase
+  let dGroupAssignmentQuery = supabase
     .from('small_group_members')
     .select(canSeeMembers ? `small_group_id, ${faces}` : 'small_group_id')
 
@@ -125,10 +125,10 @@ export async function listGroups ({ churchId, canSeeMembers }) {
   // unfiltered branch is not the all-church total it looks like.
   if (canSeeMembers) {
     ministryAssignmentQuery = ministryAssignmentQuery.eq('members.member_of', churchId)
-    smallGroupAssignmentQuery = smallGroupAssignmentQuery.eq('members.member_of', churchId)
+    dGroupAssignmentQuery = dGroupAssignmentQuery.eq('members.member_of', churchId)
   }
 
-  const [ministriesRes, smallGroupsRes, ministryAssignmentsRes, smallGroupAssignmentsRes] =
+  const [ministriesRes, dGroupsRes, ministryAssignmentsRes, dGroupAssignmentsRes] =
     await Promise.all([
       supabase
         .from('ministries')
@@ -136,16 +136,16 @@ export async function listGroups ({ churchId, canSeeMembers }) {
         .order('name', { ascending: true }),
       supabase
         .from('small_groups')
-        .select(SMALL_GROUP_COLUMNS)
+        .select(D_GROUP_COLUMNS)
         .eq('church_id', churchId)
         .order('name', { ascending: true }),
       ministryAssignmentQuery,
-      smallGroupAssignmentQuery
+      dGroupAssignmentQuery
     ])
 
   // Either half failing means the grid would silently lose a whole kind of
   // group, which reads as "these were deleted" rather than "this did not load".
-  const failure = ministriesRes.error || smallGroupsRes.error
+  const failure = ministriesRes.error || dGroupsRes.error
   if (failure) {
     return { ok: false, message: MESSAGES.loadFailed, rows: [], assignments: 0, assignedMemberIds: null, cause: failure }
   }
@@ -171,18 +171,18 @@ export async function listGroups ({ churchId, canSeeMembers }) {
   }
 
   tally(ministryAssignmentsRes.data, 'ministry_id')
-  tally(smallGroupAssignmentsRes.data, 'small_group_id')
+  tally(dGroupAssignmentsRes.data, 'small_group_id')
 
   const assignments =
-    (ministryAssignmentsRes.data || []).length + (smallGroupAssignmentsRes.data || []).length
+    (ministryAssignmentsRes.data || []).length + (dGroupAssignmentsRes.data || []).length
 
-  // Ministries first, then small groups, each by name. The old query said
-  // `.order('type').order('name')`, and 'Ministry' sorts before 'Small Group',
+  // Ministries first, then D-Groups, each by name. The old query said
+  // `.order('type').order('name')`, and 'Ministry' sorts before 'D-Group',
   // so concatenating in this order reproduces it without relying on a column
   // that no longer exists.
   const rows = [
     ...(ministriesRes.data || []).map(row => asGroup(row, 'Ministry')),
-    ...(smallGroupsRes.data || []).map(row => asGroup(row, 'Small Group'))
+    ...(dGroupsRes.data || []).map(row => asGroup(row, 'D-Group'))
   ].map(group => ({
     ...group,
     member_count: counts.get(group.id) ?? 0,

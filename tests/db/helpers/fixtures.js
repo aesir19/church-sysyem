@@ -102,7 +102,7 @@ export async function makeKeyedMinistry (tx, label = 'keyed') {
 }
 
 /** A small group belonging to one church. */
-export async function makeSmallGroup (tx, churchId, label = 'small-group') {
+export async function makeDGroup (tx, churchId, label = 'small-group') {
   const [row] = await tx.$queryRawUnsafe(
     `INSERT INTO public.small_groups (name, church_id)
      VALUES ($1, $2::uuid) RETURNING id`,
@@ -212,8 +212,8 @@ export async function groupKindOf (tx, groupId) {
   )
   if (ministry) return 'Ministry'
 
-  const [smallGroup] = await tx.$queryRawUnsafe(
+  const [dGroup] = await tx.$queryRawUnsafe(
     `SELECT 1 AS hit FROM public.small_groups WHERE id = $1::uuid`, groupId
   )
-  return smallGroup ? 'Small Group' : null
+  return dGroup ? 'D-Group' : null
 }

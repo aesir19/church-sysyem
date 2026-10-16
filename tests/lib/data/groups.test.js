@@ -31,7 +31,7 @@ vi.mock('../../../src/lib/supabase', () => ({
 
 const {
   listGroups, countMembersInNoGroup, asGroup,
-  MINISTRY_COLUMNS, SMALL_GROUP_COLUMNS, GROUP_MESSAGES,
+  MINISTRY_COLUMNS, D_GROUP_COLUMNS, GROUP_MESSAGES,
 } = await import('../../../src/lib/data/groups')
 
 const CHURCH = 'church-1'
@@ -54,7 +54,7 @@ function ministryAssignments() {
   ]
 }
 
-function smallGroupAssignments() {
+function dGroupAssignments() {
   return []
 }
 
@@ -65,17 +65,17 @@ function ministryRows() {
   ]
 }
 
-function smallGroupRows() {
+function dGroupRows() {
   return [{ id: 'g-thu', name: 'Thursday Group', church_id: CHURCH }]
 }
 
 /** The four results a full listGroups() call consumes. */
-function seedAll({ ministries = ministryRows(), smallGroups = smallGroupRows(),
-  ministryMembers = [], smallGroupMembers = [] } = {}) {
+function seedAll({ ministries = ministryRows(), dGroups = dGroupRows(),
+  ministryMembers = [], dGroupMembers = [] } = {}) {
   state.results.ministries = { data: ministries, error: null }
-  state.results.small_groups = { data: smallGroups, error: null }
+  state.results.small_groups = { data: dGroups, error: null }
   state.results.ministry_members = { data: ministryMembers, error: null }
-  state.results.small_group_members = { data: smallGroupMembers, error: null }
+  state.results.small_group_members = { data: dGroupMembers, error: null }
 }
 
 beforeEach(() => {
@@ -93,7 +93,7 @@ describe('listGroups — scope', () => {
   })
 
   // Rule 1, restated for the split. A ministry is global — `ministries` has no
-  // church_id column to filter on — and a small group is church-scoped. The old
+  // church_id column to filter on — and a D-Group is church-scoped. The old
   // hand-written `or(and(...),and(...))` union is gone; scoping one table and not
   // the other is what replaces it. Filtering ministries by church would hide all
   // of them, since there is nothing to match.
@@ -105,7 +105,7 @@ describe('listGroups — scope', () => {
     expect(on('ministries', 'or')).toHaveLength(0)
   })
 
-  it('scopes small groups to the active church', async () => {
+  it('scopes D-Groups to the active church', async () => {
     seedAll()
     await listGroups({ churchId: CHURCH, canSeeMembers: true })
     expect(on('small_groups', 'eq')).toContainEqual(['small_groups', 'eq', 'church_id', CHURCH])
@@ -116,23 +116,23 @@ describe('listGroups — scope', () => {
     await listGroups({ churchId: CHURCH, canSeeMembers: true })
 
     expect(on('ministries', 'select')[0][2]).toBe(MINISTRY_COLUMNS)
-    expect(on('small_groups', 'select')[0][2]).toBe(SMALL_GROUP_COLUMNS)
+    expect(on('small_groups', 'select')[0][2]).toBe(D_GROUP_COLUMNS)
     expect(MINISTRY_COLUMNS).not.toContain('*')
-    expect(SMALL_GROUP_COLUMNS).not.toContain('*')
+    expect(D_GROUP_COLUMNS).not.toContain('*')
     // Neither table has the other's column, which is the point of the split.
     expect(MINISTRY_COLUMNS).not.toContain('church_id')
-    expect(SMALL_GROUP_COLUMNS).not.toContain('ministry_key')
+    expect(D_GROUP_COLUMNS).not.toContain('ministry_key')
   })
 
-  it('orders each table by name, and returns ministries before small groups', async () => {
+  it('orders each table by name, and returns ministries before D-Groups', async () => {
     seedAll()
     const result = await listGroups({ churchId: CHURCH, canSeeMembers: true })
 
     expect(on('ministries', 'order')[0].slice(2)).toEqual(['name', { ascending: true }])
     expect(on('small_groups', 'order')[0].slice(2)).toEqual(['name', { ascending: true }])
     // The old query said .order('type').order('name'), and 'Ministry' sorts
-    // before 'Small Group'. Concatenation has to reproduce that.
-    expect(result.rows.map((g) => g.type)).toEqual(['Ministry', 'Ministry', 'Small Group'])
+    // before 'D-Group'. Concatenation has to reproduce that.
+    expect(result.rows.map((g) => g.type)).toEqual(['Ministry', 'Ministry', 'D-Group'])
   })
 
   it('gives every row back the type and the null column its table does not store', async () => {
@@ -140,7 +140,7 @@ describe('listGroups — scope', () => {
     const result = await listGroups({ churchId: CHURCH, canSeeMembers: true })
 
     expect(result.rows[0]).toMatchObject({ type: 'Ministry', church_id: null })
-    expect(result.rows[2]).toMatchObject({ type: 'Small Group', church_id: CHURCH, ministry_key: null })
+    expect(result.rows[2]).toMatchObject({ type: 'D-Group', church_id: CHURCH, ministry_key: null })
   })
 
   it('does not surface raw error text when either half fails', async () => {
@@ -153,9 +153,9 @@ describe('listGroups — scope', () => {
     expect(result.cause).toEqual({ message: 'permission denied for table ministries' })
   })
 
-  // Half a grid is worse than an error: it reads as "the small groups were
+  // Half a grid is worse than an error: it reads as "the D-Groups were
   // deleted" rather than "this did not load".
-  it('fails the whole load when only the small-group half fails', async () => {
+  it('fails the whole load when only the D-Group half fails', async () => {
     seedAll()
     state.results.small_groups = { data: null, error: { message: 'permission denied' } }
 
@@ -166,12 +166,12 @@ describe('listGroups — scope', () => {
 })
 
 describe('asGroup', () => {
-  it('never invents a church for a ministry or a key for a small group', () => {
+  it('never invents a church for a ministry or a key for a D-Group', () => {
     expect(asGroup({ id: 'a', name: 'Finance', ministry_key: 'finance' }, 'Ministry'))
       .toEqual({ id: 'a', name: 'Finance', type: 'Ministry', church_id: null, ministry_key: 'finance' })
 
-    expect(asGroup({ id: 'b', name: 'Thursday', church_id: CHURCH }, 'Small Group'))
-      .toEqual({ id: 'b', name: 'Thursday', type: 'Small Group', church_id: CHURCH, ministry_key: null })
+    expect(asGroup({ id: 'b', name: 'Thursday', church_id: CHURCH }, 'D-Group'))
+      .toEqual({ id: 'b', name: 'Thursday', type: 'D-Group', church_id: CHURCH, ministry_key: null })
   })
 })
 
@@ -192,7 +192,7 @@ describe('listGroups — counts', () => {
   it('counts per group from the returned assignments, not from an embedded count', async () => {
     seedAll({
       ministryMembers: ministryAssignments(),
-      smallGroupMembers: smallGroupAssignments(),
+      dGroupMembers: dGroupAssignments(),
     })
 
     const result = await listGroups({ churchId: CHURCH, canSeeMembers: true })
@@ -201,12 +201,12 @@ describe('listGroups — counts', () => {
   })
 
   // The two membership tables are counted into one map keyed by group id. A
-  // small group's members must not be attributed to a ministry that happens to
+  // D-Group's members must not be attributed to a ministry that happens to
   // sort into the same slot.
   it('keeps the two membership tables apart when counting', async () => {
     seedAll({
       ministryMembers: ministryAssignments(),
-      smallGroupMembers: [
+      dGroupMembers: [
         { small_group_id: 'g-thu', member_id: 'm9', members: { first_name: 'Rosa', last_name: 'Diaz', member_of: CHURCH } },
       ],
     })
@@ -227,7 +227,7 @@ describe('listGroups — counts', () => {
   it('returns the total assignment count, across both tables, for the header', async () => {
     seedAll({
       ministryMembers: ministryAssignments(),
-      smallGroupMembers: [
+      dGroupMembers: [
         { small_group_id: 'g-thu', member_id: 'm9', members: { first_name: 'Rosa', last_name: 'Diaz', member_of: CHURCH } },
       ],
     })
@@ -293,12 +293,12 @@ describe('listGroups — RLS-safe projection', () => {
     expect(result.assignedMemberIds).toBeNull()
   })
 
-  // Now spanning two tables: the same person in a ministry and a small group is
+  // Now spanning two tables: the same person in a ministry and a D-Group is
   // two rows from two queries, and must still be one member.
   it('returns distinct member ids, so somebody in two groups is counted once', async () => {
     seedAll({
       ministryMembers: ministryAssignments(),
-      smallGroupMembers: [
+      dGroupMembers: [
         { small_group_id: 'g-thu', member_id: 'm1', members: { first_name: 'Juan', last_name: 'Cruz', member_of: CHURCH } },
       ],
     })

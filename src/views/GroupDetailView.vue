@@ -17,7 +17,7 @@ import { MEMBERSHIP_TABLES, MEMBERSHIP_PARENT_KEY } from '../lib/data/groups'
 import { useActiveChurch } from '../composables/useActiveChurch'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { fetchGroupBySlug, fetchRoster, fetchLeader, fetchLeaderCandidates, journeyFor, recordJourney, fetchMyLedGroupIds, slugify } from '../lib/data/group'
-import { assignSmallGroupLeader, unassignSmallGroupLeader } from '../lib/data/admin'
+import { assignDGroupLeader, unassignDGroupLeader } from '../lib/data/admin'
 
 // The group page — frame 3a. Replaces GroupDetailModal, whose own comment recorded the
 // compromise this page exists to pay off: "there is no group page — the card opens
@@ -56,7 +56,7 @@ const knownChurches = computed(() => {
   return list
 })
 const {
-  canSeeMemberDetail, canManageSmallGroups, isSmallGroupLeader, canManageGroupMembers,
+  canSeeMemberDetail, canManageDGroups, isDGroupLeader, canManageGroupMembers,
   canRecordJourney, isSuperAdmin, isHeadPastor, isPastor
 } = useCurrentRole()
 
@@ -71,7 +71,7 @@ const notFound = ref(false)
 const errorMessage = ref('')
 const rosterError = ref('')
 const showAll = ref(false)
-// The small groups this caller leads. The journey toggles below appear only for the
+// The D-Groups this caller leads. The journey toggles below appear only for the
 // group they actually lead — set_member_journey() (0028) is the real gate, but an
 // action that would bounce should not be offered.
 const ledGroupIds = ref([])
@@ -82,7 +82,7 @@ const PREVIEW_ROWS = 5
 const isMinistry = computed(() => group.value?.type === 'Ministry')
 
 // May this caller record the two journey milestones on THIS group's roster? Only a
-// small-group leader of this very group (or, in principle, a SuperAdmin who leads it).
+// D-Group leader of this very group (or, in principle, a SuperAdmin who leads it).
 const canRecordJourneyHere = computed(() =>
   canRecordJourney.value && !!group.value && ledGroupIds.value.includes(group.value.id)
 )
@@ -101,10 +101,10 @@ const visibleRoster = computed(() =>
 const leaderName = computed(() => leader.value?.name || null)
 const hasLeader = computed(() => !!leader.value)
 
-// The roster is a way into the person, except for a Small Group Leader: their account
+// The roster is a way into the person, except for a D-Group Leader: their account
 // is restricted from member detail elsewhere and this page must not become the way
 // around that.
-const rosterRowsAreLinks = computed(() => canSeeMemberDetail.value && !isSmallGroupLeader.value)
+const rosterRowsAreLinks = computed(() => canSeeMemberDetail.value && !isDGroupLeader.value)
 
 // Group-specific, because the Finance ministry is Pastor-only — a Church Leader who
 // may add members to every other group may not add them to that one. Controls the
@@ -153,7 +153,7 @@ async function load () {
   }
 
   // No row means "no such group" or "a group you may not see", and the page renders
-  // them identically on purpose: confirming another church's small group exists is a
+  // them identically on purpose: confirming another church's D-Group exists is a
   // leak, however small.
   if (!found.group) {
     notFound.value = true
@@ -226,7 +226,7 @@ const savingLeader = ref(false)
 const leaderError = ref('')
 
 // Mirrors can_assign_small_group_leader() in 0026: Super Admin, Head Pastor, or the
-// church's own Pastor — and only for a small group, because a ministry has no leader.
+// church's own Pastor — and only for a D-Group, because a ministry has no leader.
 // The database is still the authority; this only decides whether to offer the control.
 const canAssignLeader = computed(() =>
   !!group.value && !isMinistry.value &&
@@ -248,7 +248,7 @@ async function saveLeader () {
   savingLeader.value = true
   leaderError.value = ''
 
-  const result = await assignSmallGroupLeader({ accountId: chosenLeader.value, groupId: group.value.id })
+  const result = await assignDGroupLeader({ accountId: chosenLeader.value, groupId: group.value.id })
   savingLeader.value = false
 
   if (!result.ok) {
@@ -266,7 +266,7 @@ async function removeLeader () {
   savingLeader.value = true
   leaderError.value = ''
 
-  const result = await unassignSmallGroupLeader({
+  const result = await unassignDGroupLeader({
     accountId: leader.value.accountId,
     groupId: group.value.id
   })
@@ -289,9 +289,9 @@ const deleting = ref(false)
 
 const existingMemberIds = computed(() => roster.value.map(r => r.memberId))
 
-// Renaming and deleting are small-group work, and only in the caller's own church.
+// Renaming and deleting are D-Group work, and only in the caller's own church.
 const canEditGroup = computed(() =>
-  canManageSmallGroups.value && !isMinistry.value && group.value?.church_id === activeChurchId.value
+  canManageDGroups.value && !isMinistry.value && group.value?.church_id === activeChurchId.value
 )
 
 // The header's secondary actions, collapsed into one list (5 - Action Bar System).
@@ -495,7 +495,7 @@ async function toggleJourney (row, key) {
               :tone="isMinistry ? 'accent' : 'magenta'"
               eyebrow
             >
-              {{ isMinistry ? 'Ministry' : 'Small group' }}
+              {{ isMinistry ? 'Ministry' : 'D-Group' }}
             </Badge>
             <!-- 3a draws an approval line ("Approved · 2 Jun 2021") here. Omitted: a
                  group approval workflow is a decision nobody has made, not a surface
@@ -507,7 +507,7 @@ async function toggleJourney (row, key) {
           </h1>
 
           <p class="gd__sub">
-            <!-- Only a small group has a leader, and "no leader yet" is a fact worth
+            <!-- Only a D-Group has a leader, and "no leader yet" is a fact worth
                  stating rather than a gap. A ministry gets no line at all. -->
             <template v-if="!isMinistry">
               <span v-if="leaderName">Led by {{ leaderName }}</span>
