@@ -17,7 +17,7 @@
 import { supabase } from '../supabase'
 import { EVENT_COLUMNS, createEvent, updateEvent, cancelEvent, deleteEvent } from './events'
 import {
-  SERIES_COLUMNS, toSeries, ruleColumns, createSeries, updateSeries, skipOccurrence, editOccurrence, deleteSeries, splitSeries
+  SERIES_COLUMNS, toSeries, ruleColumns, createSeries, updateSeries, skipOccurrence, editOccurrence, deleteSeries, splitSeries, getSeries
 } from './eventSeries'
 import { mergeSeriesOccurrences, expandSeries, ymd } from '../recurrence'
 import { dayMonth } from '../../utils/dayMonth'
@@ -301,4 +301,84 @@ export function changeFromHere (meeting, form, key) {
     moves: null,
     key
   })
+}
+
+/** The groups the signed-in person leads (0022). UI only — the database enforces. */
+export async function myLedGroupIds () {
+  const { data, error } = await supabase.rpc('my_led_group_ids')
+  if (error || !Array.isArray(data)) return { ok: false, ids: [] }
+  return { ok: true, ids: data }
+}
+
+/**
+ * A Calendar item as the meeting the ⋯ actions expect. A repeating date needs its
+ * series' rule (to cancel, move or change it), which the Calendar's item does not carry,
+ * so it is read here; a one-off needs nothing more. Returns { ok, meeting }.
+ */
+export async function meetingFromCalendarItem (item) {
+  const seriesId = item.seriesId ?? item.series_id ?? null
+  let series = null
+  let groupId = item.small_group_id ?? null
+  if (seriesId) {
+    const r = await getSeries(seriesId)
+    if (!r.ok || !r.series) return { ok: false, meeting: null }
+    series = r.series
+    groupId = groupId ?? r.series.smallGroupId ?? null
+  }
+  return {
+    ok: true,
+    meeting: {
+      id: item.id,
+      groupId,
+      title: item.title,
+      startsAt: item.starts_at,
+      endsAt: item.ends_at ?? null,
+      location: item.location ?? null,
+      notes: item.description ?? null,
+      status: item.status,
+      cancelReason: item.cancel_reason ?? null,
+      seriesId,
+      occurrenceDate: item.occurrence_date ?? null,
+      series,
+      repeatText: series ? repeatSummary(series) : null,
+      countN: series?.countN ?? null,
+      virtual: !!item.virtual
+    }
+  }
+}
+
+/**
+ * The ⋯ menu (13i) as a list both the Group meetings card and the Calendar's preview card
+ * draw: [{ kind, label, danger, disabled, note, dividerBefore }]. kind is 'edit' | 'move' |
+ * 'from-here' | 'cancel' | 'delete'. Delete is always last, set apart, and shown as
+ * unavailable once the meeting has happened.
+ */
+export function meetingActions (meeting, now = new Date()) {
+  const allowed = meetingMenu(meeting, now)
+  const item = (kind, label) => ({ kind, label, danger: false, disabled: false, note: null, dividerBefore: false })
+  const out = []
+  if (allowed.edit) out.push(item('edit', 'Edit…'))
+  if (allowed.move) out.push(item('move', 'Move this meeting…'))
+  if (allowed.changeFromHere) out.push(item('from-here', 'Change from here on…'))
+  if (allowed.cancel) out.push(item('cancel', 'Cancel meeting'))
+  out.push({
+    kind: 'delete',
+    label: allowed.delete ? 'Delete…' : 'Delete',
+    danger: allowed.delete,
+    disabled: !allowed.delete,
+    note: allowed.deleteNote,
+    dividerBefore: allowed.delete && out.length > 0
+  })
+  return out
+}
+
+/**
+ * The church's D-Group names by id, for naming a meeting's group on the Calendar. A name
+ * is a nicety: a failed read answers {} rather than failing the Calendar.
+ */
+export async function groupNamesFor (churchId) {
+  if (!churchId) return {}
+  const { data, error } = await supabase.from('small_groups').select('id, name').eq('church_id', churchId)
+  if (error || !data) return {}
+  return Object.fromEntries(data.map(g => [g.id, g.name]))
 }

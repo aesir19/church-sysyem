@@ -69,6 +69,8 @@ export function toSeries(row) {
     endsOn: row.ends_on,
     countN: row.count_n,
     deletedAt: row.deleted_at ?? null,
+    // 0056: the D-Group a repeating Group meeting belongs to; null for every other series.
+    smallGroupId: row.small_group_id ?? null,
   }
 }
 

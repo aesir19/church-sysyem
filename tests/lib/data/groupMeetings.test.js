@@ -8,7 +8,7 @@ const state = vi.hoisted(() => ({ results: {}, calls: [], rpcResult: { data: nul
 
 function makeBuilder (table) {
   const record = (name, ...args) => state.calls.push({ table, name, args })
-  const chain = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'is', 'not', 'in', 'gte', 'lt', 'order', 'or']
+  const chain = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'is', 'not', 'in', 'gte', 'lt', 'order', 'or', 'maybeSingle']
   const b = {}
   for (const name of chain) b[name] = vi.fn(function (...args) { record(name, ...args); return this })
   b.then = (onFulfilled, onRejected) => {
@@ -27,7 +27,7 @@ vi.mock('../../../src/lib/supabase', () => ({
 }))
 
 const {
-  meetingRule, repeatSummary, formSummary, cardMeetings, pastLabel, editMeeting, changeFromHere, createGroupMeeting, listGroupMeetings, meetingMenu, cancelMeeting, moveMeeting, deleteMeeting
+  myLedGroupIds, meetingFromCalendarItem, meetingActions, groupNamesFor, meetingRule, repeatSummary, formSummary, cardMeetings, pastLabel, editMeeting, changeFromHere, createGroupMeeting, listGroupMeetings, meetingMenu, cancelMeeting, moveMeeting, deleteMeeting
 } = await import('../../../src/lib/data/groupMeetings')
 
 const calls = (table, name) => state.calls.filter(c => c.table === table && c.name === name)
@@ -326,5 +326,64 @@ describe('editMeeting and changeFromHere', () => {
       title: 'Night', kind: 'group_meeting', status: 'published', location: "Carla's home",
       cadence: 'weekly', weekday: 4, time_start: '19:00', time_end: '20:30', count_n: 8
     })
+  })
+})
+
+describe('on the Calendar (step 4)', () => {
+  it('reads which groups the person leads', async () => {
+    state.rpcResult = { data: ['g4', 'g9'], error: null }
+    expect(await myLedGroupIds()).toEqual({ ok: true, ids: ['g4', 'g9'] })
+    state.rpcResult = { data: null, error: { message: 'boom' } }
+    expect(await myLedGroupIds()).toEqual({ ok: false, ids: [] })
+  })
+
+  it('turns a one-off Calendar item into a meeting without another read', async () => {
+    const item = { ...oneOff, description: 'Bring food', cancel_reason: null }
+    const r = await meetingFromCalendarItem(item)
+    expect(r).toMatchObject({ ok: true, meeting: { id: 'ev1', groupId: 'g4', seriesId: null, startsAt: '2026-08-15T10:00:00Z', notes: 'Bring food' } })
+    expect(state.calls).toHaveLength(0)
+  })
+
+  it('fetches the series for a repeating date, so its actions know the rule', async () => {
+    state.results.event_series = { data: seriesRow, error: null }
+    const item = { id: 'series-ser1-2026-08-13', seriesId: 'ser1', occurrence_date: '2026-08-13', title: 'Weekly D-Group night', kind: 'group_meeting', status: 'published', starts_at: '2026-08-13T11:30:00.000Z', ends_at: null, location: "Ana's home" }
+    const r = await meetingFromCalendarItem(item)
+    expect(calls('event_series', 'eq')[0].args).toEqual(['id', 'ser1'])
+    expect(r.ok).toBe(true)
+    expect(r.meeting).toMatchObject({ seriesId: 'ser1', occurrenceDate: '2026-08-13', groupId: 'g4', series: { id: 'ser1', timeStart: '19:30', countN: 8 } })
+  })
+
+  it('fails rather than offering actions it could not prepare', async () => {
+    state.results.event_series = { data: null, error: { message: 'boom' } }
+    const r = await meetingFromCalendarItem({ id: 'series-ser1-2026-08-13', seriesId: 'ser1', occurrence_date: '2026-08-13', starts_at: '2026-08-13T11:30:00.000Z' })
+    expect(r.ok).toBe(false)
+  })
+})
+
+describe('meetingActions — the ⋯ menu as a list both the card and the Calendar draw', () => {
+  const now = new Date('2026-08-12T02:00:00Z')
+  it('lists every action before a repeating meeting, delete last and set apart', () => {
+    const a = meetingActions({ startsAt: '2026-08-13T11:30:00Z', status: 'published', seriesId: 'ser1' }, now)
+    expect(a.map(x => x.label)).toEqual(['Edit…', 'Move this meeting…', 'Change from here on…', 'Cancel meeting', 'Delete…'])
+    expect(a.at(-1)).toMatchObject({ kind: 'delete', danger: true, disabled: false, dividerBefore: true })
+  })
+  it('offers cancel and an unavailable delete once it has happened', () => {
+    const a = meetingActions({ startsAt: '2026-08-06T11:30:00Z', status: 'published', seriesId: 'ser1' }, now)
+    expect(a).toEqual([
+      { kind: 'cancel', label: 'Cancel meeting', danger: false, disabled: false, note: null, dividerBefore: false },
+      { kind: 'delete', label: 'Delete', danger: false, disabled: true, note: 'Not available after the meeting date', dividerBefore: false }
+    ])
+  })
+})
+
+describe('groupNamesFor', () => {
+  it("maps the church's D-Groups by id", async () => {
+    state.results.small_groups = { data: [{ id: 'g4', name: 'D-Group 4' }], error: null }
+    expect(await groupNamesFor('c1')).toEqual({ g4: 'D-Group 4' })
+    expect(calls('small_groups', 'eq')[0].args).toEqual(['church_id', 'c1'])
+  })
+  it('answers nothing, rather than failing the Calendar, when it cannot read them', async () => {
+    state.results.small_groups = { data: null, error: { message: 'x' } }
+    expect(await groupNamesFor('c1')).toEqual({})
   })
 })

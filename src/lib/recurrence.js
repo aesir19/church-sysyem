@@ -243,6 +243,8 @@ function virtualItem(series, date) {
     ends_at: ends ? ends.toISOString() : null,
     isSeries: true,
     virtual: true,
+    // 0056: a repeating Group meeting's group, so a date knows whose meeting it is.
+    small_group_id: series.smallGroupId ?? null,
   }
 }
 

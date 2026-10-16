@@ -19,7 +19,7 @@ vi.mock('../../../src/lib/supabase', () => ({
   supabase: { from: vi.fn(() => builder()), rpc: vi.fn(() => Promise.resolve({ data: [], error: null })) },
 }))
 
-const { expandWeeklySchedules, expandBirthdays, createEvent, slugify, eventSlug, parseEventSlug } = await import('../../../src/lib/data/events')
+const { expandWeeklySchedules, expandBirthdays, createEvent, slugify, eventSlug, parseEventSlug, composerKinds } = await import('../../../src/lib/data/events')
 
 beforeEach(() => { state.inserted = null; state.selectResult = { data: [{ id: 'e1' }], error: null } })
 
@@ -134,5 +134,14 @@ describe('readable event slugs (no UUIDs — the group.js naming rule)', () => {
     const startsAt = new Date(2026, 7, 30, 15, 0, 0).toISOString()
     const slug = eventSlug({ title: 'Youth Outreach', starts_at: startsAt })
     expect(parseEventSlug(slug)).toEqual({ date: '2026-08-30', titleSlug: 'youth-outreach' })
+  })
+})
+
+describe("composerKinds — the Events composer's Kind list (0056)", () => {
+  it("leaves Group meeting out of a new event: only a group's leaders create those", () => {
+    expect(composerKinds('service').map(k => k.value)).toEqual(['service', 'special_service', 'outreach', 'administrative'])
+  })
+  it('keeps it, alone, for an existing Group meeting, so its kind cannot change', () => {
+    expect(composerKinds('group_meeting').map(k => k.value)).toEqual(['group_meeting'])
   })
 })

@@ -7,7 +7,7 @@ import { computed } from 'vue'
 import Card from '../ui/Card.vue'
 import Badge from '../ui/Badge.vue'
 import OverflowMenu from '../ui/OverflowMenu.vue'
-import { cardMeetings, meetingMenu, pastLabel } from '../../lib/data/groupMeetings'
+import { cardMeetings, meetingActions, pastLabel } from '../../lib/data/groupMeetings'
 
 const props = defineProps({
   meetings: { type: Array, required: true },
@@ -36,23 +36,10 @@ const rows = computed(() => cardMeetings(props.meetings, props.now).map(m => {
 }))
 
 function menuItems (m) {
-  const allowed = meetingMenu(m, props.now)
-  const pick = kind => () => emit('action', { kind, meeting: m })
-  const items = []
-  if (allowed.edit) items.push({ key: 'edit', label: 'Edit…', onSelect: pick('edit') })
-  if (allowed.move) items.push({ key: 'move', label: 'Move this meeting…', onSelect: pick('move') })
-  if (allowed.changeFromHere) items.push({ key: 'from-here', label: 'Change from here on…', onSelect: pick('from-here') })
-  if (allowed.cancel) items.push({ key: 'cancel', label: 'Cancel meeting', onSelect: pick('cancel') })
-  items.push({
-    key: 'delete',
-    label: allowed.delete ? 'Delete…' : 'Delete',
-    danger: allowed.delete,
-    disabled: !allowed.delete,
-    note: allowed.deleteNote,
-    dividerBefore: allowed.delete && items.length > 0,
-    onSelect: pick('delete')
-  })
-  return items
+  return meetingActions(m, props.now).map(a => ({
+    key: a.kind, label: a.label, danger: a.danger, disabled: a.disabled, note: a.note, dividerBefore: a.dividerBefore,
+    onSelect: () => emit('action', { kind: a.kind, meeting: m })
+  }))
 }
 
 function detail (m) {

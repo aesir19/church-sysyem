@@ -64,6 +64,16 @@ export const EVENT_KINDS = [
 ]
 
 const KIND_LABEL = Object.fromEntries(EVENT_KINDS.map((k) => [k.value, k.label]))
+
+/**
+ * The Kind choices the Events composer offers. Group meetings are created by their group's
+ * leaders only (0056), so a new event never offers one; an existing Group meeting keeps its
+ * kind, as the only choice, so it cannot be changed into something else.
+ */
+export function composerKinds(currentKind) {
+  if (currentKind === 'group_meeting') return EVENT_KINDS.filter((k) => k.value === 'group_meeting')
+  return EVENT_KINDS.filter((k) => k.value !== 'group_meeting')
+}
 export function kindLabel(value) { return KIND_LABEL[value] ?? value }
 
 /**
