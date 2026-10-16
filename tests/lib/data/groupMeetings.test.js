@@ -27,7 +27,7 @@ vi.mock('../../../src/lib/supabase', () => ({
 }))
 
 const {
-  meetingRule, createGroupMeeting, listGroupMeetings, meetingMenu, cancelMeeting, moveMeeting, deleteMeeting
+  meetingRule, repeatSummary, formSummary, cardMeetings, pastLabel, editMeeting, changeFromHere, createGroupMeeting, listGroupMeetings, meetingMenu, cancelMeeting, moveMeeting, deleteMeeting
 } = await import('../../../src/lib/data/groupMeetings')
 
 const calls = (table, name) => state.calls.filter(c => c.table === table && c.name === name)
@@ -66,6 +66,25 @@ describe('meetingRule — the form\'s Repeat choice as a series rule', () => {
     })
     // Thursday 29 Oct 2026 is the fifth Thursday; most months have none.
     expect(meetingRule({ ...FORM, date: '2026-10-29', repeat: 'monthly', count: 8 }).weekOfMonth).toBe(-1)
+  })
+})
+
+describe('the repeat wording on a row (13g) and in the form (13h)', () => {
+  const rule = (repeat, count = 8, date = '2026-08-06') => meetingRule({ ...FORM, date, repeat, count })
+
+  it('says how a meeting repeats, and how many there are', () => {
+    expect(repeatSummary(rule('weekly'))).toBe('Repeats every Thursday · 8 meetings')
+    expect(repeatSummary(rule('weekly', null))).toBe('Repeats every Thursday')
+    expect(repeatSummary(rule('fortnightly'))).toBe('Repeats every 2 weeks on Thursday · 8 meetings')
+    expect(repeatSummary(rule('monthly'))).toBe('Repeats on the first Thursday of every month · 8 meetings')
+    expect(repeatSummary(rule('monthly', null, '2026-10-29'))).toBe('Repeats on the last Thursday of every month')
+  })
+
+  it('tells the form when the last meeting falls', () => {
+    expect(formSummary(rule('weekly'))).toBe('Every Thursday · ends after 8 meetings (24 Sep)')
+    expect(formSummary(rule('fortnightly', 3))).toBe('Every 2 weeks on Thursday · ends after 3 meetings (3 Sep)')
+    expect(formSummary(rule('weekly', null))).toBe('Every Thursday · no end date')
+    expect(formSummary(null)).toBe('')
   })
 })
 
@@ -251,5 +270,61 @@ describe('cancel, move and delete pick the right path', () => {
     const r = await deleteMeeting(worked, 'series')
     expect(r.ok).toBe(true)
     expect(calls('rpc', 'delete_event_series')[0].args).toEqual({ p_series: 'ser1' })
+  })
+})
+
+describe('cardMeetings — what the Group meetings card lists (13g)', () => {
+  // Monday 3 Aug 2026, 10:00 Manila.
+  const now = new Date('2026-08-03T02:00:00Z')
+  const m = (id, startsAt, seriesId = null) => ({ id, startsAt, seriesId, status: 'published' })
+
+  it('shows each repeating meeting once, at its next date, then one-offs in date order, then the recent past newest first', () => {
+    const list = [
+      m('s-jul23', '2026-07-23T11:30:00Z', 'ser1'), m('s-jul30', '2026-07-30T11:30:00Z', 'ser1'),
+      m('s-aug6', '2026-08-06T11:30:00Z', 'ser1'), m('s-aug13', '2026-08-13T11:30:00Z', 'ser1'),
+      m('dinner', '2026-08-15T10:00:00Z'), m('picnic', '2026-08-29T02:00:00Z')
+    ]
+    expect(cardMeetings(list, now).map(x => x.id)).toEqual(['s-aug6', 'dinner', 'picnic', 's-jul30', 's-jul23'])
+  })
+})
+
+describe('pastLabel — how a past meeting reads', () => {
+  const now = new Date('2026-08-03T02:00:00Z') // Monday
+  it('names the week and whether it was held', () => {
+    expect(pastLabel({ startsAt: '2026-07-30T11:30:00Z', status: 'published' }, now)).toBe('Last week · held')
+    expect(pastLabel({ startsAt: '2026-07-23T11:30:00Z', status: 'published' }, now)).toBe('2 weeks ago · held')
+    expect(pastLabel({ startsAt: '2026-07-30T11:30:00Z', status: 'cancelled' }, now)).toBe('Last week · cancelled')
+    // Wednesday 5 Aug: Monday's meeting was this week.
+    expect(pastLabel({ startsAt: '2026-08-03T11:30:00Z', status: 'published' }, new Date('2026-08-05T02:00:00Z'))).toBe('Earlier this week · held')
+  })
+})
+
+describe('editMeeting and changeFromHere', () => {
+  const series = { id: 'ser1', church_id: 'c1', title: 'Weekly D-Group night', kind: 'group_meeting', timeStart: '19:30', timeEnd: '21:00', cadence: 'weekly', intervalN: 1, weekday: 4, countN: 8 }
+  const worked = { id: 'series-ser1-2026-08-13', seriesId: 'ser1', series, occurrenceDate: '2026-08-13', startsAt: '2026-08-13T11:30:00.000Z' }
+  const single = { id: 'ev1', seriesId: null }
+  const edits = { title: 'Night', date: '2026-08-13', startTime: '19:00', endTime: '20:30', location: "Carla's home", notes: '' }
+
+  it('edits a one-off in place, and one repeating date as a saved date', async () => {
+    await editMeeting(single, edits)
+    expect(calls('events', 'update')[0].args[0]).toMatchObject({
+      title: 'Night', starts_at: '2026-08-13T11:00:00.000Z', ends_at: '2026-08-13T12:30:00.000Z', location: "Carla's home", description: null
+    })
+    await editMeeting(worked, edits)
+    expect(calls('events', 'upsert')[0].args[0]).toMatchObject({
+      series_id: 'ser1', occurrence_date: '2026-08-13', title: 'Night', kind: 'group_meeting', location: "Carla's home", status: 'published'
+    })
+  })
+
+  it('changes every date from here on through the split, keeping it a live Group meeting', async () => {
+    state.rpcResult = { data: { already_done: false, new_series_id: 'ser2', moved: 0, standalone: 0 }, error: null }
+    const r = await changeFromHere(worked, { ...edits, repeat: 'weekly', count: 8 }, 'key-1')
+    expect(r.ok).toBe(true)
+    const [call] = calls('rpc', 'split_event_series')
+    expect(call.args).toMatchObject({ p_series: 'ser1', p_occurrence: '2026-08-13', p_starts: '2026-08-13', p_key: 'key-1', p_moves: null })
+    expect(call.args.p_new).toMatchObject({
+      title: 'Night', kind: 'group_meeting', status: 'published', location: "Carla's home",
+      cadence: 'weekly', weekday: 4, time_start: '19:00', time_end: '20:30', count_n: 8
+    })
   })
 })

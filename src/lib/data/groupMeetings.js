@@ -17,9 +17,10 @@
 import { supabase } from '../supabase'
 import { EVENT_COLUMNS, createEvent, updateEvent, cancelEvent, deleteEvent } from './events'
 import {
-  SERIES_COLUMNS, toSeries, ruleColumns, createSeries, updateSeries, skipOccurrence, editOccurrence, deleteSeries
+  SERIES_COLUMNS, toSeries, ruleColumns, createSeries, updateSeries, skipOccurrence, editOccurrence, deleteSeries, splitSeries
 } from './eventSeries'
-import { mergeSeriesOccurrences, describeRule, ymd } from '../recurrence'
+import { mergeSeriesOccurrences, expandSeries, ymd } from '../recurrence'
+import { dayMonth } from '../../utils/dayMonth'
 
 const MESSAGES = {
   loadFailed: 'Group meetings could not be loaded. Please try again.',
@@ -59,6 +60,37 @@ export function meetingRule ({ date, startTime, endTime = null, repeat, count = 
     return { ...base, cadence: 'monthly', intervalN: 1, anchor: 'weekday', weekOfMonth: nth === 5 ? -1 : nth }
   }
   return null
+}
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const NTH = { 1: 'first', 2: 'second', 3: 'third', 4: 'fourth', '-1': 'last' }
+
+// "every Thursday" / "every 2 weeks on Thursday" / "the first Thursday of every month".
+function cadenceWords (rule) {
+  const day = WEEKDAYS[rule.weekday]
+  if (rule.cadence === 'monthly') return `the ${NTH[rule.weekOfMonth]} ${day} of every month`
+  return (rule.intervalN || 1) === 1 ? `every ${day}` : `every ${rule.intervalN} weeks on ${day}`
+}
+
+/** A row's repeat line (13g): "Repeats every Thursday · 8 meetings". */
+export function repeatSummary (rule) {
+  if (!rule) return ''
+  const words = cadenceWords(rule)
+  const how = rule.cadence === 'monthly' ? `Repeats on ${words}` : `Repeats ${words}`
+  return rule.countN ? `${how} · ${rule.countN} meetings` : how
+}
+
+/** The form's summary line (13h): "Every Thursday · ends after 8 meetings (24 Sep)". */
+export function formSummary (rule) {
+  if (!rule) return ''
+  const words = cadenceWords(rule)
+  const every = words.charAt(0).toUpperCase() + words.slice(1)
+  if (!rule.countN) return `${every} · no end date`
+  const start = new Date(`${rule.startsOn}T00:00:00`)
+  const dates = expandSeries(rule, start, new Date(start.getTime() + 800 * DAY))
+  const last = dates.at(-1)?.date
+  const when = last ? ` (${dayMonth(ymd(last))})` : ''
+  return `${every} · ends after ${rule.countN} meetings${when}`
 }
 
 /**
@@ -137,7 +169,7 @@ export async function listGroupMeetings ({ groupIds, now = new Date() }) {
         seriesId: series?.id ?? null,
         occurrenceDate: item.occurrence_date ?? null,
         series,
-        repeatText: series ? describeRule(series) : null,
+        repeatText: series ? repeatSummary(series) : null,
         countN: series?.countN ?? null,
         virtual: !!item.virtual
       }
@@ -189,4 +221,84 @@ export function deleteMeeting (meeting, scope = 'this') {
   if (scope === 'series') return deleteSeries({ seriesId: meeting.seriesId })
   if (scope === 'following') return updateSeries(meeting.seriesId, { ends_on: dayBefore(meeting.occurrenceDate) })
   return skipOccurrence({ series: meeting.series, occurrenceDate: meeting.occurrenceDate })
+}
+
+/**
+ * What the Group meetings card lists (13g): each repeating meeting once, at its next date;
+ * upcoming one-offs; then the recent past, newest first. Later dates of a repeating
+ * meeting are on the Calendar.
+ */
+export function cardMeetings (meetings, now = new Date()) {
+  const t = now.getTime()
+  const upcoming = []
+  const seen = new Set()
+  for (const m of [...meetings].sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt))) {
+    if (Date.parse(m.startsAt) <= t) continue
+    if (m.seriesId) {
+      if (seen.has(m.seriesId)) continue
+      seen.add(m.seriesId)
+    }
+    upcoming.push(m)
+  }
+  const past = meetings.filter(m => Date.parse(m.startsAt) <= t)
+    .sort((a, b) => Date.parse(b.startsAt) - Date.parse(a.startsAt))
+  return [...upcoming, ...past]
+}
+
+// The Monday (Manila) of the week an instant falls in, as a day number.
+function mondayOf (instant) {
+  const local = new Date(new Date(instant).getTime() + 8 * 3_600_000)
+  const day = Math.floor(local.getTime() / DAY)
+  return day - ((local.getUTCDay() + 6) % 7)
+}
+
+/** How a past meeting reads (13g): "Last week · held". */
+export function pastLabel (meeting, now = new Date()) {
+  const weeks = Math.round((mondayOf(now) - mondayOf(meeting.startsAt)) / 7)
+  const when = weeks === 0 ? 'Earlier this week' : weeks === 1 ? 'Last week' : `${weeks} weeks ago`
+  return `${when} · ${meeting.status === 'cancelled' ? 'cancelled' : 'held'}`
+}
+
+function formTimes ({ date, startTime, endTime }) {
+  return { starts_at: manilaInstant(date, startTime), ends_at: endTime ? manilaInstant(date, endTime) : null }
+}
+
+/** "Edit…" (S2): this meeting only — a one-off in place, one repeating date as a saved date. */
+export function editMeeting (meeting, form) {
+  const fields = {
+    title: form.title.trim(),
+    location: form.location?.trim() || null,
+    description: form.notes?.trim() || null,
+    ...formTimes(form)
+  }
+  if (!meeting.seriesId) return updateEvent(meeting.id, fields)
+  return editOccurrence({
+    series: meeting.series,
+    occurrenceDate: meeting.occurrenceDate,
+    payload: { kind: KIND, ...fields }
+  })
+}
+
+/**
+ * "Change from here on…": this date and every one after it take the form's details and
+ * repeat, through the existing split (one database call). `key` is the split's one-time
+ * key, kept by the caller until it succeeds. Returns { ok, newSeriesId, message }.
+ */
+export function changeFromHere (meeting, form, key) {
+  const rule = meetingRule(form)
+  return splitSeries({
+    oldSeriesId: meeting.seriesId,
+    occurrenceDate: meeting.occurrenceDate,
+    startsOn: form.date,
+    newSeriesPayload: {
+      title: form.title.trim(),
+      kind: KIND,
+      status: 'published',
+      location: form.location?.trim() || null,
+      description: form.notes?.trim() || null,
+      ...ruleColumns(rule)
+    },
+    moves: null,
+    key
+  })
 }

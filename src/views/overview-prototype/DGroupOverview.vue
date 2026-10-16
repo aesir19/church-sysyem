@@ -9,12 +9,21 @@ import Card from '../../components/ui/Card.vue'
 import Badge from '../../components/ui/Badge.vue'
 import Button from '../../components/ui/Button.vue'
 import Alert from '../../components/ui/Alert.vue'
+import GroupMeetingsCard from '../../components/groups/GroupMeetingsCard.vue'
+import GroupMeetingForm from '../../components/groups/GroupMeetingForm.vue'
+import GroupMeetingDialogs from '../../components/groups/GroupMeetingDialogs.vue'
 import { useActiveChurch } from '../../composables/useActiveChurch'
+import { showToast } from '../../composables/useToast'
+import { listGroupMeetings } from '../../lib/data/groupMeetings'
 import { fetchDGroupDashboard, summarizeDGroup } from '../../lib/data/dGroup'
 import { listServiceOccurrences } from '../../lib/data/events'
 import { listCalendarOccurrences } from '../../lib/data/eventSeries'
 import { slugify } from '../../lib/data/group'
 import { addDays } from '../../lib/recurrence'
+import { dayMonth as formatDayMonth } from '../../utils/dayMonth'
+
+const dayMonth = d => formatDayMonth(d)
+const dayMonthLong = d => formatDayMonth(d, { long: true })
 
 const { activeChurchId, activeChurchName } = useActiveChurch()
 
@@ -24,6 +33,12 @@ const dashboard = ref({ groups: [], services: [], members: [] })
 const groupId = ref(null)
 const churchItems = ref([])
 const churchFailed = ref(false)
+// Phase 2: the group's own meetings (0056), and the form and dialogs that change them.
+const meetings = ref([])
+const meetingsLoading = ref(true)
+const meetingsFailed = ref(false)
+const form = ref({ open: false, mode: 'create', meeting: null })
+const action = ref(null)
 let generation = 0
 
 const view = computed(() => summarizeDGroup(dashboard.value, { groupId: groupId.value }))
@@ -35,9 +50,6 @@ const countFor = id => new Set(dashboard.value.members.filter(m => m.groupId ===
 
 const TZ = 'Asia/Manila'
 const fmt = (value, opts) => new Date(value).toLocaleDateString('en-PH', { timeZone: TZ, ...opts })
-// Day before month ("2 Aug", "1 August"), as mockup 13 writes dates.
-const dayMonth = d => new Date(d).toLocaleDateString('en-GB', { timeZone: TZ, day: 'numeric', month: 'short' })
-const dayMonthLong = d => new Date(d).toLocaleDateString('en-GB', { timeZone: TZ, day: 'numeric', month: 'long' })
 const weekday = d => fmt(d, { weekday: 'short' })
 const time = d => new Date(d).toLocaleTimeString('en-PH', { timeZone: TZ, hour: 'numeric', minute: '2-digit', hour12: true })
 const firstName = name => name.split(' ')[0]
@@ -139,6 +151,31 @@ async function load () {
     .filter(item => (item.isService || item.status === 'published') && item.kind !== 'group_meeting')
     .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
   loading.value = false
+  loadMeetings()
+}
+
+async function loadMeetings () {
+  const ids = dashboard.value.groups.map(x => x.id)
+  meetingsLoading.value = true
+  const r = await listGroupMeetings({ groupIds: ids })
+  meetingsFailed.value = !r.ok
+  meetings.value = r.meetings
+  meetingsLoading.value = false
+}
+
+const shownMeetings = computed(() => groupId.value ? meetings.value.filter(m => m.groupId === groupId.value) : meetings.value)
+const groupNames = computed(() => Object.fromEntries(groups.value.map(x => [x.id, x.name])))
+
+function openForm (mode = 'create', meeting = null) {
+  form.value = { open: true, mode, meeting }
+}
+function onMeetingAction ({ kind, meeting }) {
+  if (kind === 'edit' || kind === 'from-here') openForm(kind, meeting)
+  else action.value = { kind, meeting }
+}
+function onMeetingSaved (message) {
+  showToast(message)
+  loadMeetings()
 }
 
 onMounted(load)
@@ -151,6 +188,14 @@ watch(activeChurchId, load)
       class="dg-head anim-rise"
       style="--i:0"
     >
+      <Button
+        v-if="!loading && groups.length"
+        class="dg-head__add"
+        variant="primary"
+        @click="openForm()"
+      >
+        + Group meeting
+      </Button>
       <p class="eyebrow">
         {{ multi && !groupId ? 'My D-Groups' : 'My D-Group' }}
       </p>
@@ -241,7 +286,7 @@ watch(activeChurchId, load)
         </Card>
 
         <template v-else-if="!failed">
-          <div class="pair">
+          <div class="pair o-pair">
             <Card
               class="anim-rise"
               style="--i:1"
@@ -318,7 +363,7 @@ watch(activeChurchId, load)
           </div>
 
           <Card
-            class="anim-rise"
+            class="o-week anim-rise"
             style="--i:3"
           >
             <div class="section-head">
@@ -353,7 +398,7 @@ watch(activeChurchId, load)
           </Card>
 
           <Card
-            class="anim-rise"
+            class="o-progress anim-rise"
             style="--i:4"
           >
             <div class="section-head">
@@ -373,7 +418,7 @@ watch(activeChurchId, load)
           </Card>
 
           <Card
-            class="anim-rise"
+            class="o-members anim-rise"
             style="--i:5"
           >
             <div class="section-head">
@@ -432,8 +477,20 @@ watch(activeChurchId, load)
       </main>
 
       <aside class="aside">
+        <GroupMeetingsCard
+          v-if="groups.length"
+          class="o-meetings anim-rise"
+          style="--i:2"
+          :meetings="shownMeetings"
+          :group-names="groupNames"
+          :show-group="multi && !groupId"
+          :loading="meetingsLoading"
+          :failed="meetingsFailed"
+          @add="openForm()"
+          @action="onMeetingAction"
+        />
         <Card
-          class="church anim-rise"
+          class="church o-church anim-rise"
           style="--i:2"
         >
           <div class="section-head">
@@ -472,6 +529,21 @@ watch(activeChurchId, load)
         </Card>
       </aside>
     </div>
+
+    <GroupMeetingForm
+      v-model:open="form.open"
+      :mode="form.mode"
+      :meeting="form.meeting"
+      :groups="groupId ? shownGroups : groups"
+      :default-group-id="groupId || groups[0]?.id || null"
+      :church-id="activeChurchId"
+      @saved="onMeetingSaved"
+    />
+    <GroupMeetingDialogs
+      :action="action"
+      @close="action = null"
+      @saved="onMeetingSaved"
+    />
   </div>
 </template>
 
@@ -544,14 +616,28 @@ h2 { font-size:var(--text-h3); font-weight:800; color:var(--ink); }
 .seg__opt.is-on { background:var(--surface); color:var(--ink); box-shadow:0 1px 2px rgba(16,24,40,.1); }
 .skeleton-list { display:grid; gap:var(--sp-10); }
 .skeleton-list span { display:block; height:120px; }
-@media (max-width:900px) { .layout { grid-template-columns:1fr; } }
+/* Keyed to the main column's own width, not the window's: beside the sidebar and the
+   rail it can be phone-narrow on a laptop. Named, because in one column .main stops
+   being a box (display: contents) and the rows fall back to the page's width.
+   Declared before the one-column rules below, which switch .main off. */
+.dg { container:dgmain / inline-size; }
+.main { container:dgmain / inline-size; }
+.dg-head { position:relative; }
+.dg-head__add { position:absolute; right:0; bottom:0; }
+/* One column: the two columns flatten into one list and each card takes its place —
+   Group meetings right after This week, since it is what a leader manages most. */
+@media (max-width:900px) {
+  .layout { display:flex; flex-direction:column; }
+  /* A display:contents box can't be measured, so it must stop being the container too. */
+  .main,.aside { display:contents; container-type:normal; }
+  .o-pair { order:1; } .o-week { order:2; } .o-meetings { order:3; }
+  .o-progress { order:4; } .o-members { order:5; } .o-church { order:6; }
+}
 @media (max-width:640px) {
   .dg-head h1 { font-size:var(--text-h2); }
+  .dg-head__add { position:static; margin-bottom:var(--sp-10); }
 }
-/* Keyed to the main column's own width, not the window's: beside the sidebar and the
-   rail it can be phone-narrow on a laptop. */
-.main { container-type:inline-size; }
-@container (max-width:560px) {
+@container dgmain (max-width:560px) {
   .progress { column-gap:var(--sp-10); }
   .member { grid-template-columns:1fr auto; }
   .member__served { grid-column:1 / -1; }

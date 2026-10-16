@@ -82,7 +82,12 @@ async function gotoOverview (page, { permissions = LEADER, dashboard }) {
     },
     // The mock does not evaluate filters; the calendar's second events read asks for
     // series exceptions only, which none of these are.
-    tables: { events: ({ url }) => String(url).includes('series_id=not.is.null') ? [] : CHURCH_EVENTS, event_series: [] }
+    // The group's own meetings (Phase 2) are a separate read, filtered by group; this
+    // spec is about the Phase 1 sections, so that read finds none.
+    tables: {
+      events: ({ url }) => /series_id=not\.is\.null|small_group_id=in/.test(String(url)) ? [] : CHURCH_EVENTS,
+      event_series: []
+    }
   })
 }
 
