@@ -46,6 +46,8 @@ const MESSAGES = {
 export const EVENT_COLUMNS =
   'id, church_id, title, kind, status, starts_at, ends_at, location, description, ' +
   'run_by, projected_budget, cancel_reason, series_id, occurrence_date, ' +
+  // 0056: the D-Group a Group meeting belongs to (NULL for every other event).
+  'small_group_id, ' +
   // Stage 3 (0035): the room link, the attendance switch, the closeout stamp, and the review.
   'room_id, attendance_tracked, closed_at, review_went_well, review_went_wrong, review_followups, ' +
   'created_at, created_by, updated_at, published_at'
@@ -62,6 +64,16 @@ export const EVENT_KINDS = [
 ]
 
 const KIND_LABEL = Object.fromEntries(EVENT_KINDS.map((k) => [k.value, k.label]))
+
+/**
+ * The Kind choices the Events composer offers. Group meetings are created by their group's
+ * leaders only (0056), so a new event never offers one; an existing Group meeting keeps its
+ * kind, as the only choice, so it cannot be changed into something else.
+ */
+export function composerKinds(currentKind) {
+  if (currentKind === 'group_meeting') return EVENT_KINDS.filter((k) => k.value === 'group_meeting')
+  return EVENT_KINDS.filter((k) => k.value !== 'group_meeting')
+}
 export function kindLabel(value) { return KIND_LABEL[value] ?? value }
 
 /**

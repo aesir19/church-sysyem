@@ -20,7 +20,8 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import Icon from './icons/Icon.vue'
 
 const props = defineProps({
-  // [{ key, label, onSelect, danger?, disabled?, dividerBefore? }]
+  // [{ key, label, onSelect, danger?, disabled?, dividerBefore?, note? }]. `note` is a
+  // second line under the label — why a disabled item is unavailable (13i).
   items: { type: Array, default: () => [] },
   // The trigger is icon-only, so it needs its own accessible name.
   label: { type: String, default: 'More actions' },
@@ -165,6 +166,10 @@ onBeforeUnmount(() => {
               @click="select(item)"
             >
               {{ item.label }}
+              <small
+                v-if="item.note"
+                class="om__note"
+              >{{ item.note }}</small>
             </button>
           </template>
         </div>
@@ -251,6 +256,7 @@ onBeforeUnmount(() => {
 .om__item--danger:hover:not(:disabled) { background: var(--magenta-tint); }
 
 .om__item:disabled { opacity: .55; cursor: not-allowed; }
+.om__note { display: block; margin-top: 2px; font-size: var(--text-meta); font-weight: 500; color: var(--ink-5); }
 
 .om__rule {
   height: 1px;

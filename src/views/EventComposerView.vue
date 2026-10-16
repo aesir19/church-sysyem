@@ -24,7 +24,7 @@ import { useActiveChurch } from '../composables/useActiveChurch'
 import { useToast } from '../composables/useToast'
 import Toggle from '../components/ui/Toggle.vue'
 import EventRolesField from '../components/events/EventRolesField.vue'
-import { EVENT_KINDS, createEvent, updateEvent, getEvent, eventLocation, listServiceOccurrences, getEditState } from '../lib/data/events'
+import { composerKinds, createEvent, updateEvent, getEvent, eventLocation, listServiceOccurrences, getEditState } from '../lib/data/events'
 import {
   createSeries, updateSeries, getSeries, editOccurrence, splitSeries,
   ruleColumns, listPlannedDates, listCalendarOccurrences, getOccurrenceRow, SERIES_DELETED,
@@ -662,7 +662,7 @@ function toTimeInput(iso) {
                 class="cmp__input"
               >
                 <option
-                  v-for="k in EVENT_KINDS"
+                  v-for="k in composerKinds(form.kind)"
                   :key="k.value"
                   :value="k.value"
                 >{{ k.label }}</option>

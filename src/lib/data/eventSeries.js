@@ -38,7 +38,7 @@ export const SERIES_COLUMNS =
   'id, church_id, title, kind, status, location, description, run_by, projected_budget, ' +
   'cadence, interval_n, anchor, weekday, week_of_month, day_of_month, ' +
   'weekday2, week_of_month2, day_of_month2, time_start, time_end, starts_on, ends_on, count_n, ' +
-  'created_at, created_by, updated_at, published_at, deleted_at'
+  'created_at, created_by, updated_at, published_at, deleted_at, small_group_id'
 
 // A DB row (snake_case) → the camelCase shape the recurrence engine reads, with the display
 // fields carried alongside so mergeSeriesOccurrences can decorate occurrences. One mapping,
@@ -69,6 +69,8 @@ export function toSeries(row) {
     endsOn: row.ends_on,
     countN: row.count_n,
     deletedAt: row.deleted_at ?? null,
+    // 0056: the D-Group a repeating Group meeting belongs to; null for every other series.
+    smallGroupId: row.small_group_id ?? null,
   }
 }
 

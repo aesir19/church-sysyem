@@ -64,7 +64,9 @@ const MEMBERS_9 = [
 const CHURCH_EVENTS = [
   { id: 'e-prayer', church_id: CHURCH.id, title: 'Prayer meeting', kind: 'special_service', status: 'published', starts_at: '2026-08-05T11:00:00Z', series_id: null },
   { id: 'e-outreach', church_id: CHURCH.id, title: 'Outreach — Cogon', kind: 'outreach', status: 'published', starts_at: '2026-08-07T07:00:00Z', series_id: null },
-  { id: 'e-draft', church_id: CHURCH.id, title: 'Unannounced planning draft', kind: 'administrative', status: 'draft', starts_at: '2026-08-06T07:00:00Z', series_id: null }
+  { id: 'e-draft', church_id: CHURCH.id, title: 'Unannounced planning draft', kind: 'administrative', status: 'draft', starts_at: '2026-08-06T07:00:00Z', series_id: null },
+  // The leader's own group meeting: theirs to see (0056), but not a church event.
+  { id: 'e-meeting', church_id: CHURCH.id, title: 'Weekly D-Group night', kind: 'group_meeting', status: 'published', starts_at: '2026-08-06T11:30:00Z', series_id: null, small_group_id: 'g4' }
 ]
 const SCHEDULES = [{ id: 'sched-sun', label: 'Sunday Service', weekday: 0, starts_at: '09:00:00', ends_at: '12:00:00' }]
 
@@ -80,7 +82,12 @@ async function gotoOverview (page, { permissions = LEADER, dashboard }) {
     },
     // The mock does not evaluate filters; the calendar's second events read asks for
     // series exceptions only, which none of these are.
-    tables: { events: ({ url }) => String(url).includes('series_id=not.is.null') ? [] : CHURCH_EVENTS, event_series: [] }
+    // The group's own meetings (Phase 2) are a separate read, filtered by group; this
+    // spec is about the Phase 1 sections, so that read finds none.
+    tables: {
+      events: ({ url }) => /series_id=not\.is\.null|small_group_id=in/.test(String(url)) ? [] : CHURCH_EVENTS,
+      event_series: []
+    }
   })
 }
 
