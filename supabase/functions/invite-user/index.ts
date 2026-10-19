@@ -35,6 +35,7 @@
 // Provided by the platform: SUPABASE_URL, SUPABASE_ANON_KEY.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { classifySendError } from './send-error.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -190,7 +191,17 @@ Deno.serve(async (req) => {
     data: fullName ? { full_name: fullName } : undefined,
   })
   if (sendError) {
-    return json({ error: 'The account was recorded but the e-mail could not be sent. Try Resend.' }, 502)
+    // Logged by member, never by address, so the function logs hold no e-mail PII.
+    console.error(JSON.stringify({
+      event: 'invite_send_failed',
+      mode,
+      member,
+      status: sendError.status ?? null,
+      code: (sendError as { code?: string }).code ?? null,
+      message: sendError.message,
+    }))
+    const { status, message } = classifySendError(sendError)
+    return json({ error: message }, status)
   }
 
   return json({ ok: true, full_name: fullName, email: sendTo })

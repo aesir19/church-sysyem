@@ -14,7 +14,7 @@ import {
   refusalMessage, isAuthorizationFailure, flushDeferredConstraints, disconnect
 } from './helpers/database.js'
 import {
-  makeChurch, makeMember, makePrincipal, makeMinistry, makeSmallGroup, addToGroup
+  makeChurch, makeMember, makePrincipal, makeMinistry, makeDGroup, addToGroup
 } from './helpers/fixtures.js'
 
 afterAll(disconnect)
@@ -30,7 +30,7 @@ const perform = (tx, sql, ...args) => tx.$executeRawUnsafe(sql, ...args)
 /** A church with a small group, and an account that is already in that group. */
 async function groupWithCandidate (tx, label = 'a') {
   const church = await makeChurch(tx, label)
-  const group = await makeSmallGroup(tx, church, label)
+  const group = await makeDGroup(tx, church, label)
   const candidate = await makePrincipal(tx, { role: 'member', churchId: church })
   await addToGroup(tx, group, candidate.memberId)
   return { church, group, candidate }
@@ -440,8 +440,8 @@ describe.skipIf(!hasDatabase())('assigning a small group leader', () => {
   it('lets one person lead several groups', async () => {
     await withRollback(async tx => {
       const church = await makeChurch(tx)
-      const first = await makeSmallGroup(tx, church, 'first')
-      const second = await makeSmallGroup(tx, church, 'second')
+      const first = await makeDGroup(tx, church, 'first')
+      const second = await makeDGroup(tx, church, 'second')
       const person = await makePrincipal(tx, { role: 'member', churchId: church })
       await addToGroup(tx, first, person.memberId)
       await addToGroup(tx, second, person.memberId)

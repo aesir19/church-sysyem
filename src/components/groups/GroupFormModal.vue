@@ -5,14 +5,14 @@ import Button from '../ui/Button.vue'
 import Input from '../ui/Input.vue'
 import { supabase } from '../../lib/supabase'
 import { write } from '../../lib/data/write'
-import { SMALL_GROUP_COLUMNS } from '../../lib/data/groups'
-import { buildSmallGroupCreatePayload, buildSmallGroupUpdatePayload } from '../../utils/groupPayload'
+import { D_GROUP_COLUMNS } from '../../lib/data/groups'
+import { buildDGroupCreatePayload, buildDGroupUpdatePayload } from '../../utils/groupPayload'
 import { showToast } from '../../composables/useToast'
 
-// Dialog 04 — new small group, and the same form in edit mode.
+// Dialog 04 — new D-Group, and the same form in edit mode.
 //
-// SMALL GROUPS ONLY, which is why there is no type chooser. The mockup offers
-// "Small group / Ministry" as a pair of cards, but a Ministry is GLOBAL — the
+// D-GROUPS ONLY, which is why there is no type chooser. The mockup offers
+// "D-Group / Ministry" as a pair of cards, but a Ministry is GLOBAL — the
 // 0004 CHECK requires church_id IS NULL — so creating one is a cross-church act
 // that no church-scoped role can perform, and the app has never exposed it.
 // Rendering a choice that the database refuses is worse than rendering no
@@ -65,22 +65,22 @@ async function submit () {
   // Both writes re-state the scope in the WHERE clause as well as relying on
   // RLS. Belt and braces, deliberately: an edit that reached the wrong church
   // would rename a group nobody in this church can see.
-  // `small_groups` since 0026, and the `.eq('type', 'Small Group')` guard that used
+  // `small_groups` since 0026, and the `.eq('type', 'D-Group')` guard that used
   // to sit here is gone with it — not dropped, but made structural. This form only
-  // ever creates and renames small groups, and that table holds nothing else, so a
+  // ever creates and renames D-Groups, and that table holds nothing else, so a
   // ministry can no longer be reached from here even by a malformed id.
   const result = isEdit.value
     ? await write(
       supabase
         .from('small_groups')
-        .update(buildSmallGroupUpdatePayload({ name: name.value }))
+        .update(buildDGroupUpdatePayload({ name: name.value }))
         .eq('id', props.group.id)
         .eq('church_id', props.churchId),
-      { columns: SMALL_GROUP_COLUMNS, messages: { blocked: 'That group could not be updated. It may belong to another church.' } }
+      { columns: D_GROUP_COLUMNS, messages: { blocked: 'That group could not be updated. It may belong to another church.' } }
     )
     : await write(
-      supabase.from('small_groups').insert(buildSmallGroupCreatePayload({ name: name.value }, props.churchId)),
-      { columns: SMALL_GROUP_COLUMNS, messages: { blocked: 'That group could not be created. It may belong to another church.' } }
+      supabase.from('small_groups').insert(buildDGroupCreatePayload({ name: name.value }, props.churchId)),
+      { columns: D_GROUP_COLUMNS, messages: { blocked: 'That group could not be created. It may belong to another church.' } }
     )
 
   saving.value = false
@@ -94,7 +94,7 @@ async function submit () {
   emit('saved', { row: result.rows[0], mode: props.mode })
   emit('update:open', false)
   showToast({
-    title: isEdit.value ? 'Group saved.' : 'Small group created.',
+    title: isEdit.value ? 'Group saved.' : 'D-Group created.',
     body: result.rows[0]?.name,
     type: 'success'
   })
@@ -104,8 +104,8 @@ async function submit () {
 <template>
   <Modal
     :open="open"
-    :title="isEdit ? 'Rename group' : 'New small group'"
-    description="Small groups meet midweek, in homes. They belong to this church."
+    :title="isEdit ? 'Rename group' : 'New Discipleship Group'"
+    description="Discipleship Groups meet midweek, in homes. They belong to this church."
     width="sm"
     :close-on-outside-click="!dirty"
     @update:open="$event ? null : requestClose()"

@@ -23,6 +23,11 @@
    =========================================================================== */
 
 :root {
+  /* Tells the browser which palette to draw its own UI in — <select> option
+     lists, date/time picker icons, scrollbars. Without it they stay light
+     while the text inherits dark-theme ink: light grey on white. */
+  color-scheme: light;
+
   /* --- Surfaces ------------------------------------------------------- */
   --app-bg:            #f4f6f8;   /* behind cards */
   --surface:           #ffffff;   /* cards, nav, tables */
@@ -160,6 +165,7 @@
 /* --- Dark, via the OS, only when the user has not chosen ---------------- */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
+    color-scheme: dark;
     --app-bg:            #0b1117;
     --surface:           #141d26;
     --surface-subtle:    #18232d;
@@ -212,6 +218,7 @@
 
 /* --- Dark, chosen explicitly ------------------------------------------- */
 :root[data-theme='dark'] {
+  color-scheme: dark;
   --app-bg:            #0b1117;
   --surface:           #141d26;
   --surface-subtle:    #18232d;

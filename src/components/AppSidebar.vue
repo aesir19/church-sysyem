@@ -93,7 +93,7 @@ onMounted(loadUser)
 
 const userName = computed(() => displayName.value || 'Signed in')
 // Derived from the capability flags, not the account `role` string — a ministry
-// account (Welcome / Finance / Secretariat / Small Group Leader) keeps role
+// account (Welcome / Finance / Secretariat / D-Group Leader) keeps role
 // 'member' but is not roleless. See roleLabel() in utils/capabilities.
 const roleLabel = computed(() => roleLabelFor(caps.value) || 'No role assigned')
 </script>

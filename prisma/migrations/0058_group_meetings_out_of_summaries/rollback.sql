@@ -1,0 +1,4 @@
+-- Rollback for 0058: re-run the previous definitions —
+--   list_understaffed_events from 0042_understaffed_events_aggregate
+--   d_group_dashboard        from 0055_d_group_dashboard (as CREATE OR REPLACE)
+-- which differ only by the `AND e.small_group_id IS NULL` lines this migration added.

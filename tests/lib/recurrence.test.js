@@ -428,3 +428,12 @@ describe('remainingCount — splitting a "repeat N times" schedule never adds da
     expect(remainingCount({ series: tenSundays, countN: null, splitOn: '2026-02-08' })).toBeNull()
   })
 })
+
+describe("a repeating Group meeting's worked-out dates (0056)", () => {
+  it('carry the group, so the Calendar knows whose meeting it is', () => {
+    const series = { id: 's', title: 'Night', kind: 'group_meeting', cadence: 'weekly', intervalN: 1, weekday: 4,
+      timeStart: '19:30', startsOn: '2026-08-06', smallGroupId: 'g4' }
+    const [first] = mergeSeriesOccurrences({ seriesList: [series], exceptions: [], from: new Date(2026, 7, 1), to: new Date(2026, 7, 10) })
+    expect(first.small_group_id).toBe('g4')
+  })
+})

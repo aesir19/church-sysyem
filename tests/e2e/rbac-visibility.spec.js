@@ -4,7 +4,7 @@ import { authedGoto, CHURCH, SUPERADMIN_PERMS } from './support/scenario.js'
 // Per-role visibility — the RBAC rework (ADR-0016/0017). Each test overrides
 // get_my_permissions to a narrower role and asserts what that role actually sees:
 // the safe directory instead of PII, a nav shorn of out-of-scope items, a
-// "no access yet" state for a scopeless account, and the small-group leader's
+// "no access yet" state for a scopeless account, and the D-Group leader's
 // journey toggles. The mock is the enforcement stand-in here; RLS is proven
 // separately against staging.
 
@@ -96,7 +96,7 @@ test.describe('Scopeless account', () => {
   })
 })
 
-test.describe('Small-group leader journey toggles', () => {
+test.describe('D-Group leader journey toggles', () => {
   test('a leader of the group sees the one-to-one / turning-point toggles', async ({ page }) => {
     await authedGoto(page, '/dashboard/groups/cogon/thursday-group', {
       rpc: {

@@ -24,7 +24,7 @@ const FEATURED = {
     'Membership growth over time',
     'Attendance trends, service by service',
     'Giving summaries and totals',
-    'Ministry & small-group participation',
+    'Ministry & D-Group participation',
     'One click, print-ready'
   ]
 }
@@ -47,8 +47,8 @@ const ITEMS = [
     n: 3,
     title: 'Approval Workflows',
     points: [
-      'New small groups & ministries',
-      'Appointing small-group leaders',
+      'New D-Groups & ministries',
+      'Appointing D-Group leaders',
       'New events — and more'
     ]
   }

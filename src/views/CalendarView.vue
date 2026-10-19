@@ -29,6 +29,10 @@ import { expandHolidays, definedThrough } from '../lib/holidays'
 import { buildIcs, icsFilename } from '../lib/ics'
 import { addDays, ymd } from '../lib/recurrence'
 import EventPeekCard from '../components/events/EventPeekCard.vue'
+import GroupMeetingForm from '../components/groups/GroupMeetingForm.vue'
+import GroupMeetingDialogs from '../components/groups/GroupMeetingDialogs.vue'
+import { showToast } from '../composables/useToast'
+import { myLedGroupIds, groupNamesFor, meetingActions, meetingFromCalendarItem, seriesIdOf, actionOpensForm } from '../lib/data/groupMeetings'
 
 const router = useRouter()
 const { activeChurchId, churches, ensureLoaded } = useActiveChurch()
@@ -280,12 +284,43 @@ const upcoming = computed(() => {
     .slice(0, 8)
 })
 
+// Group meetings (0056). Members see their group's meetings through the same calendar read;
+// these say whose meeting each is, and let the group's leaders act on it from here — a later
+// date of a repeating meeting is reachable only on the Calendar.
+const ledGroupIds = ref([])
+const groupNames = ref({})
+const meetingForm = ref({ open: false, mode: 'edit', meeting: null })
+const meetingAction = ref(null)
+const ledGroups = computed(() => ledGroupIds.value.map((id) => ({ id, name: groupNames.value[id] || 'My D-Group' })))
+const peekGroupName = computed(() => groupNames.value[peekItem.value?.small_group_id] || '')
+// The leader's short menu, for a meeting of a group they lead (C1: the Events team keeps "Go to event").
+const peekActions = computed(() => {
+  const it = peekItem.value
+  if (!it || it.kind !== 'group_meeting' || !ledGroupIds.value.includes(it.small_group_id)) return []
+  return meetingActions({ startsAt: it.starts_at, status: it.status, seriesId: seriesIdOf(it) })
+})
+
+async function onPeekAction(kind) {
+  const item = peekItem.value
+  peekOpen.value = false
+  const r = await meetingFromCalendarItem(item)
+  if (!r.ok) { showToast('That meeting could not be opened. Please try again.', 'error'); return }
+  if (actionOpensForm(kind)) meetingForm.value = { open: true, mode: kind, meeting: r.meeting }
+  else meetingAction.value = { kind, meeting: r.meeting }
+}
+function onMeetingSaved(message) {
+  showToast(message)
+  load()
+}
+
 async function load() {
   loading.value = true
   errorMsg.value = ''
   await ensureLoaded()
   const churchId = activeChurchId.value
   if (!churchId) { loading.value = false; return }
+  myLedGroupIds().then((r) => { ledGroupIds.value = r.ids })
+  groupNamesFor(churchId).then((names) => { groupNames.value = names })
 
   const [fromD, toD] = windowRange.value
   const from = fromD.toISOString()
@@ -800,8 +835,24 @@ function metaOf(it) {
       :item="peekItem"
       :anchor="peekAnchor"
       :can-view-events="canViewEvents"
+      :group-name="peekGroupName"
+      :actions="peekActions"
       @go="goToEvent"
       @serve="serveEvent"
+      @action="onPeekAction"
+    />
+    <GroupMeetingForm
+      v-model:open="meetingForm.open"
+      :mode="meetingForm.mode"
+      :meeting="meetingForm.meeting"
+      :groups="ledGroups"
+      :church-id="activeChurchId"
+      @saved="onMeetingSaved"
+    />
+    <GroupMeetingDialogs
+      :action="meetingAction"
+      @close="meetingAction = null"
+      @saved="onMeetingSaved"
     />
   </div>
 </template>

@@ -21,8 +21,12 @@ const props = defineProps({
   // Viewport rect of the clicked event element ({ top,left,right,bottom,width,height }).
   anchor: { type: Object, default: null },
   canViewEvents: { type: Boolean, default: false },
+  // A Group meeting (0056): its group's name, and — for a leader of that group only — the
+  // meeting's ⋯ actions as meetingActions() lists them ([{ kind, label, danger, disabled, note }]).
+  groupName: { type: String, default: '' },
+  actions: { type: Array, default: () => [] },
 })
-const emit = defineEmits(['update:open', 'go', 'serve'])
+const emit = defineEmits(['update:open', 'go', 'serve', 'action'])
 
 const cardEl = ref(null)
 const pos = ref({ top: 0, left: 0, placement: 'below' })
@@ -37,7 +41,8 @@ const isRealEvent = computed(() => {
 const isCancelled = computed(() => props.item?.status === 'cancelled')
 const isTentative = computed(() => props.item?.status === 'draft') // a dated draft (Q14)
 const showGoTo = computed(() => props.canViewEvents)
-const showServe = computed(() => !props.canViewEvents && isRealEvent.value && props.item?.status === 'published')
+// A Group meeting has no roles to serve in.
+const showServe = computed(() => !props.canViewEvents && isRealEvent.value && props.item?.status === 'published' && props.item?.kind !== 'group_meeting')
 
 const whenLine = computed(() => {
   const e = props.item
@@ -146,6 +151,12 @@ onBeforeUnmount(() => {
         <h3 class="pk__title">
           {{ item.title }}
         </h3>
+        <p
+          v-if="groupName"
+          class="pk__group"
+        >
+          {{ groupName }}
+        </p>
         <p class="pk__when">
           {{ whenLine }}
         </p>
@@ -188,6 +199,30 @@ onBeforeUnmount(() => {
           {{ item.cancel_reason }}
         </p>
 
+        <div
+          v-if="actions.length"
+          class="pk__actions"
+        >
+          <template
+            v-for="a in actions"
+            :key="a.kind"
+          >
+            <div
+              v-if="a.dividerBefore"
+              class="pk__rule"
+            />
+            <button
+              type="button"
+              class="pk__action"
+              :class="{ 'pk__action--danger': a.danger }"
+              :disabled="a.disabled || undefined"
+              @click="emit('action', a.kind)"
+            >
+              {{ a.label }}
+              <small v-if="a.note">{{ a.note }}</small>
+            </button>
+          </template>
+        </div>
         <div
           v-if="showGoTo || showServe"
           class="pk__foot"
@@ -244,4 +279,15 @@ onBeforeUnmount(() => {
 .pk__desc { margin: var(--sp-10) 0 0; font-size: var(--text-body-sm); color: var(--ink-2); line-height: 1.5; }
 .pk__cancel { margin: var(--sp-8) 0 0; font-size: var(--text-meta); color: var(--magenta, #d6006c); font-style: italic; }
 .pk__foot { display: flex; justify-content: flex-end; margin-top: var(--sp-14); }
+.pk__group { margin: 2px 0 0; font-size: var(--text-meta); font-weight: 700; color: var(--accent-text); }
+/* A leader's meeting actions (13i), drawn as a list: a menu inside this floating card would
+   be a popover inside a popover, each closing the other. */
+.pk__actions { display: flex; flex-direction: column; margin-top: var(--sp-12); padding-top: var(--sp-8); border-top: 1px solid var(--divider); }
+.pk__action { padding: 7px 8px; border: 0; border-radius: 9px; background: transparent; text-align: left; font: inherit; font-size: var(--text-body-sm); font-weight: 600; color: var(--ink-2); cursor: pointer; }
+.pk__action:hover:not(:disabled) { background: var(--accent-tint); }
+.pk__action:focus-visible { outline: var(--ring-focus); outline-offset: -2px; }
+.pk__action--danger { color: var(--magenta); }
+.pk__action:disabled { opacity: .55; cursor: not-allowed; }
+.pk__action small { display: block; font-size: var(--text-meta); font-weight: 500; color: var(--ink-5); }
+.pk__rule { height: 1px; margin: 4px 0; background: var(--divider); }
 </style>

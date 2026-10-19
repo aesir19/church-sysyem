@@ -15,7 +15,7 @@ import {
   refusalMessage, isAuthorizationFailure, disconnect
 } from './helpers/database.js'
 import {
-  makeChurch, makeMember, makePrincipal, makeMinistry, makeSmallGroup,
+  makeChurch, makeMember, makePrincipal, makeMinistry, makeDGroup,
   addToGroup, findSystemMinistry, visibleGroupIds, visibleMembershipIds
 } from './helpers/fixtures.js'
 
@@ -29,8 +29,8 @@ async function twoChurchWorld (tx) {
   const churchA = await makeChurch(tx, 'a')
   const churchB = await makeChurch(tx, 'b')
   const ministry = await makeMinistry(tx, { label: 'plain' })
-  const groupA = await makeSmallGroup(tx, churchA, 'in-a')
-  const groupB = await makeSmallGroup(tx, churchB, 'in-b')
+  const groupA = await makeDGroup(tx, churchA, 'in-a')
+  const groupB = await makeDGroup(tx, churchB, 'in-b')
   const memberA = await makeMember(tx, churchA, 'in-a')
   const memberB = await makeMember(tx, churchB, 'in-b')
   return { churchA, churchB, ministry, groupA, groupB, memberA, memberB }

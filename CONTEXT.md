@@ -52,16 +52,17 @@ is *defined* — never what it's *allowed to do* (that's RLS/capabilities).
   and their powers are defined in the RBAC migrations (`0014`+) and mirrored for the UI in
   `capabilities.js`. Ask that file what a role means; don't infer it from the name.
 
-- **Small Group Leader** — **not a role.** It comes from leading at least one small group
-  (`small_group_leaders`, `0022`); a leader's `role` stays whatever it was. Anything that
+- **D-Group Leader** (formerly Small Group Leader) — **not a role.** It comes from leading
+  at least one D-Group (`small_group_leaders`, `0022`); a leader's `role` stays whatever it was. Anything that
   keys on the role string alone will miss it. See `docs/decisions/0014`.
 
 - **Group** — an umbrella word only. There is no `groups` table since `0026`. A group is
   one of two distinct things:
   - **Ministry** — church-spanning (a person's Worship Team membership is global).
     Tables: `ministries`, membership in `ministry_members`.
-  - **Small Group** — belongs to one church. Tables: `small_groups`,
-    membership in `small_group_members`.
+  - **Discipleship Group (D-Group)** — belongs to one church. Formerly "Small Group";
+    the UI and code say D-Group, but the database kept its names: tables `small_groups`,
+    membership in `small_group_members`. Avoid "small group" in new UI copy.
   The two are mapped from vocabulary in `src/lib/data/groups.js`
   (`GROUP_TABLES`, `MEMBERSHIP_TABLES`, `MEMBERSHIP_PARENT_KEY`). Which table a group uses
   depends on its type — an id alone does not tell you which.

@@ -7,9 +7,9 @@
 //     is_finance, is_secretariat, is_welcome, is_small_group_leader }
 // or null/undefined for an unresolved or unlinked user (everything fails closed).
 //
-// SMALL GROUP LEADER IS NOT A `role`. It comes from leading at least one small group
+// D-GROUP LEADER IS NOT A `role`. It comes from leading at least one D-Group
 // (0022's small_group_leaders table), so someone's `role` stays 'member' while
-// isSmallGroupLeader is true. Anything keying on the role string alone will miss it.
+// isDGroupLeader is true. Anything keying on the role string alone will miss it.
 
 export function deriveCapabilities(perm) {
   const p = perm || {}
@@ -20,7 +20,7 @@ export function deriveCapabilities(perm) {
   const isFinance = !!p.is_finance
   const isSecretariat = !!p.is_secretariat
   const isWelcome = !!p.is_welcome
-  const isSmallGroupLeader = !!p.is_small_group_leader
+  const isDGroupLeader = !!p.is_small_group_leader
   const isEventsTeam = !!p.is_events_team
 
   return {
@@ -32,7 +32,7 @@ export function deriveCapabilities(perm) {
     isFinance,
     isSecretariat,
     isWelcome,
-    isSmallGroupLeader,
+    isDGroupLeader,
     isEventsTeam,
 
     // VIEW capabilities. Head Pastor is deliberately NOT in canSeeMemberDetail —
@@ -45,7 +45,7 @@ export function deriveCapabilities(perm) {
     // for those accounts into a "no access yet" state rather than the congregation.
     canBrowseDirectory:
       isSuperAdmin || isHeadPastor || isPastor || isChurchLeader ||
-      isFinance || isSecretariat || isWelcome || isSmallGroupLeader,
+      isFinance || isSecretariat || isWelcome || isDGroupLeader,
     canViewFinance: isSuperAdmin || isHeadPastor || isPastor || isChurchLeader || isFinance,
     // May the caller see WHO gave, not just the aggregate figures? Mirrors the SQL
     // predicate can_see_contributor_identity() (0031) exactly — same answer as
@@ -54,26 +54,26 @@ export function deriveCapabilities(perm) {
     // only these roles ever fetch the identity-bearing giving rows. UI-gating only;
     // the collections SELECT policy (0031) is the real enforcement.
     canSeeContributorIdentity: isSuperAdmin || isFinance,
-    // The Small Group Leader's one and only widening (0022). The database grants
+    // The D-Group Leader's one and only widening (0022). The database grants
     // attendance church-wide; the screen narrows it to the groups they lead. Keeping
     // the narrowing app-side means the day that rule tightens, it tightens in SQL and
     // no UI changes.
-    canViewAttendance: isSuperAdmin || isHeadPastor || isPastor || isChurchLeader || isWelcome || isSmallGroupLeader,
+    canViewAttendance: isSuperAdmin || isHeadPastor || isPastor || isChurchLeader || isWelcome || isDGroupLeader,
 
     // WRITE capabilities — ministry-governed (+ SuperAdmin). Pastor is see-only.
     canWriteMembers: isSuperAdmin || isSecretariat,
     // Archive/restore has a narrower RPC than general member editing. Pastor
     // may recover records without gaining write access to their PII fields.
     canManageMemberArchive: isSuperAdmin || isPastor || isSecretariat,
-    // A small-group leader may record the one-to-one and turning-point milestones
+    // A D-Group leader may record the one-to-one and turning-point milestones
     // (only) for members of a group they lead; SuperAdmin holds it too. The per-group
     // row scope and the two-column restriction live in set_member_journey() (0028) —
     // this flag only decides whether to render the roster toggles. Secretariat records
     // journey through the full member form (canWriteMembers), not this.
-    canRecordJourney: isSuperAdmin || isSmallGroupLeader,
+    canRecordJourney: isSuperAdmin || isDGroupLeader,
     canWriteFinance: isSuperAdmin || isFinance,
     canManageAttendance: isSuperAdmin || isWelcome,
-    canManageSmallGroups: isSuperAdmin || isChurchLeader,
+    canManageDGroups: isSuperAdmin || isChurchLeader,
 
     // May the caller send an account invitation? Mirrors invite_member (0037):
     // Super Admin invites anyone with any role; a Church Leader invites a member
@@ -107,7 +107,7 @@ export function deriveCapabilities(perm) {
 // sidebar user card and the Overview "Your access" sentence.
 //
 // It is derived from the capability FLAGS, not the account `role` string. Welcome,
-// Finance, Secretariat and Small Group Leader are ministry-derived (they leave
+// Finance, Secretariat and D-Group Leader are ministry-derived (they leave
 // `role` as 'member'/'unassigned' — see deriveCapabilities and the note above), so
 // keying a label map on `role` alone mislabels every ministry member as "No role
 // assigned". Senior account roles take precedence; a purely ministry account shows
@@ -118,7 +118,7 @@ const MINISTRY_LABELS = [
   ['isSecretariat', 'Secretariat'],
   ['isWelcome', 'Welcome Team'],
   ['isEventsTeam', 'Events Team'],
-  ['isSmallGroupLeader', 'Small Group Leader'],
+  ['isDGroupLeader', 'D-Group Leader'],
 ]
 
 export function roleLabel(caps) {

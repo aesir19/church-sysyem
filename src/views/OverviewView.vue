@@ -4,11 +4,27 @@ import { useActiveChurch } from '../composables/useActiveChurch'
 import { useCurrentRole } from '../composables/useCurrentRole'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { fetchOpenService, fetchOverviewStats, fetchRecentServices } from '../lib/data/overview'
+import { overviewMode, readOverviewChoice, saveOverviewChoice } from '../utils/overviewMode'
 import OverviewPrototype from './overview-prototype/OverviewPrototype.vue'
+import DGroupOverview from './overview-prototype/DGroupOverview.vue'
 
 const { activeChurchId, activeChurchName } = useActiveChurch()
-const { caps } = useCurrentRole()
+const { caps, loadPermissions } = useCurrentRole()
 const { firstName, load: loadUser } = useCurrentUser()
+
+// Which Overview: the D-Group view for a plain leader, a remembered Church | My D-Group
+// switch for a leader with an elevated role, the church Overview for everyone else
+// (docs/specs/d-group-leader-view.md). Decided once permissions are in, so a plain
+// leader never sees the church Overview flash first.
+const permissionsReady = ref(false)
+const mode = computed(() => overviewMode(caps.value))
+const choice = ref(readOverviewChoice())
+const showDGroup = computed(() => mode.value === 'leader' || (mode.value === 'switch' && choice.value === 'dgroup'))
+
+function choose (value) {
+  choice.value = value
+  saveOverviewChoice(value)
+}
 
 const loading = ref(true)
 const failed = ref(false)
@@ -77,23 +93,60 @@ async function load () {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadUser()
-  load()
+  await loadPermissions()
+  permissionsReady.value = true
+  if (mode.value !== 'leader') load()
 })
-watch(activeChurchId, load)
+watch(activeChurchId, () => { if (permissionsReady.value && mode.value !== 'leader') load() })
 </script>
 
 <template>
-  <OverviewPrototype
-    :greeting="greeting"
-    :greeting-date="greetingDate"
-    :church-name="activeChurchName"
-    :counts="counts"
-    :attention="attention"
-    :services="services"
-    :open-service="openService"
-    :loading-overview="loading"
-    :overview-error="failed"
-  />
+  <template v-if="permissionsReady">
+    <div
+      v-if="mode === 'switch'"
+      class="view-switch"
+    >
+      <div
+        class="seg"
+        role="tablist"
+        aria-label="Overview"
+      >
+        <button
+          v-for="opt in [['church', 'Church'], ['dgroup', 'My D-Group']]"
+          :key="opt[0]"
+          type="button"
+          role="tab"
+          class="seg__opt"
+          :class="{ 'is-on': choice === opt[0] }"
+          :aria-selected="choice === opt[0]"
+          @click="choose(opt[0])"
+        >
+          {{ opt[1] }}
+        </button>
+      </div>
+    </div>
+
+    <DGroupOverview v-if="showDGroup" />
+    <OverviewPrototype
+      v-else
+      :greeting="greeting"
+      :greeting-date="greetingDate"
+      :church-name="activeChurchName"
+      :counts="counts"
+      :attention="attention"
+      :services="services"
+      :open-service="openService"
+      :loading-overview="loading"
+      :overview-error="failed"
+    />
+  </template>
 </template>
+
+<style scoped>
+.view-switch { margin-bottom:var(--sp-16); }
+.seg { display:inline-flex; gap:3px; padding:3px; border-radius:var(--r-control); background:var(--surface-subtle-2); }
+.seg__opt { padding:7px 13px; border:none; background:none; border-radius:var(--r-inset); font-weight:700; font-size:var(--text-meta); color:var(--ink-5); cursor:pointer; }
+.seg__opt.is-on { background:var(--surface); color:var(--ink); box-shadow:0 1px 2px rgba(16,24,40,.1); }
+</style>

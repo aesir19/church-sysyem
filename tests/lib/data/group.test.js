@@ -38,7 +38,7 @@ const { fetchGroup, fetchGroupBySlug, fetchRoster, fetchLeader, fetchLeaderCandi
 
 const CHURCH = 'church-1'
 const MINISTRY = { id: 'g-min', name: 'Worship Team', type: 'Ministry', church_id: null, ministry_key: null }
-const SMALL_GROUP = { id: 'g-sml', name: 'Thursday Group', type: 'Small Group', church_id: CHURCH, ministry_key: null }
+const D_GROUP = { id: 'g-sml', name: 'Thursday Group', type: 'D-Group', church_id: CHURCH, ministry_key: null }
 
 function on (table, method) {
   return state.calls.filter(c => c[0] === table && c[1] === method)
@@ -80,7 +80,7 @@ describe('fetchGroup — finding a group without knowing its kind', () => {
 
     expect(on('ministries', 'from')).toHaveLength(1)
     expect(on('small_groups', 'from')).toHaveLength(1)
-    expect(result.group).toEqual(SMALL_GROUP)
+    expect(result.group).toEqual(D_GROUP)
   })
 
   it('labels a row from ministries as a Ministry, with no church', async () => {
@@ -90,7 +90,7 @@ describe('fetchGroup — finding a group without knowing its kind', () => {
     expect((await fetchGroup({ groupId: 'g-min' })).group).toEqual(MINISTRY)
   })
 
-  // The leak this prevents: telling a Pastor that a small group exists in a church
+  // The leak this prevents: telling a Pastor that a D-Group exists in a church
   // that is not theirs. RLS returns no row for "no such group" and for "not yours"
   // alike, and the page must not tell them apart either.
   it('reports an invisible group exactly as it reports a missing one', async () => {
@@ -140,12 +140,12 @@ describe('slugify', () => {
 })
 
 describe('fetchGroupBySlug — resolving a named URL', () => {
-  it('finds this church\'s small group by name', async () => {
+  it('finds this church\'s D-Group by name', async () => {
     state.results.ministries = { data: [], error: null }
     state.results.small_groups = { data: [{ id: 'g-sml', name: 'Thursday Group', church_id: CHURCH }], error: null }
 
     const result = await fetchGroupBySlug({ churchId: CHURCH, groupSlug: 'thursday-group' })
-    expect(result.group).toEqual(SMALL_GROUP)
+    expect(result.group).toEqual(D_GROUP)
   })
 
   it('finds a ministry by name, since a ministry belongs to no church', async () => {
@@ -156,10 +156,10 @@ describe('fetchGroupBySlug — resolving a named URL', () => {
     expect(result.group).toEqual(MINISTRY)
   })
 
-  // The reason the church is in the path at all: small-group names are unique only
+  // The reason the church is in the path at all: D-Group names are unique only
   // within a church, so the query is scoped and another church's identically named
   // group is simply not among the candidates.
-  it('scopes the small-group half to the church in the path', async () => {
+  it('scopes the D-Group half to the church in the path', async () => {
     state.results.ministries = { data: [], error: null }
     state.results.small_groups = { data: [], error: null }
     await fetchGroupBySlug({ churchId: CHURCH, groupSlug: 'thursday-group' })
@@ -169,14 +169,14 @@ describe('fetchGroupBySlug — resolving a named URL', () => {
     expect(on('ministries', 'eq')).toHaveLength(0)
   })
 
-  // Rare, but it has to resolve somehow. The small group wins: it is the one that
+  // Rare, but it has to resolve somehow. The D-Group wins: it is the one that
   // actually belongs to the church named in the path.
-  it('prefers the small group when a ministry shares its name', async () => {
+  it('prefers the D-Group when a ministry shares its name', async () => {
     state.results.ministries = { data: [{ id: 'g-min', name: 'Youth', ministry_key: null }], error: null }
     state.results.small_groups = { data: [{ id: 'g-sml', name: 'Youth', church_id: CHURCH }], error: null }
 
     const result = await fetchGroupBySlug({ churchId: CHURCH, groupSlug: 'youth' })
-    expect(result.group.type).toBe('Small Group')
+    expect(result.group.type).toBe('D-Group')
     expect(result.group.id).toBe('g-sml')
   })
 
@@ -215,9 +215,9 @@ describe('fetchRoster — the right table, scoped to the right church', () => {
     expect(on('small_group_members', 'from')).toHaveLength(0)
   })
 
-  it('reads small_group_members for a small group', async () => {
+  it('reads small_group_members for a D-Group', async () => {
     state.results.small_group_members = { data: [memberRow('a')], error: null }
-    await fetchRoster({ group: SMALL_GROUP, churchId: CHURCH, canSeeMemberDetail: true })
+    await fetchRoster({ group: D_GROUP, churchId: CHURCH, canSeeMemberDetail: true })
 
     expect(on('small_group_members', 'eq'))
       .toContainEqual(['small_group_members', 'eq', 'small_group_id', 'g-sml'])
@@ -276,7 +276,7 @@ describe('fetchRoster — what a caller without member detail gets', () => {
       ],
       error: null
     }
-    const result = await fetchRoster({ group: SMALL_GROUP, churchId: CHURCH, canSeeMemberDetail: false })
+    const result = await fetchRoster({ group: D_GROUP, churchId: CHURCH, canSeeMemberDetail: false })
 
     expect(on('rpc', 'directory_search')).toHaveLength(1)
     // No membership-table read, no members join.
@@ -289,12 +289,12 @@ describe('fetchRoster — what a caller without member detail gets', () => {
 
   it('scopes directory_search to the active church', async () => {
     state.results['rpc:directory_search'] = { data: [], error: null }
-    await fetchRoster({ group: SMALL_GROUP, churchId: CHURCH, canSeeMemberDetail: false })
+    await fetchRoster({ group: D_GROUP, churchId: CHURCH, canSeeMemberDetail: false })
     const call = state.calls.find(c => c[0] === 'rpc' && c[1] === 'directory_search')
     expect(call[2].p_church_id).toBe(CHURCH)
   })
 
-  // A ministry roster is matched on the ministry-name array, a small group on its own.
+  // A ministry roster is matched on the ministry-name array, a D-Group on its own.
   it('matches a ministry roster by ministry name', async () => {
     state.results['rpc:directory_search'] = {
       data: [dirRow('7', { ministries: ['Worship Team'] }), dirRow('8', { ministries: ['Ushering'] })],
@@ -308,7 +308,7 @@ describe('fetchRoster — what a caller without member detail gets', () => {
     state.results['rpc:directory_search'] = {
       data: [dirRow('1', { small_groups: ['Thursday Group'] })], error: null
     }
-    const result = await fetchRoster({ group: SMALL_GROUP, churchId: CHURCH, canSeeMemberDetail: false })
+    const result = await fetchRoster({ group: D_GROUP, churchId: CHURCH, canSeeMemberDetail: false })
     expect(result.rows[0]).toMatchObject({ memberId: '1', name: 'Ana 1', age: null, joined: null })
   })
 
@@ -330,7 +330,7 @@ describe('fetchRoster — what a caller without member detail gets', () => {
   // A directory_search failure is not an empty group — the names tier fails the same way.
   it('reports a directory_search failure rather than an empty roster (names)', async () => {
     state.results['rpc:directory_search'] = { data: null, error: { message: 'boom' } }
-    const result = await fetchRoster({ group: SMALL_GROUP, churchId: CHURCH, canSeeMemberDetail: false })
+    const result = await fetchRoster({ group: D_GROUP, churchId: CHURCH, canSeeMemberDetail: false })
 
     expect(result.ok).toBe(false)
     expect(result.detail).toBe('names')
@@ -415,7 +415,7 @@ describe('fetchLeader — who currently leads, resolved to a name', () => {
   // leader rendered as "not linked" for everyone. This must call the RPC.
   it('reads through the RPC, not an embed on small_group_leaders', async () => {
     state.results['rpc:get_small_group_leader'] = { data: [leaderRow()], error: null }
-    await fetchLeader({ group: SMALL_GROUP })
+    await fetchLeader({ group: D_GROUP })
 
     expect(on('rpc', 'get_small_group_leader')).toHaveLength(1)
     expect(state.calls.some(c => c[0] === 'small_group_leaders')).toBe(false)
@@ -424,14 +424,14 @@ describe('fetchLeader — who currently leads, resolved to a name', () => {
 
   it('passes the group id', async () => {
     state.results['rpc:get_small_group_leader'] = { data: [], error: null }
-    await fetchLeader({ group: SMALL_GROUP })
+    await fetchLeader({ group: D_GROUP })
     const call = state.calls.find(c => c[0] === 'rpc' && c[1] === 'get_small_group_leader')
-    expect(call[2]).toEqual({ p_group: SMALL_GROUP.id })
+    expect(call[2]).toEqual({ p_group: D_GROUP.id })
   })
 
   it('names the leader when the RPC returns a name', async () => {
     state.results['rpc:get_small_group_leader'] = { data: [leaderRow()], error: null }
-    const result = await fetchLeader({ group: SMALL_GROUP })
+    const result = await fetchLeader({ group: D_GROUP })
     expect(result.leader).toEqual({ accountId: 'acc-1', memberId: 'mem-1', name: 'Wendy Welcomer' })
   })
 
@@ -439,14 +439,14 @@ describe('fetchLeader — who currently leads, resolved to a name', () => {
   // The leader still exists — name null must not collapse to "no leader".
   it('keeps the leader with a null name when the RPC withholds it', async () => {
     state.results['rpc:get_small_group_leader'] = { data: [leaderRow({ full_name: null })], error: null }
-    const result = await fetchLeader({ group: SMALL_GROUP })
+    const result = await fetchLeader({ group: D_GROUP })
     expect(result.leader.accountId).toBe('acc-1')
     expect(result.leader.name).toBeNull()
   })
 
   it('reports no leader when the RPC returns no row', async () => {
     state.results['rpc:get_small_group_leader'] = { data: [], error: null }
-    const result = await fetchLeader({ group: SMALL_GROUP })
+    const result = await fetchLeader({ group: D_GROUP })
     expect(result.ok).toBe(true)
     expect(result.leader).toBeNull()
   })
@@ -461,7 +461,7 @@ describe('fetchLeader — who currently leads, resolved to a name', () => {
   // A failed lookup is not "no leader assigned" — that is a claim about the group.
   it('reports failure rather than no-leader when the RPC errors', async () => {
     state.results['rpc:get_small_group_leader'] = { data: null, error: { message: 'boom' } }
-    const result = await fetchLeader({ group: SMALL_GROUP })
+    const result = await fetchLeader({ group: D_GROUP })
     expect(result.ok).toBe(false)
     expect(result.leader).toBeNull()
   })
@@ -480,7 +480,7 @@ describe('fetchLeaderCandidates — who may be made leader', () => {
   // through PostgREST and returned nothing under RLS. This must call the RPC instead.
   it('reads through the RPC, not a direct user_accounts select', async () => {
     state.results['rpc:list_small_group_leader_candidates'] = { data: [candidateRow('a')], error: null }
-    await fetchLeaderCandidates({ group: SMALL_GROUP })
+    await fetchLeaderCandidates({ group: D_GROUP })
 
     expect(on('rpc', 'list_small_group_leader_candidates')).toHaveLength(1)
     // Nothing reads user_accounts directly — that is the read RLS silently empties.
@@ -489,10 +489,10 @@ describe('fetchLeaderCandidates — who may be made leader', () => {
 
   it('passes the group id the RPC is gated on', async () => {
     state.results['rpc:list_small_group_leader_candidates'] = { data: [], error: null }
-    await fetchLeaderCandidates({ group: SMALL_GROUP })
+    await fetchLeaderCandidates({ group: D_GROUP })
 
     const call = state.calls.find(c => c[0] === 'rpc' && c[1] === 'list_small_group_leader_candidates')
-    expect(call[2]).toEqual({ p_group: SMALL_GROUP.id })
+    expect(call[2]).toEqual({ p_group: D_GROUP.id })
   })
 
   it('maps the RPC columns to the shape the dialog binds', async () => {
@@ -500,7 +500,7 @@ describe('fetchLeaderCandidates — who may be made leader', () => {
       data: [candidateRow('Reyes', { account_id: 'acc-1', full_name: 'Ana Reyes', role: 'pastor' })],
       error: null
     }
-    const result = await fetchLeaderCandidates({ group: SMALL_GROUP })
+    const result = await fetchLeaderCandidates({ group: D_GROUP })
 
     expect(result.candidates).toEqual([
       { accountId: 'acc-1', memberId: 'Reyes', name: 'Ana Reyes', role: 'pastor' }
@@ -523,7 +523,7 @@ describe('fetchLeaderCandidates — who may be made leader', () => {
   // An RPC error is not an empty candidate list — the dialog surfaces the difference.
   it('reports failure rather than an empty list when the RPC errors', async () => {
     state.results['rpc:list_small_group_leader_candidates'] = { data: null, error: { message: 'boom' } }
-    const result = await fetchLeaderCandidates({ group: SMALL_GROUP })
+    const result = await fetchLeaderCandidates({ group: D_GROUP })
 
     expect(result.ok).toBe(false)
     expect(result.message).toBe(GROUP_DETAIL_MESSAGES.loadFailed)
